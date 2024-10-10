@@ -4,7 +4,7 @@ this is a gym software management web app , build using :- flask, python, reactj
 https://eztrack.onrender.com/
 
 Key Features
-    Member management and tracking
+    Member management and tracking/n
     Attendance tracking and reporting, SOON.....
     Inventory management for gym merchandise and suppliment selling
     Comprehensive analytics and business insights
