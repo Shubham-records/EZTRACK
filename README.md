@@ -1,5 +1,5 @@
 
-<h2 >About EZTRACK App</h2>
+<h2 >About EZTRACK App <a href="https://eztrack.onrender.com/">https://eztrack.onrender.com/</a></h2>
 <p> EZTRACK is a comprehensive gym management system designed to meet the demanding needs of modern Gym. Our web-based platform offers a suite of powerful tools that simplify day-to-day operations and provide valuable insights into your business. </p>
     <br/>
 <p> Whether you're managing a small size gym or a large multi-location gym chain, EZTRACK scales to fit your needs, providing a seamless experience. </p>
