@@ -40,16 +40,16 @@ export function NewAdmission() {
   useEffect(() => {
     const fetchClientNumber = async () => {
       try {
-        const jwtToken = localStorage.getItem('access_token');
-        const databaseName = localStorage.getItem('databaseName');
-        if (!jwtToken || !databaseName) {
+        const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+        const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
           throw new Error('No token or database name found.');
         }
 
         const response = await fetch('/api/members/generate-client-number', {
           headers: {
             Authorization: `Bearer ${jwtToken}`,
-            'X-Database-Name': databaseName
+            'X-Database-Name': eztracker_jwt_databaseName_control_token
           }
         });
 
@@ -129,9 +129,9 @@ export function NewAdmission() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
-      if (!jwtToken || !databaseName) {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
         throw new Error('No token or database name found.');
       }
 
@@ -150,7 +150,7 @@ export function NewAdmission() {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName
+          'X-Database-Name': eztracker_jwt_databaseName_control_token
         },
         body: JSON.stringify(formData)
       });
@@ -371,16 +371,16 @@ export function ReAdmission() {
   const fetchClientData = async () => {
     try {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
-      if (!jwtToken || !databaseName) {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
         throw new Error('No token or database name found.');
       }
 
       const response = await fetch(`/api/members/client/${clientNumber}`, {
         headers: {
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName
+          'X-Database-Name': eztracker_jwt_databaseName_control_token
         }
       });
 
@@ -408,9 +408,9 @@ export function ReAdmission() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
-      if (!jwtToken || !databaseName) {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
         throw new Error('No token or database name found.');
       }
 
@@ -419,7 +419,7 @@ export function ReAdmission() {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName
+          'X-Database-Name': eztracker_jwt_databaseName_control_token
         },
         body: JSON.stringify(formData)
       });
@@ -676,16 +676,16 @@ export function Renewal() {
   const fetchClientData = async () => {
     try {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
-      if (!jwtToken || !databaseName) {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
         throw new Error('No token or database name found.');
       }
 
       const response = await fetch(`/api/members/renewal/${clientNumber}`, {
         headers: {
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName
+          'X-Database-Name': eztracker_jwt_databaseName_control_token
         }
       });
 
@@ -713,9 +713,9 @@ export function Renewal() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
-      if (!jwtToken || !databaseName) {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
         throw new Error('No token or database name found.');
       }
 
@@ -724,7 +724,7 @@ export function Renewal() {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName
+          'X-Database-Name': eztracker_jwt_databaseName_control_token
         },
         body: JSON.stringify(formData)
       });
@@ -947,9 +947,9 @@ export function PerDayBasis() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
-      if (!jwtToken || !databaseName) {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
         throw new Error('No token or database name found.');
       }
 
@@ -958,7 +958,7 @@ export function PerDayBasis() {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName
+          'X-Database-Name': eztracker_jwt_databaseName_control_token
         },
         body: JSON.stringify(formData)
       });
@@ -1174,16 +1174,16 @@ export function ReturnMembership() {
 
   const fetchClientData = async () => {
     try {
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
-      if (!jwtToken || !databaseName) {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
         throw new Error('No token or database name found.');
       }
 
       const response = await fetch(`/api/members/return/${clientNumber}`, {
         headers: {
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName
+          'X-Database-Name': eztracker_jwt_databaseName_control_token
         }
       });
 
@@ -1211,9 +1211,9 @@ export function ReturnMembership() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
-      if (!jwtToken || !databaseName) {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
         throw new Error('No token or database name found.');
       }
 
@@ -1222,7 +1222,7 @@ export function ReturnMembership() {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName
+          'X-Database-Name': eztracker_jwt_databaseName_control_token
         },
         body: JSON.stringify(formData)
       });

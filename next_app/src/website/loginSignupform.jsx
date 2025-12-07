@@ -138,9 +138,9 @@ export function Loginform() {
       alert(response.data.message);
 
       if (response.status === 200) {
-        const { access_token, databaseName } = response.data;
-        localStorage.setItem('access_token', access_token);
-        localStorage.setItem('databaseName', databaseName);
+        const { eztracker_jwt_access_control_token, eztracker_jwt_databaseName_control_token } = response.data;
+        localStorage.setItem('eztracker_jwt_access_control_token', eztracker_jwt_access_control_token);
+        localStorage.setItem('eztracker_jwt_databaseName_control_token', eztracker_jwt_databaseName_control_token);
 
         router.push("/webapp");
       }

@@ -24,10 +24,10 @@ export default function WebappMain() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const jwtToken = localStorage.getItem('access_token');
-        const databaseName = localStorage.getItem('databaseName');
+        const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+        const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
 
-        if (!jwtToken || !databaseName) {
+        if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
           throw new Error('No token or database name found.');
         }
 
@@ -35,7 +35,7 @@ export default function WebappMain() {
           headers: {
             Authorization: `Bearer ${jwtToken}`,
             'Content-Type': 'application/json',
-            'X-Database-Name': databaseName
+            'X-Database-Name': eztracker_jwt_databaseName_control_token
           }
         });
 
@@ -58,10 +58,10 @@ export default function WebappMain() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const jwtToken = localStorage.getItem('access_token');
-        const databaseName = localStorage.getItem('databaseName');
+        const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+        const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
 
-        if (!jwtToken || !databaseName) {
+        if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
           throw new Error('No token or database name found.');
         }
         const response = await fetch('/api/proteins',
@@ -69,7 +69,7 @@ export default function WebappMain() {
             headers: {
               Authorization: `Bearer ${jwtToken}`,
               'Content-Type': 'application/json',
-              'X-Database-Name': databaseName
+              'X-Database-Name': eztracker_jwt_databaseName_control_token
             }
           }
         );

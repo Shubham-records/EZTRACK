@@ -60,14 +60,14 @@ export default function WebappHeader({ clickedBUTTON }) {
       const response = await fetch('/api/auth/logout', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('access_token')}`, // Use session storage
+          Authorization: `Bearer ${localStorage.getItem('eztracker_jwt_access_control_token')}`, // Use session storage
           'Content-Type': 'application/json',
         },
       });
 
       if (response.ok) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('databaseName');
+        localStorage.removeItem('eztracker_jwt_access_control_token');
+        localStorage.removeItem('eztracker_jwt_databaseName_control_token');
 
         router.push('/login');
       } else {

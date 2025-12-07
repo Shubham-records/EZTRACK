@@ -25,7 +25,7 @@ async function verify() {
             username: USER.username,
             password: USER.password
         });
-        const token = loginRes.data.access_token;
+        const token = loginRes.data.eztracker_jwt_access_control_token;
         console.log("   Login Successful, Token received");
 
         const authHeaders = {

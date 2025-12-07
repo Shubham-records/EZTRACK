@@ -26,8 +26,8 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
   async function fetchDATA() {
     setshowloading(true)
     try {
-      const jwtToken = localStorage.getItem('access_token');
-      const databaseName = localStorage.getItem('databaseName');
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
       const url = dataType === 'member'
         ? `/api/members`
         : `/api/proteins`;
@@ -36,7 +36,7 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
         headers: {
           Authorization: `Bearer ${jwtToken}`,
           'Content-Type': 'application/json',
-          'X-Database-Name': databaseName,
+          'X-Database-Name': eztracker_jwt_databaseName_control_token,
         },
       });
 
@@ -90,8 +90,8 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
   async function handleSave() {
     if (editedMember) {
       try {
-        const jwtToken = localStorage.getItem('access_token');
-        const databaseName = localStorage.getItem('databaseName');
+        const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+        const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
         const url = dataType === 'member'
           ? `/api/members/${editedMember._id}` // Ensure editedMember.ID is defined
           : `/api/proteins/${editedMember._id}`;
@@ -101,7 +101,7 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
           headers: {
             Authorization: `Bearer ${jwtToken}`,
             'Content-Type': 'application/json',
-            'X-Database-Name': databaseName,
+            'X-Database-Name': eztracker_jwt_databaseName_control_token,
           },
           body: JSON.stringify(editedMember),
         });
@@ -138,8 +138,8 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
 
   async function handleDelete(_id) {
     try {
-      const jwtToken = localStorage.getItem('access_token')
-      const databaseName = localStorage.getItem('databaseName')
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token')
+      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token')
       const url = dataType === 'member'
         ? `/api/members/${_id}`
         : `/api/proteins/${_id}`
@@ -148,7 +148,7 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
         method: 'DELETE',
         headers: {
           Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': databaseName,
+          'X-Database-Name': eztracker_jwt_databaseName_control_token,
         },
       })
 

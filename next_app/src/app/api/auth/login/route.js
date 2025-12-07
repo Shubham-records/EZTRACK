@@ -39,15 +39,15 @@ export async function POST(request) {
             .sign(SECRET_KEY);
 
         // Return response matching frontend expectations
-        // Frontend expects: { message, access_token, databaseName }
-        // We send gym.id as 'databaseName' (it's really just an ID now)
+        // Frontend expects: { message, eztracker_jwt_access_control_token, eztracker_jwt_databaseName_control_token }
+        // We send gym.id as 'eztracker_jwt_databaseName_control_token' (it's really just an ID now)
         // or we can send an encrypted version if we want to mimic the old behavior,
         // but sending the ID is cleaner. The frontend treats it as an opaque string.
 
         return NextResponse.json({
             message: "Login successful!",
-            access_token: token,
-            databaseName: gym.id
+            eztracker_jwt_access_control_token: token,
+            eztracker_jwt_databaseName_control_token: gym.id
         }, { status: 200 });
 
     } catch (error) {

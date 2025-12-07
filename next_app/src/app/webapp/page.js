@@ -1,6 +1,11 @@
 "use client";
+import ProtectedRoute from "@/components/ProtectedRoute";
 import WebappMain from "@/webapp/webappmain";
 
 export default function WebappPage() {
-    return <WebappMain />;
+    return (
+        <ProtectedRoute>
+            <WebappMain />
+        </ProtectedRoute>
+    );
 }
