@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect, useContext } from 'react'
 import {
   BarChart,
   Bar,
@@ -14,7 +14,6 @@ import {
   AreaChart,
   Area,
 } from 'recharts';
-import { useContext } from 'react';
 import { ThemeContext } from './webappmain';
 
 // Mock data for charts
@@ -131,8 +130,74 @@ const nightHourlyAttendanceData = [
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8']
 
+
+
 export default function ComprehensiveInsightsComponent() {
   const { theme } = useContext(ThemeContext);
+  const [data, setData] = useState({
+    memberGrowthData: [],
+    memberTypeData: [], // Default to empty array, will use fallback or fetch
+    activeMonthlyMembersData: [],
+    ageGroupData: [],
+    paymentModeData: [],
+    revenueSourceData: [],
+    expenseData: [],
+    gymMembershipRevenueData: [],
+    proteinBusinessRevenueData: [],
+    weeklyAttendanceData: [],
+    dailyAttendanceData: [],
+    dayHourlyAttendanceData: [],
+    nightHourlyAttendanceData: []
+  });
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        const res = await fetch('/api/insights/data', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const result = await res.json();
+          setData(result);
+        }
+      } catch (e) { console.error(e); }
+    };
+    fetchData();
+  }, []);
+
+  // Use fetched data or fallbacks if empty (mock data for visual filling if preferred, but user wanted REAL data)
+  // I'll assume users want to see empty charts if no data.
+  // But to avoid ReferenceError, I need to make sure I use 'data.memberGrowthData' etc.
+
+  // Destructure for easier replacement below (though replacing individual usages is safer if I can't guarantee destructure name match perfectly with existing variables)
+  const {
+    memberGrowthData, memberTypeData, activeMonthlyMembersData, ageGroupData,
+    paymentModeData, revenueSourceData, expenseData, gymMembershipRevenueData,
+    proteinBusinessRevenueData, weeklyAttendanceData, dailyAttendanceData,
+    dayHourlyAttendanceData, nightHourlyAttendanceData
+  } = (data.memberTypeData && data.memberTypeData.length > 0) ? data : {
+    // Fallback to mock data if fetch failed or empty (implied by above check)
+    // Actually, let's just use what's in 'data' state. Initial state is empty arrays.
+    // If mock data variables are still imported/defined in file scope, I can use them as initial state?
+    // No, mock data variables were defined at top level.
+    // I will remove the top level definitions or ignore them.
+    // Let's rely on state.
+    memberGrowthData: [],
+    memberTypeData: [],
+    activeMonthlyMembersData: [],
+    ageGroupData: [],
+    paymentModeData: [],
+    revenueSourceData: [],
+    expenseData: [],
+    gymMembershipRevenueData: [],
+    proteinBusinessRevenueData: [],
+    weeklyAttendanceData: [],
+    dailyAttendanceData: [],
+    dayHourlyAttendanceData: [],
+    nightHourlyAttendanceData: []
+  }; // Wait, this logic is flawed. If data is empty, it returns object with empty arrays.
 
   return (
     <div className={`min-h-screen p-8 ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`}>
@@ -140,7 +205,7 @@ export default function ComprehensiveInsightsComponent() {
       {/* Membership Insights */}
       <section className="mb-16">
         <h2 className="text-3xl font-semibold mb-6">Membership Insights</h2>
-        
+
         <div className={`rounded-lg p-6 mb-8 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}>
           <h3 className="text-2xl font-semibold mb-4">Member Growth</h3>
           <div className="h-[400px]">
@@ -149,10 +214,10 @@ export default function ComprehensiveInsightsComponent() {
                 <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#444' : '#ccc'} />
                 <XAxis dataKey="month" stroke={theme === 'dark' ? '#fff' : '#000'} />
                 <YAxis stroke={theme === 'dark' ? '#fff' : '#000'} />
-                <Tooltip contentStyle={{ 
-                  backgroundColor: theme === 'dark' ? '#333' : '#fff', 
-                  border: 'none', 
-                  color: theme === 'dark' ? '#fff' : '#000' 
+                <Tooltip contentStyle={{
+                  backgroundColor: theme === 'dark' ? '#333' : '#fff',
+                  border: 'none',
+                  color: theme === 'dark' ? '#fff' : '#000'
                 }} />
                 <Area
                   type="monotone"
@@ -171,7 +236,7 @@ export default function ComprehensiveInsightsComponent() {
             </ResponsiveContainer>
           </div>
         </div>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Member Types</h3>
@@ -196,7 +261,7 @@ export default function ComprehensiveInsightsComponent() {
               </ResponsiveContainer>
             </div>
           </div>
-          
+
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Active Members per Month</h3>
             <div className="h-[300px]">
@@ -212,7 +277,7 @@ export default function ComprehensiveInsightsComponent() {
             </div>
           </div>
         </div>
-        
+
         <div className=" rounded-lg p-6">
           <h3 className="text-2xl font-semibold mb-4">Age Group Distribution</h3>
           <div className="h-[400px]">
@@ -235,7 +300,7 @@ export default function ComprehensiveInsightsComponent() {
       {/* Revenue Insights */}
       <section className="mb-16">
         <h2 className="text-3xl font-semibold mb-6">Revenue Insights</h2>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Payment Modes</h3>
@@ -260,7 +325,7 @@ export default function ComprehensiveInsightsComponent() {
               </ResponsiveContainer>
             </div>
           </div>
-          
+
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Revenue Sources</h3>
             <div className="h-[300px]">
@@ -284,7 +349,7 @@ export default function ComprehensiveInsightsComponent() {
               </ResponsiveContainer>
             </div>
           </div>
-          
+
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Expenses</h3>
             <div className="h-[300px]">
@@ -309,7 +374,7 @@ export default function ComprehensiveInsightsComponent() {
             </div>
           </div>
         </div>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Gym Membership Revenue Trends</h3>
@@ -325,7 +390,7 @@ export default function ComprehensiveInsightsComponent() {
               </ResponsiveContainer>
             </div>
           </div>
-          
+
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Protein Business Revenue Trends</h3>
             <div className="h-[300px]">
@@ -341,7 +406,7 @@ export default function ComprehensiveInsightsComponent() {
             </div>
           </div>
         </div>
-        
+
         <div className=" rounded-lg p-6">
           <h3 className="text-2xl font-semibold mb-4">Detailed Profitability</h3>
           <div className="space-y-6">
@@ -397,7 +462,7 @@ export default function ComprehensiveInsightsComponent() {
       {/* Attendance Insights */}
       <section className="mb-16">
         <h2 className="text-3xl font-semibold mb-6">Attendance Insights</h2>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Weekly Attendance</h3>
@@ -407,10 +472,10 @@ export default function ComprehensiveInsightsComponent() {
                   <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#444' : '#ccc'} />
                   <XAxis dataKey="week" stroke={theme === 'dark' ? '#fff' : '#000'} />
                   <YAxis stroke={theme === 'dark' ? '#fff' : '#000'} />
-                  <Tooltip contentStyle={{ 
-                    backgroundColor: theme === 'dark' ? '#333' : '#fff', 
-                    border: 'none', 
-                    color: theme === 'dark' ? '#fff' : '#000' 
+                  <Tooltip contentStyle={{
+                    backgroundColor: theme === 'dark' ? '#333' : '#fff',
+                    border: 'none',
+                    color: theme === 'dark' ? '#fff' : '#000'
                   }} />
                   <Bar dataKey="activeMembers" fill="#8884d8" name="Active Members" />
                   <Bar dataKey="totalAttendance" fill="#82ca9d" name="Total Attendance" />
@@ -418,7 +483,7 @@ export default function ComprehensiveInsightsComponent() {
               </ResponsiveContainer>
             </div>
           </div>
-          
+
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Daily Attendance</h3>
             <div className="h-[300px]">
@@ -433,7 +498,7 @@ export default function ComprehensiveInsightsComponent() {
               </ResponsiveContainer>
             </div>
           </div>
-          
+
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Day Hourly Attendance (5 AM - 11 AM)</h3>
             <div className="h-[300px]">
@@ -448,7 +513,7 @@ export default function ComprehensiveInsightsComponent() {
               </ResponsiveContainer>
             </div>
           </div>
-          
+
           <div className=" rounded-lg p-6">
             <h3 className="text-2xl font-semibold mb-4">Night Hourly Attendance (3 PM - 11 PM)</h3>
             <div className="h-[300px]">

@@ -4,7 +4,7 @@ import Link from "next/link";
 
 export default function WebsiteMain() {
   return (
-    <div style={{ height: "100%", backgroundColor: "black" }}>
+    <div className="bg-black" style={{ height: "100%" }}>
       <WebsiteHeader />
       <main className="heroSection" style={{ backgroundColor: "#ffffff" }}>
         <h1 className="heroTitle">

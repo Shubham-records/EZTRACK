@@ -2,16 +2,21 @@ import React, { useState, useMemo, useContext } from 'react'
 import { useReactTable, getCoreRowModel, getFilteredRowModel, getSortedRowModel, flexRender, createColumnHelper, } from '@tanstack/react-table';
 import { rankItem } from '@tanstack/match-sorter-utils'
 import { ChevronDown, ChevronUp, Edit2, Save, X, Trash2, Search } from 'lucide-react';
+import { useToast } from "@/context/ToastContext";
 import { ThemeContext } from './webappmain';
+import ImportMembersModal from './components/ImportMembersModal';
 
-export default function TableComponent({ gymmemberdata, allColumns, onUpdateData, dataType }) {
+export default function TableComponent({ gymmemberdata, allColumns, onUpdateData, dataType, onNavigate }) {
   const { theme } = useContext(ThemeContext);
+  const { showToast } = useToast();
 
   const [data, setData] = useState(gymmemberdata)
   const [globalFilter, setGlobalFilter] = useState('')
   const [visibleColumns, setVisibleColumns] = useState(allColumns)
   const [isColumnSelectorOpen, setIsColumnSelectorOpen] = useState(false)
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
   const [showloading, setshowloading] = useState(false)
+
   const [editingId, setEditingId] = useState(null)
   const [editedMember, setEditedMember] = useState(null)
 
@@ -47,7 +52,7 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
       const result = await response.json();
       setData(result);
     } catch (err) {
-      alert(err.message);
+      showToast(err.message, 'error');
     }
     setshowloading(false)
   }
@@ -116,8 +121,9 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
         onUpdateData(updatedItems);
         setEditingId(null);
         setEditedMember(null);
+        showToast('Data updated successfully', 'success');
       } catch (err) {
-        alert(err.message);
+        showToast(err.message, 'error');
       }
     }
   }
@@ -159,8 +165,9 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
       const newData = data.filter(member => member._id !== _id)
       setData(newData)
       onUpdateData(newData)
+      showToast(`${dataType} deleted successfully`, 'success');
     } catch (err) {
-      alert(err.message)
+      showToast(err.message, 'error')
     }
   }
 
@@ -171,68 +178,111 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
 
   return (
     (<div className={`p-6 rounded-lg ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`}>
-      <div className="mb-4 flex items-center space-x-4">
-        <div className="relative">
-          <button
-            onClick={() => setIsColumnSelectorOpen(!isColumnSelectorOpen)}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded px-3 py-2 flex items-center`}>
-            Select Columns <ChevronDown className="ml-2" />
-          </button>
-          {isColumnSelectorOpen && (
-            <div className={`absolute left-0 mt-2 grid ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded-md shadow-lg z-10`}
-              style={{ gridTemplateColumns: "1fr 1fr 1fr", zIndex: '15' }}>
-              <label className="flex items-center px-4 py-2 hover:bg-gray-700">
-                <input
-                  type="checkbox"
-                  checked={visibleColumns.length === allColumns.length}
-                  onChange={() => {
-                    if (visibleColumns.length === allColumns.length) {
-                      setVisibleColumns([])
-                    } else {
-                      setVisibleColumns([...allColumns])
-                    }
-                  }}
-                  className="mr-2" />
-                Select All
-              </label>
-              {allColumns.map(column => (
-                <label key={column} className="flex items-center px-4 py-2 hover:bg-gray-700">
+      <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-opacity-50 backdrop-blur-md p-4 rounded-xl border border-gray-700/30 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+          {/* Columns Selector */}
+          <div className="relative">
+            <button
+              onClick={() => setIsColumnSelectorOpen(!isColumnSelectorOpen)}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border ${theme === 'dark'
+                ? 'bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-gray-200'
+                : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'
+                } focus:ring-2 focus:ring-offset-2 focus:ring-blue-500`}>
+              <span>Columns</span>
+              <ChevronDown size={14} className={`transition-transform duration-200 ${isColumnSelectorOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isColumnSelectorOpen && (
+              <div className={`absolute left-0 mt-2 p-3 min-w-[280px] grid grid-cols-2 gap-2 rounded-xl shadow-2xl z-50 border ${theme === 'dark'
+                ? 'bg-neutral-900 border-neutral-800'
+                : 'bg-white border-gray-100'
+                }`}>
+                <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-opacity-10 hover:bg-gray-500 cursor-pointer col-span-2 border-b border-gray-700/20 pb-2 mb-1">
                   <input
                     type="checkbox"
-                    checked={visibleColumns.includes(column)}
-                    onChange={() => toggleColumnVisibility(column)}
-                    className="mr-2" />
-                  {column}
+                    checked={visibleColumns.length === allColumns.length}
+                    onChange={() => setVisibleColumns(visibleColumns.length === allColumns.length ? [] : [...allColumns])}
+                    className="rounded border-gray-500 text-blue-600 focus:ring-blue-500 w-4 h-4" />
+                  <span className="text-sm font-medium">Select All</span>
                 </label>
-              ))}
+                {allColumns.map(column => (
+                  <label key={column} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-opacity-10 hover:bg-gray-500 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={visibleColumns.includes(column)}
+                      onChange={() => toggleColumnVisibility(column)}
+                      className="rounded border-gray-500 text-blue-600 focus:ring-blue-500 w-4 h-4" />
+                    <span className="text-sm truncate" title={column}>{column}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Search Bar */}
+          <div className="relative flex-grow min-w-[200px] max-w-sm group">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search className={`h-4 w-4 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'} group-focus-within:text-blue-500 transition-colors`} />
             </div>
-          )}
+            <input
+              type="text"
+              placeholder="Search members..."
+              value={globalFilter ?? ''}
+              onChange={e => setGlobalFilter(e.target.value)}
+              className={`block w-full pl-10 pr-3 py-2.5 text-sm rounded-lg border focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all ${theme === 'dark'
+                ? 'bg-neutral-900 border-neutral-800 text-white placeholder-gray-500'
+                : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400'
+                }`} />
+          </div>
         </div>
-        <div className="relative flex-grow">
-          <input
-            type="text"
-            placeholder="Search..."
-            value={globalFilter ?? ''}
-            onChange={e => setGlobalFilter(e.target.value)}
-            className={`w-full px-3 py-2 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded pl-10`} />
-          <Search className={theme === 'dark' ? 'primary-text-dim' : 'secondary-text-dim'} size={18} />
+
+        {/* Action Buttons */}
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+          <button
+            onClick={fetchDATA}
+            disabled={showloading}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border ${theme === 'dark'
+              ? 'bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-gray-200'
+              : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'
+              }`}>
+            <span className={showloading ? 'animate-spin' : ''}>
+              {showloading ? '⟳' : '↻'}
+            </span>
+            <span>{showloading ? 'Loading...' : 'Refresh'}</span>
+          </button>
+
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border ${theme === 'dark'
+              ? 'bg-emerald-600/10 border-emerald-600/20 text-emerald-400 hover:bg-emerald-600/20'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
+              }`}>
+            Import
+          </button>
+
+          <button
+            onClick={clearAllFilters}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border ${theme === 'dark'
+              ? 'bg-neutral-800 border-neutral-700 hover:bg-neutral-700 text-gray-300'
+              : 'bg-gray-100 border-gray-200 hover:bg-gray-200 text-gray-700'
+              }`}>
+            Clear Filters
+          </button>
+
+          <button
+            onClick={() => onNavigate && onNavigate("Billing")}
+            className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-500 shadow-md shadow-blue-500/20 transition-all active:scale-95">
+            + Add
+          </button>
         </div>
-        <button
-          onClick={fetchDATA}
-          className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded px-3 py-2 hover:bg-gray-700 transition-colors`}>
-          {showloading ? "Loading" : "Refresh"}
-        </button>
-        <button
-          onClick={clearAllFilters}
-          className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded px-3 py-2 hover:bg-gray-700 transition-colors`}>
-          Add
-        </button>
-        <button
-          onClick={clearAllFilters}
-          className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded px-3 py-2 hover:bg-gray-700 transition-colors`}>
-          Clear All Filters
-        </button>
       </div>
+
+      <ImportMembersModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImportSuccess={fetchDATA}
+        theme={theme}
+        dataType={dataType}
+      />
       <div className="overflow-x-auto" style={{ height: "85vh" }}>
         <table className="w-full">
           <thead className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} sticky top-0 z-10`}>
@@ -306,7 +356,7 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
                           <input
                             type="text"
                             name={cell.column.id}
-                            value={editedMember ? editedMember[cell.column.id] : ''}
+                            value={editedMember?.[cell.column.id] ?? ''}
                             onChange={handleChange}
                             className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded px-2 py-1 w-full`} />
                         ) : (

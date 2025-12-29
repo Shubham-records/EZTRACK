@@ -1,18 +1,18 @@
 import { useState, useEffect, useMemo, useContext } from "react"
 import { format, parseISO, parse } from "date-fns"
 import NOIMG from "@/assets/noPhoto.jpg"
-import {ChevronDown, ChevronUp } from "lucide-react"
-import MK from "@/assets/mk.json"
+import { ChevronDown, ChevronUp } from "lucide-react"
+// import MK from "@/assets/mk.json"
 import { ThemeContext } from './webappmain'
 
 export default function InvoiceManagerComponent() {
   const { theme } = useContext(ThemeContext);
-  const initialInvoices = useMemo(()=>(MK),[])
+  // const initialInvoices = useMemo(()=>(MK),[])
 
   const invoiceTypes = ["All Bills Types", "admission", "renewal", "protein", "readmission", "perdaybasis"]
   const paymentStatuses = ["All Bills Status", "paid", "pending", "returned"]
 
-  const [invoices, setInvoices] = useState(initialInvoices)
+  const [invoices, setInvoices] = useState([])
   const [expandedInvoices, setExpandedInvoices] = useState([])
   const [selectedType, setSelectedType] = useState("All Bills Types")
   const [selectedStatus, setSelectedStatus] = useState("All Bills Status")
@@ -26,12 +26,35 @@ export default function InvoiceManagerComponent() {
   }
 
   useEffect(() => {
-    const sortedInvoices = [...initialInvoices].sort((a, b) => {
-      const dateA = parse(a.billDate, 'yyyy-MM-dd', new Date())
-      const dateB = parse(b.billDate, 'yyyy-MM-dd', new Date())
-      return dateB.getTime() - dateA.getTime()
-    })
-    setInvoices(sortedInvoices)
+    const fetchInvoices = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        const res = await fetch('/api/invoices', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const mapped = data.map(inv => ({
+            id: inv.id,
+            name: inv.member?.Name || inv.customerName || "Unknown",
+            type: "General", // Placeholder as schema lacked type
+            billDate: inv.invoiceDate.split('T')[0],
+            number: inv.id.substring(0, 8),
+            status: inv.status.toLowerCase(),
+            amount: inv.total,
+            image: null,
+            clientCardNo: inv.memberId || "N/A",
+            nextDueDate: inv.dueDate ? inv.dueDate.split('T')[0] : "",
+            items: inv.items
+          }));
+          // Sort
+          mapped.sort((a, b) => new Date(b.billDate) - new Date(a.billDate));
+          setInvoices(mapped);
+        }
+      } catch (e) { console.error(e); }
+    };
+    fetchInvoices();
   }, [])
 
   const filteredInvoices = invoices.filter((invoice) => {
@@ -74,13 +97,13 @@ export default function InvoiceManagerComponent() {
   }
 
   return (
-    <div className={`min-h-screen p-6 ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`} style={{padding: "5vh 15vw"}}>
+    <div className={`min-h-screen p-6 ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`} style={{ padding: "5vh 15vw" }}>
       <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
         <h1 className="text-2xl font-bold">Invoices</h1>
         <div className="flex gap-4">
           <select
             className={`w-[180px] ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} capitalize p-2 rounded`}
-            onChange={(e) => setSelectedType(e.target.value)}  
+            onChange={(e) => setSelectedType(e.target.value)}
             value={selectedType}
           >
             {invoiceTypes.map((type) => (
@@ -92,7 +115,7 @@ export default function InvoiceManagerComponent() {
 
           <select
             className={`w-[180px] ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} capitalize p-2 rounded`}
-            onChange={(e) => setSelectedStatus(e.target.value)}  
+            onChange={(e) => setSelectedStatus(e.target.value)}
             value={selectedStatus}
           >
             {paymentStatuses.map((status) => (
@@ -168,12 +191,11 @@ export default function InvoiceManagerComponent() {
                         Bill Number: {invoice.number}
                       </p>
                       <p
-                        className={`text-sm capitalize ${
-                          invoice.status === 'paid' ? 'text-green-400' :
+                        className={`text-sm capitalize ${invoice.status === 'paid' ? 'text-green-400' :
                           invoice.status === 'pending' ? 'text-yellow-400' :
-                          invoice.status === 'returned' ? 'text-red-400' :
-                          'text-orange-400'
-                        }`}>
+                            invoice.status === 'returned' ? 'text-red-400' :
+                              'text-orange-400'
+                          }`}>
                         Status: {invoice.status}
                       </p>
                     </div>

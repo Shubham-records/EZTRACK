@@ -13,58 +13,72 @@ export async function POST(request) {
     try {
         const data = await request.json();
 
-        const requiredFields = ['MembershipReceiptnumber', 'ReturnDate', 'RemainingDays', 'RefundAmount', 'Reason'];
+        const requiredFields = ['MembershipReceiptnumber', 'ReturnDate', 'RefundAmount'];
         for (const field of requiredFields) {
             if (!data[field]) {
                 return NextResponse.json({ error: `Missing required field: ${field}` }, { status: 400 });
             }
         }
 
-        const safeInt = (val) => val ? parseInt(val) : null;
+        const safeInt = (val) => val ? parseInt(val) : 0;
 
-        // Update Member status
-        const updateMember = await prisma.member.updateMany({
+        // 1. Update Member Status
+        // Need to find Member by Receipt Number (Legacy logic).
+        // Best to use ID if possible, but form sends ReceiptNumber.
+
+        const member = await prisma.member.findFirst({
             where: {
                 gymId: authPayload.gymId,
                 MembershipReceiptnumber: parseInt(data.MembershipReceiptnumber)
-            },
-            data: {
-                MembershipStatus: "Returned",
-                // ReturnDate field doesn't exist in Member model in schema? 
-                // schema says `MembershipReturn` model, but main.py did update `Member_DB` with `ReturnDate`.
-                // And insert into `MembershipReturns_DB`.
-                // In my schema, Member model does NOT have `ReturnDate`. I missed it.
-                // However, I can add it or just ignore it for now on member and rely on MembershipReturn table.
-                // But generally users want to see it on the member record.
-                // I should add `ReturnDate`, `RefundAmount`, `ReturnReason` to Member model if I want exact parity.
-                // For now, I'll skip updating those fields on Member if they don't exist in schema, or I should have added them.
-                // Checking schema (STEP 228)... Member model DOES NOT have these.
-                // I will add them to schema OR just update schema now?
-                // Updating schema requires migration. 
-                // Let's rely on MembershipStatus="Returned" on Member, and details in MembershipReturn table.
             }
         });
 
-        if (updateMember.count > 0) {
-            // Log Return
-            await prisma.membershipReturn.create({
+        if (!member) {
+            return NextResponse.json({ error: "Member not found with this Receipt Number" }, { status: 404 });
+        }
+
+        await prisma.member.update({
+            where: { id: member.id },
+            data: {
+                MembershipStatus: "Returned", // or Cancelled
+                Remark: `Returned on ${data.ReturnDate}. Reason: ${data.Reason || 'N/A'}`,
+                updatedAt: new Date(),
+                lastEditedBy: authPayload.username,
+                editReason: `Membership Return: ${data.Reason}`
+            }
+        });
+
+        // 2. Create Refund Invoice (Negative amount)
+        const refundAmt = safeInt(data.RefundAmount);
+        if (refundAmt > 0) {
+            await prisma.invoice.create({
                 data: {
                     gymId: authPayload.gymId,
-                    MembershipReceiptnumber: parseInt(data.MembershipReceiptnumber),
-                    ReturnDate: data.ReturnDate,
-                    RemainingDays: safeInt(data.RemainingDays),
-                    RefundAmount: safeInt(data.RefundAmount),
-                    Reason: data.Reason
+                    memberId: member.id,
+                    customerName: member.Name,
+                    invoiceDate: new Date(),
+                    items: [
+                        {
+                            description: `Membership Return - Refund. Reason: ${data.Reason}`,
+                            quantity: 1,
+                            rate: -refundAmt,
+                            amount: -refundAmt
+                        }
+                    ],
+                    subTotal: -refundAmt,
+                    total: -refundAmt,
+                    status: 'PAID', // Money returned
+                    paymentMode: 'CASH', // Assuming cash return
+                    lastEditedBy: authPayload.username,
+                    editReason: 'Refund Invoice'
                 }
             });
-
-            return NextResponse.json({
-                message: "Membership return processed successfully",
-                id: String(data.MembershipReceiptnumber)
-            }, { status: 200 });
-        } else {
-            return NextResponse.json({ error: "Failed to process membership return or no changes made" }, { status: 400 });
         }
+
+        return NextResponse.json({
+            message: "Membership return processed successfully",
+            id: member.id
+        }, { status: 200 });
 
     } catch (error) {
         console.error("Return membership error:", error);

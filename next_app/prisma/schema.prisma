@@ -15,21 +15,67 @@ model Gym {
   gymname   String
   email     String   @unique
   username  String   @unique
-  password  String   // Hashed password
+  password  String // Hashed password
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members            Member[]
-  proteinStocks      ProteinStock[]
-  membershipReturns  MembershipReturn[]
-  perDayAdmissions   PerDayAdmission[]
+  members           Member[]
+  proteinStocks     ProteinStock[]
+  users             User[]
+  invoices          Invoice[]
+}
+
+model User {
+  id          String   @id @default(uuid())
+  gymId       String
+  gym         Gym      @relation(fields: [gymId], references: [id])
+  username    String
+  password    String // Hashed
+  role        String   @default("STAFF") // OWNER, MANAGER, STAFF
+  permissions String[] // e.g., ["BILLING", "MEMBERS", "SETTINGS"]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([gymId, username])
+}
+
+model Invoice {
+  id    String @id @default(uuid())
+  gymId String
+  gym   Gym    @relation(fields: [gymId], references: [id])
+
+  memberId     String?
+  member       Member? @relation(fields: [memberId], references: [id])
+  customerName String? // If not a registered member
+
+  invoiceDate DateTime  @default(now())
+  dueDate     DateTime?
+
+  items Json // [{ description, quantity, rate, amount }]
+
+  subTotal Float
+  tax      Float? @default(0)
+  discount Float? @default(0)
+  total    Float
+
+  status       String   @default("PENDING") // PENDING, PAID, CANCELLED
+  paymentMode  String?  // CASH, ONLINE, UPI, MIXED
+  
+  lastEditedBy String?
+  editReason   String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([gymId])
 }
 
 model Member {
   id                      String   @id @default(uuid())
   gymId                   String
   gym                     Gym      @relation(fields: [gymId], references: [id])
-  
+
   Name                    String
   MembershipReceiptnumber Int?
   Gender                  String?
@@ -55,7 +101,11 @@ model Member {
   Mobile                  BigInt?
   extraDays               String?  // Frontend sends as string '0' usually
   agreeTerms              Boolean? @default(false)
+
+  lastEditedBy            String?
+  editReason              String?
   
+  Invoice                 Invoice[]
   updatedAt               DateTime @updatedAt
   createdAt               DateTime @default(now())
 
@@ -63,64 +113,24 @@ model Member {
 }
 
 model ProteinStock {
-  id                  String   @id @default(uuid())
-  gymId               String
-  gym                 Gym      @relation(fields: [gymId], references: [id])
+  id    String @id @default(uuid())
+  gymId String
+  gym   Gym    @relation(fields: [gymId], references: [id])
 
-  Year                String?
-  Month               String?
-  Brand               String?
-  ProductName         String?
-  Flavour             String?
-  Weight              String?
-  Quantity            String? // Can be Int, but legacy seems to treat loosely
-  MRPPrice            String? // Mapped from 'MRP Price(1 pcs)'
-  LandingPrice        String? // Mapped from 'Landing price(1 pcs)'
-  TotalPrice          String? // Mapped from 'Total price'
-  Remark              String?
+  Year         String?
+  Month        String?
+  Brand        String?
+  ProductName  String?
+  Flavour      String?
+  Weight       String?
+  Quantity     String? // Can be Int, but legacy seems to treat loosely
+  MRPPrice     String? // Mapped from 'MRP Price(1 pcs)'
+  LandingPrice String? // Mapped from 'Landing price(1 pcs)'
+  TotalPrice   String? // Mapped from 'Total price'
+  Remark       String?
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-   @@index([gymId])
-}
-
-model MembershipReturn {
-  id                      String   @id @default(uuid())
-  gymId                   String
-  gym                     Gym      @relation(fields: [gymId], references: [id])
-
-  MembershipReceiptnumber Int?
-  ReturnDate              String?
-  RemainingDays           Int?
-  RefundAmount            Int?
-  Reason                  String?
-
-  createdAt               DateTime @default(now())
-
-   @@index([gymId])
-}
-
-model PerDayAdmission {
-  id          String   @id @default(uuid())
-  gymId       String
-  gym         Gym      @relation(fields: [gymId], references: [id])
-
-  Name        String?
-  Gender      String?
-  Age         Int?
-  PlanType    String?
-  Days        Int?
-  StartDate   String?
-  EndDate     String?
-  Amount      Int?
-  weight      Int?
-  height      Float?
-  Mobile      BigInt?
-  Whatsapp    BigInt?
-  Aadhaar     BigInt?
-
-  createdAt   DateTime @default(now())
-
-   @@index([gymId])
+  @@index([gymId])
 }

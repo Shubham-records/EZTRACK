@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, createContext, useContext } from 'react';
+import { useToast } from "@/context/ToastContext";
 import WebappHeader from "./webappHeader";
 import WebappFooter from "./webappFooter";
 import Dashboard from "./dashboard";
@@ -7,6 +8,7 @@ import TableComponent from "./table";
 import Insight from "./insights";
 import InvoiceManagerComponent from './invoice-manager';
 import BmiCalculator from './bmicalculator';
+import StaffComponent from './staff';
 
 // Create context
 export const ThemeContext = createContext();
@@ -16,6 +18,7 @@ export default function WebappMain() {
   const [gymmemberdata, Setgymmemberdata] = useState([]);
   const [proteinsdata, Setproteinsdata] = useState([]);
   const [theme, setTheme] = useState('light');
+  const { showToast } = useToast();
 
   function handlenavbarClick(page) {
     setSelectedPage(page);
@@ -45,7 +48,7 @@ export default function WebappMain() {
         const result = await response.json();
         Setgymmemberdata(result);
       } catch (err) {
-        alert(err.message);
+        showToast(err.message, 'error');
       }
     };
 
@@ -79,7 +82,7 @@ export default function WebappMain() {
         const result = await response.json();
         Setproteinsdata(result);
       } catch (err) {
-        alert(err.message);
+        showToast(err.message, 'error');
       }
     };
 
@@ -169,10 +172,12 @@ export default function WebappMain() {
           {selectedPage === "Billing" && <Billing />}
           {selectedPage === "Bmi" && <BmiCalculator />}
           {selectedPage === "Invoices" && <InvoiceManagerComponent />}
-          {selectedPage === "AllMember" && <TableComponent gymmemberdata={gymmemberdata} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" />}
-          {selectedPage === "ActiveMember" && <TableComponent gymmemberdata={activeMembersData} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" />}
-          {selectedPage === "MemberExpiries" && <TableComponent gymmemberdata={inactiveMembersRecentDueDates} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" />}
+          {selectedPage === "AllMember" && <TableComponent gymmemberdata={gymmemberdata} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
+          {selectedPage === "ActiveMember" && <TableComponent gymmemberdata={activeMembersData} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
+          {selectedPage === "MemberExpiries" && <TableComponent gymmemberdata={inactiveMembersRecentDueDates} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
           {selectedPage === "Protein" && <TableComponent gymmemberdata={proteinsdata} allColumns={proteins} dataType="protein" onUpdateData={handleproteinsData} />}
+          {selectedPage === "AllStaff" && <StaffComponent />}
+          {selectedPage === "AddStaff" && <StaffComponent />} {/* Reuse list for now, maybe open modal auto */}
         </main>
       </div>
     </ThemeContext.Provider>

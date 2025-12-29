@@ -125,9 +125,44 @@ export async function POST(request) {
                 Remark: data.Remark,
                 Mobile: safeBigInt(data.Mobile),
                 extraDays: data.extraDays ? String(data.extraDays) : '0',
-                agreeTerms: data.agreeTerms || false
+                extraDays: data.extraDays ? String(data.extraDays) : '0',
+                agreeTerms: data.agreeTerms || false,
+                lastEditedBy: authPayload.username,
+                editReason: 'New Admission'
             }
         });
+
+        // Create Invoice for Admission
+        if (safeInt(data.LastPaymentAmount) > 0) {
+            try {
+                await prisma.invoice.create({
+                    data: {
+                        gymId: authPayload.gymId,
+                        memberId: newMember.id,
+                        customerName: newMember.Name,
+                        invoiceDate: new Date(),
+                        items: [
+                            {
+                                description: `New Admission - ${data.PlanType} (${data.PlanPeriod})`,
+                                quantity: 1,
+                                rate: safeInt(data.LastPaymentAmount),
+                                amount: safeInt(data.LastPaymentAmount)
+                            }
+                        ],
+                        subTotal: safeInt(data.LastPaymentAmount),
+                        total: safeInt(data.LastPaymentAmount),
+                        status: 'PAID', // Assuming payment received on admission
+                        paymentMode: 'CASH', // Default, or infer from somewhere else if available
+                        tax: 0,
+                        discount: 0,
+                        lastEditedBy: authPayload.username
+                    }
+                });
+            } catch (invError) {
+                console.error("Failed to create invoice for admission:", invError);
+                // Non-blocking, member created successfully
+            }
+        }
 
         // Handle BigInt serialization for JSON
         const responseData = {
@@ -140,11 +175,64 @@ export async function POST(request) {
 
         return NextResponse.json({
             message: "New admission added successfully",
-            id: newMember.id
+            id: newMember.id,
+            invoiceCreated: safeInt(data.LastPaymentAmount) > 0
         }, { status: 201 });
 
     } catch (error) {
         console.error("New admission error:", error);
         return NextResponse.json({ error: `An error occurred: ${error.message}` }, { status: 500 });
+    }
+}
+
+export async function PATCH(request) {
+    const authPayload = await verifyAuth(request);
+    if (!authPayload) {
+        return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
+
+    try {
+        const data = await request.json();
+        const { id, lastEditedBy, editReason, ...updateData } = data;
+
+        if (!id) {
+            return NextResponse.json({ message: "Member ID required" }, { status: 400 });
+        }
+
+        // Remove known unsafe fields or handle type conversion if necessary
+        // Ideally we should validate updateData against schema
+        // For audit, we enforce lastEditedBy if possible, or just optional
+
+        // Convert types like BigInt if present in updateData (Mobile etc)
+        if (updateData.Mobile) updateData.Mobile = BigInt(updateData.Mobile);
+        if (updateData.Whatsapp) updateData.Whatsapp = BigInt(updateData.Whatsapp);
+        if (updateData.Aadhaar) updateData.Aadhaar = BigInt(updateData.Aadhaar);
+        if (updateData.weight) updateData.weight = parseInt(updateData.weight);
+        if (updateData.height) updateData.height = parseFloat(updateData.height);
+        if (updateData.Age) updateData.Age = parseInt(updateData.Age);
+
+        const updatedMember = await prisma.member.update({
+            where: { id },
+            data: {
+                ...updateData,
+                // Automatically set audit fields
+                lastEditedBy: authPayload.username,
+                editReason: editReason || 'Updated Member Details'
+            }
+        });
+
+        // Serialize BigInt
+        const responseData = {
+            ...updatedMember,
+            _id: updatedMember.id,
+            Mobile: updatedMember.Mobile?.toString(),
+            Whatsapp: updatedMember.Whatsapp?.toString(),
+            Aadhaar: updatedMember.Aadhaar?.toString()
+        };
+
+        return NextResponse.json(responseData);
+    } catch (error) {
+        console.error("Update member error:", error);
+        return NextResponse.json({ message: "Failed to update member" }, { status: 500 });
     }
 }

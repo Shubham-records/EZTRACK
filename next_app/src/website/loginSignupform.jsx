@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import img from "@/assets/img.png";
 import axios from "axios";
+import { useToast } from "@/context/ToastContext";
 
 export function Signupform() {
   const [GYMNAME, setGYMNAME] = useState("");
@@ -12,6 +13,7 @@ export function Signupform() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const router = useRouter();
+  const { showToast } = useToast();
 
   async function handleSignup(event) {
     event.preventDefault();
@@ -22,15 +24,15 @@ export function Signupform() {
         { responseType: "text" }
       );
 
-      alert(response.data);
+      showToast(response.data, 'success');
       router.push("/login");
     } catch (err) {
       console.error(err);
 
       if (err.response && err.response.data) {
-        alert(err.response.data);
+        showToast(err.response.data, 'error');
       } else {
-        alert("Signup failed.");
+        showToast("Signup failed.", 'error');
       }
     }
   }
@@ -57,61 +59,76 @@ export function Signupform() {
           flex: 1,
           padding: "1rem",
           justifyContent: "center",
-          backgroundColor: "rgba(17, 24, 39, 1)",
+          backgroundColor: "#111827", // Tailwind gray-900
+          color: "white"
         }}
       >
-        <Link href="/">{"< Home"}</Link>
+        <Link href="/" style={{ color: '#60a5fa', marginBottom: '1rem' }}>{"< Home"}</Link>
 
         <div style={{ padding: "4rem" }}>
           <div className="form-container">
             <p className="title">Sign Up</p>
             <form className="form" onSubmit={handleSignup}>
-              <div className="input-group">
-                <label htmlFor="username">GYM NAME</label>
+              <div className="input-group" style={{ marginBottom: '1rem' }}>
+                <label htmlFor="gymname" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>GYM NAME</label>
                 <input
                   type="text"
                   required
                   value={GYMNAME}
                   onChange={(event) => setGYMNAME(event.target.value)}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
                 />
               </div>
-              <div className="input-group">
-                <label htmlFor="username">EMAIL ID</label>
+              <div className="input-group" style={{ marginBottom: '1rem' }}>
+                <label htmlFor="email" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>EMAIL ID</label>
                 <input
                   type="email"
                   required
                   value={EMAILID}
                   onChange={(event) => setEMAILID(event.target.value)}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
                 />
               </div>
-              <div className="input-group">
-                <label htmlFor="username">Username</label>
+              <div className="input-group" style={{ marginBottom: '1rem' }}>
+                <label htmlFor="username" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>Username</label>
                 <input
                   type="text"
                   required
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
                 />
               </div>
 
-              <div className="input-group">
-                <label htmlFor="password">Password</label>
+              <div className="input-group" style={{ marginBottom: '1rem' }}>
+                <label htmlFor="password" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>Password</label>
                 <input
                   type="password"
                   required
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
                 />
               </div>
               <br />
-              <button type="submit" className="sign">
+              <button type="submit" className="sign" style={{
+                width: '100%',
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+                border: 'none',
+                background: 'linear-gradient(to right, #8b5cf6, #ec4899)',
+                color: 'white',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                marginTop: '1rem'
+              }}>
                 Sign Up
               </button>
             </form>
             <br />
-            <p className="signup">
-              Already have an account?
-              <Link href="/login" >
+            <p className="signup" style={{ textAlign: 'center', marginTop: '1rem', color: '#9ca3af' }}>
+              Already have an account?{' '}
+              <Link href="/login" style={{ color: '#60a5fa' }}>
                 Login
               </Link>
             </p>
@@ -126,6 +143,7 @@ export function Loginform() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const router = useRouter();
+  const { showToast } = useToast();
 
   async function handlelogin(event) {
     event.preventDefault();
@@ -135,7 +153,8 @@ export function Loginform() {
         { username, password },
         { responseType: "json" }
       );
-      alert(response.data.message);
+
+      showToast(response.data.message, 'success');
 
       if (response.status === 200) {
         const { eztracker_jwt_access_control_token, eztracker_jwt_databaseName_control_token } = response.data;
@@ -147,9 +166,9 @@ export function Loginform() {
     } catch (err) {
       console.error("Login error:", err);
       if (err.response && err.response.data) {
-        alert(err.response.data.message);
+        showToast(err.response.data.message, 'error');
       } else {
-        alert("Login failed.");
+        showToast("Login failed.", 'error');
       }
     }
   }
@@ -183,42 +202,54 @@ export function Loginform() {
           backgroundColor: "rgba(17, 24, 39, 1)",
         }}
       >
-        <Link href="/">{"< Home"}</Link>
+        <Link href="/" style={{ color: '#60a5fa', marginBottom: '1rem' }}>{"< Home"}</Link>
 
 
         <div style={{ padding: "4rem", }}>
           <div className="form-container">
-            <p className="title">Login</p>
+            <p className="title" style={{ color: '#e5e7eb' }}>Login</p>
             <form className="form" onSubmit={handlelogin}>
-              <div className="input-group">
-                <label htmlFor="username">Username</label>
+              <div className="input-group" style={{ marginBottom: '1rem' }}>
+                <label htmlFor="username" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>Username</label>
                 <input
                   type="text"
                   required
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
                 />
               </div>
-              <div className="input-group">
-                <label htmlFor="password">Password</label>
+              <div className="input-group" style={{ marginBottom: '1rem' }}>
+                <label htmlFor="password" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>Password</label>
                 <input
                   type="password"
                   required
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
                 />
-                <div className="forgot">
-                  <Link href="/forgotpassword">Forgot Password ?</Link>
+                <div className="forgot" style={{ textAlign: 'right', marginTop: '0.5rem' }}>
+                  <Link href="/forgotpassword" style={{ color: '#60a5fa', fontSize: '0.875rem' }}>Forgot Password ?</Link>
                 </div>
               </div>
-              <button type="submit" className="sign">
+              <button type="submit" className="sign" style={{
+                width: '100%',
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+                border: 'none',
+                background: 'linear-gradient(to right, #8b5cf6, #ec4899)',
+                color: 'white',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                marginTop: '1rem'
+              }}>
                 Login
               </button>
             </form>
             <br />
-            <p className="signup">
-              Don't have an account?
-              <Link href="/Signup" >
+            <p className="signup" style={{ textAlign: 'center', marginTop: '1rem', color: '#9ca3af' }}>
+              Don't have an account?{' '}
+              <Link href="/Signup" style={{ color: '#60a5fa' }}>
                 Sign up
               </Link>
             </p>
@@ -237,6 +268,7 @@ export function ForgotPassword() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const router = useRouter();
+  const { showToast } = useToast();
 
   const handleRequestOtp = async (event) => {
     event.preventDefault();
@@ -246,15 +278,14 @@ export function ForgotPassword() {
         email,
       });
 
-      alert(response.data.message);
-
+      showToast(response.data.message, 'success');
       setShowOtpInput(true);
     } catch (err) {
       console.error(err);
       if (err.response && err.response.data) {
-        alert(err.response.data.message); // Display error message from the backend
+        showToast(err.response.data.message, 'error');
       } else {
-        alert("Error requesting OTP.");
+        showToast("Error requesting OTP.", 'error');
       }
     }
   };
@@ -263,21 +294,23 @@ export function ForgotPassword() {
     event.preventDefault();
 
     try {
-      const response = await axios.post("http://127.0.0.1:5000/verify_otp", {
-        email,
-        otp,
-      });
+      const response = await axios.post(
+        "http://127.0.0.1:5000/verify_otp",
+        {
+          email,
+          otp,
+        }
+      );
 
-      alert(response.data.message);
-
-      setShowOtpInput(false);
+      showToast(response.data.message, 'success');
       setShowPasswordInputs(true);
+      setShowOtpInput(false);
     } catch (err) {
       console.error(err);
       if (err.response && err.response.data) {
-        alert(err.response.data.message);
+        showToast(err.response.data.message, 'error');
       } else {
-        alert("Error verifying OTP.");
+        showToast("Error verifying OTP.", 'error');
       }
     }
   };
@@ -286,7 +319,7 @@ export function ForgotPassword() {
     event.preventDefault();
 
     if (password !== confirmPassword) {
-      alert("Passwords do not match. Please try again.");
+      showToast("Passwords do not match. Please try again.", 'error');
       return;
     }
 
@@ -299,15 +332,15 @@ export function ForgotPassword() {
         }
       );
 
-      alert(response.data.message);
+      showToast(response.data.message, 'success');
 
       router.push("/login");
     } catch (err) {
       console.error(err);
       if (err.response && err.response.data) {
-        alert(err.response.data.message);
+        showToast(err.response.data.message, 'error');
       } else {
-        alert("Error resetting password.");
+        showToast("Error resetting password.", 'error');
       }
     }
   };
@@ -339,7 +372,7 @@ export function ForgotPassword() {
           backgroundColor: "rgba(17, 24, 39, 1)",
         }}
       >
-        <Link href="/">{"< Home"}</Link>
+        <Link href="/" style={{ color: '#60a5fa', marginBottom: '1rem' }}>{"< Home"}</Link>
 
         <div style={{ padding: "4rem" }}>
           {showOtpInput ? (

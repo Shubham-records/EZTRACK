@@ -9,7 +9,7 @@ export async function PUT(request, { params }) {
     if (!authPayload) {
         return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    const { id } = params;
+    const { id } = await params;
 
     try {
         const data = await request.json();
@@ -17,6 +17,8 @@ export async function PUT(request, { params }) {
         // Remove _id if present to check for update cleanliness (Prisma doesn't like extra fields if strict, but here we select fields)
         delete data._id;
         delete data.gymId; // Prevent changing gym ownership easily
+        delete data['height(ft)'];
+        delete data['weight(kg)'];
 
         // Handle BigInts and data types
         if (data.Mobile) data.Mobile = BigInt(data.Mobile);
@@ -60,7 +62,7 @@ export async function DELETE(request, { params }) {
     if (!authPayload) {
         return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    const { id } = params;
+    const { id } = await params;
 
     try {
         await prisma.member.delete({
@@ -93,7 +95,7 @@ export async function GET(request, { params }) {
         return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { id } = params;
+    const { id } = await params;
     try {
         const member = await prisma.member.findFirst({
             where: {

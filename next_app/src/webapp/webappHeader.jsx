@@ -1,5 +1,6 @@
 "use client";
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
+import { useToast } from "@/context/ToastContext";
 import { ThemeContext } from './webappmain';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
@@ -11,6 +12,7 @@ import { Activity, Users, Calendar, DollarSign, TrendingUp, Repeat, UserCheck, U
 
 export default function WebappHeader({ clickedBUTTON }) {
   const router = useRouter();
+  const { showToast } = useToast();
   const [selectedItem, setSelectedItem] = useState('Dashboard');
   const [openDropdown, setOpenDropdown] = useState(null);
   const { theme, setTheme } = useContext(ThemeContext);
@@ -20,7 +22,33 @@ export default function WebappHeader({ clickedBUTTON }) {
     setIsDarkMode(!isDarkMode)
   }
 
-  const sidebarItems = [
+  const [userRole, setUserRole] = useState(null);
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token) return;
+
+        const res = await fetch('/api/auth/me', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'X-Database-Name': dbName
+          }
+        });
+        if (res.ok) {
+          const user = await res.json();
+          setUserRole(user.role); // OWNER, MANAGER, STAFF
+        }
+      } catch (e) {
+        console.error("Failed to fetch user role", e);
+      }
+    };
+    fetchUser();
+  }, []);
+
+  const baseItems = [
     {
       name: 'Dashboard',
       dropdownItems: []
@@ -28,6 +56,10 @@ export default function WebappHeader({ clickedBUTTON }) {
     {
       name: 'Insight',
       dropdownItems: []
+    },
+    {
+      name: 'Registration', // "Billing" in main
+      dropdownItems: ['Billing'] // Points to Billing component
     },
     {
       name: 'Members',
@@ -42,10 +74,6 @@ export default function WebappHeader({ clickedBUTTON }) {
       dropdownItems: ['Invoices', 'Expenses']
     },
     {
-      name: 'Staff',
-      dropdownItems: ['All Staff', 'Add Staff', 'Staff Performance']
-    },
-    {
       name: 'diet',
       dropdownItems: ['Bmi']
     },
@@ -54,6 +82,17 @@ export default function WebappHeader({ clickedBUTTON }) {
       dropdownItems: ['Attendance data', "Add face"]
     },
   ];
+
+  const staffItem = {
+    name: 'Staff',
+    dropdownItems: ['All Staff', 'Add Staff', 'Staff Performance']
+  };
+
+  const sidebarItems = (userRole === 'OWNER' || userRole === 'MANAGER')
+    ? [...baseItems.slice(0, 6), staffItem, ...baseItems.slice(6)]
+    : baseItems; // Hide Staff for standard STAFF role (or if loading)
+
+  // Note: If userRole is null (loading), Staff is hidden, which is safe default.
 
   async function handleLogout() {
     try {
@@ -69,14 +108,15 @@ export default function WebappHeader({ clickedBUTTON }) {
         localStorage.removeItem('eztracker_jwt_access_control_token');
         localStorage.removeItem('eztracker_jwt_databaseName_control_token');
 
-        router.push('/login');
+        // Force full reload/redirect to ensure state is cleared
+        window.location.href = '/login';
       } else {
         const errorData = await response.json();
         console.log(errorData.message);
-        alert('Failed to log out. Please try again.');
+        showToast('Failed to log out. Please try again.', 'error');
       }
     } catch (error) {
-      alert('An error occurred while logging out. Please try again.');
+      showToast('An error occurred while logging out. Please try again.', 'error');
     }
   }
 

@@ -1,12 +1,6 @@
 @import "tailwindcss";
+@source "../";
 @plugin "tailwindcss-animate";
-
-/* Copied from frontend/src/index.css */
-* {
-  padding: 0;
-  margin: 0;
-  font-family: "Open Sans", sans-serif;
-}
 
 
 /* Theme Colors */
@@ -18,13 +12,19 @@
   --primary-cardsbg-color: #171717;
   --primary-logobg-color: #fa7516;
 
-  --secondary-bg-color: #cfcfcf; /* Very light gray background for secondary elements */
-  --secondary-text-color: #000; /* Black text for contrast */
-  --secondary-text-dim-color: rgb(156 163 175); /* Dimmed text color */
-  --secondary-border-color: #e0e0e0; /* Lighter border for white theme */
-  --secondary-cardsbg-color: #e1e0e0; /* Light gray for cards */
-  --secondary-logobg-color: #fa7516; /* Orange essence for logo background */
-  
+  --secondary-bg-color: #cfcfcf;
+  /* Very light gray background for secondary elements */
+  --secondary-text-color: #000;
+  /* Black text for contrast */
+  --secondary-text-dim-color: rgb(156 163 175);
+  /* Dimmed text color */
+  --secondary-border-color: #e0e0e0;
+  /* Lighter border for white theme */
+  --secondary-cardsbg-color: #e1e0e0;
+  /* Light gray for cards */
+  --secondary-logobg-color: #fa7516;
+  /* Orange essence for logo background */
+
 }
 
 
@@ -183,8 +183,7 @@
   border-radius: 50%;
 }
 
-.setting-icon:hover {
-}
+.setting-icon:hover {}
 
 .staff-icon {
   width: 2rem;
@@ -307,9 +306,7 @@ boxDiv:hover {
 
 }
 
-.option:hover {
-
-}
+.option:hover {}
 
 .input {
   width: 100%;
@@ -333,8 +330,7 @@ boxDiv:hover {
 
 }
 
-.span {
-}
+.span {}
 
 .input:checked+.btnName {
   transition: 0.2s cubic-bezier(0, 0, 0, 1);
@@ -400,8 +396,7 @@ select {
   font-size: 16px;
 }
 
-.billingcontainer button:hover {
-}
+.billingcontainer button:hover {}
 
 
 a {
@@ -431,8 +426,7 @@ a {
 }
 
 
-.navbarLinks a:hover {
-}
+.navbarLinks a:hover {}
 
 .navbarActions {
   display: flex;
@@ -461,13 +455,12 @@ a {
 .getStartedButton {
   padding: 10px 20px;
   border-radius: 20px;
-  
+
   cursor: pointer;
   font-size: 16px;
 }
 
-.getStartedButton a {
-}
+.getStartedButton a {}
 
 .learnMoreButton {
   padding: 10px 20px;
@@ -475,7 +468,7 @@ a {
   border: 2px solid fff;
   border-radius: 20px;
 
-  
+
   cursor: pointer;
   font-size: 16px;
 }
@@ -486,9 +479,7 @@ a {
 
 }
 
-.getStartedButton:hover {
-  
-}
+.getStartedButton:hover {}
 
 
 /* form css */
@@ -496,13 +487,13 @@ a {
 .login {
   height: 100vh;
   display: flex;
-  
+
 }
 
 .form-container {
   width: 30vw;
   border-radius: 0.75rem;
-  
+
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -527,7 +518,7 @@ a {
 
 .input-group label {
   display: block;
-  
+
   margin-bottom: 4px;
 }
 
@@ -536,14 +527,14 @@ a {
   border-radius: 0.375rem;
   border: 1px solid rgba(55, 65, 81, 1);
   outline: 0;
-  
+
   padding: 0.75rem 1rem;
-  
+
 }
 
 .input-group input:focus {
   filter: brightness(1);
-  
+
 
 }
 
@@ -552,13 +543,13 @@ a {
   justify-content: flex-end;
   font-size: 0.75rem;
   line-height: 1rem;
-  
+
   margin: 8px 0 14px 0;
 }
 
 .forgot a,
 .signup a {
-  
+
   text-decoration: none;
   font-size: 14px;
 }
@@ -587,7 +578,7 @@ a {
 .line {
   height: 1px;
   flex: 1 1 0%;
-  
+
 }
 
 .social-message .message {
@@ -595,7 +586,7 @@ a {
   padding-right: 0.75rem;
   font-size: 0.875rem;
   line-height: 1.25rem;
-  
+
 }
 
 .social-icons {
@@ -620,10 +611,10 @@ a {
   text-align: center;
   font-size: 0.75rem;
   line-height: 1rem;
-  
+
 }
 
-/* From Uiverse.io by Pradeepsaranbishnoi */ 
+/* From Uiverse.io by Pradeepsaranbishnoi */
 /* Phone */
 .phone {
   position: relative;
@@ -664,23 +655,23 @@ a {
   border-radius: 100%;
   width: 8rem;
   height: 8rem;
-  background: linear-gradient(40deg, #FF0080,#FF8C00 70%);
+  background: linear-gradient(40deg, #FF0080, #FF8C00 70%);
   margin: auto;
 }
 
-.app{
+.app {
   height: 5rem;
 }
 
 
-label, .toggle {
+label,
+.toggle {
   height: 2.8rem;
   border-radius: 100px;
 }
 
 label {
   width: 100%;
-  background-color: rgba(0,0,0,.1);
   border-radius: 100px;
   position: relative;
   margin: 1rem 0 0 0;
@@ -691,8 +682,8 @@ label {
   position: absolute;
   width: 50%;
   background-color: #fff;
-  -webkit-box-shadow: 0 2px 15px rgba(0,0,0,.15);
-  box-shadow: 0 2px 15px rgba(0,0,0,.15);
+  -webkit-box-shadow: 0 2px 15px rgba(0, 0, 0, .15);
+  box-shadow: 0 2px 15px rgba(0, 0, 0, .15);
   -webkit-transition: -webkit-transform .3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   transition: -webkit-transform .3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   transition: transform .3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
@@ -727,67 +718,70 @@ label {
 [type="checkbox"] {
   display: none;
 }
+
 /* Toggle */
-[type="checkbox"]:checked + .app .toggle {
+[type="checkbox"]:checked+.app .toggle {
   -webkit-transform: translateX(100%);
   -ms-transform: translateX(100%);
   transform: translateX(100%);
   background-color: #34323D;
 }
 
-[type="checkbox"]:checked + .app .dark {
+[type="checkbox"]:checked+.app .dark {
   opacity: 1;
   color: white;
 }
 
-[type="checkbox"]:checked + .app label {
+[type="checkbox"]:checked+.app label {
   background: #171717;
 }
 
-[type="checkbox"]:checked + .app .light {
+[type="checkbox"]:checked+.app .light {
   opacity: 1;
   color: white;
 }
+
 /* App */
-[type="checkbox"]:checked + .app .body {
- 
+[type="checkbox"]:checked+.app .body {
+
   color: white;
 }
+
 /* Circle */
-[type="checkbox"]:checked + .app .crescent {
+[type="checkbox"]:checked+.app .crescent {
   -webkit-transform: scale(1);
   -ms-transform: scale(1);
   transform: scale(1);
   background: #26242E;
 }
 
-[type="checkbox"]:checked + .app .circle {
+[type="checkbox"]:checked+.app .circle {
   background: linear-gradient(40deg, #8983F7, #A3DAFB 70%);
 }
 
-[type="checkbox"]:checked + .app .main-circle {
+[type="checkbox"]:checked+.app .main-circle {
   background: linear-gradient(40deg, #8983F7, #A3DAFB 70%);
 }
 
-[type="checkbox"]:checked + .time {
+[type="checkbox"]:checked+.time {
   color: white;
 }
 
-[type="checkbox"]:checked + .app .body .phone .menu .time {
+[type="checkbox"]:checked+.app .body .phone .menu .time {
   color: white;
 }
 
-[type="checkbox"]:checked + .app .body .phone .menu .icons .network {
+[type="checkbox"]:checked+.app .body .phone .menu .icons .network {
   border-color: transparent transparent white transparent;
 }
 
-[type="checkbox"]:checked + .app .body {
+[type="checkbox"]:checked+.app .body {
   border-radius: 40px;
-  
+
 }
 
 .menu {
-/*   background-color: blue; */
+  /*   background-color: blue; */
   font-size: 80%;
   opacity: .4;
   padding: .8rem 1.8rem;

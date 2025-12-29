@@ -2,11 +2,13 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { addMonths, addYears, addDays, subDays, format, parse } from 'date-fns';
 import { useRouter } from 'next/navigation';
+import { useToast } from "@/context/ToastContext";
 import { ThemeContext } from './webappmain';
 
 export function NewAdmission() {
   const router = useRouter();
   const { theme } = useContext(ThemeContext);
+  const { showToast } = useToast();
 
   const [clientNumber, setClientNumber] = useState(null);
   const [formData, setFormData] = useState({
@@ -63,8 +65,9 @@ export function NewAdmission() {
           prev => ({ ...prev, MembershipReceiptnumber: data.clientNumber })
         );
       } catch (error) {
-        alert(
-          `Error fetching client number: ${error instanceof Error ? error.message : String(error)}`
+        showToast(
+          `Error fetching client number: ${error instanceof Error ? error.message : String(error)}`,
+          'error'
         );
       }
     };
@@ -162,11 +165,11 @@ export function NewAdmission() {
       }
 
       console.log('Response:', responseData);
-      alert('Admission submitted successfully!');
+      showToast('Admission submitted successfully!', 'success');
       router.push("/webapp");
     } catch (error) {
       console.error('Error details:', error);
-      alert(`Error submitting form: ${error.message}`);
+      showToast(`Error submitting form: ${error.message}`, 'error');
     }
   };
 
@@ -206,7 +209,7 @@ export function NewAdmission() {
           <input
             type="number"
             name="Age"
-            value={formData.Age}
+            value={formData.Age || ''}
             onChange={handleInputChange}
             placeholder="Age"
             required />
@@ -220,7 +223,7 @@ export function NewAdmission() {
           <input
             type="number"
             name="weight"
-            value={formData.weight}
+            value={formData.weight || ''}
             onChange={handleInputChange}
             placeholder="Weight (kg)"
             required />
@@ -236,7 +239,7 @@ export function NewAdmission() {
           <input
             type="number"
             name="Aadhaar"
-            value={formData.Aadhaar}
+            value={formData.Aadhaar || ''}
             onChange={handleInputChange}
             placeholder="Aadhaar NO." />
         </span>
@@ -245,14 +248,14 @@ export function NewAdmission() {
           <input
             type="number"
             name="Mobile"
-            value={formData.Mobile}
+            value={formData.Mobile || ''}
             onChange={handleInputChange}
             placeholder="Phone NO."
             required />
           <input
             type="number"
             name="Whatsapp"
-            value={formData.Whatsapp}
+            value={formData.Whatsapp || ''}
             onChange={handleInputChange}
             placeholder="WhatsApp NO."
             required />
@@ -331,6 +334,7 @@ export function NewAdmission() {
 
 export function ReAdmission() {
   const router = useRouter();
+  const { showToast } = useToast();
   const [clientNumber, setClientNumber] = useState('');
   const [formData, setFormData] = useState({
     Name: '',
@@ -395,7 +399,7 @@ export function ReAdmission() {
         DateOfReJoin: format(new Date(), 'yyyy-MM-dd')
       }));
     } catch (error) {
-      alert(`Error fetching client data: ${error.message}`);
+      showToast(`Error fetching client data: ${error.message}`, 'error');
     }
   };
 
@@ -430,11 +434,11 @@ export function ReAdmission() {
         throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
       }
 
-      alert('Re-Admission submitted successfully!');
+      showToast('Re-Admission submitted successfully!', 'success');
       router.push("/webapp");
     } catch (error) {
       console.error('Error details:', error);
-      alert(`Error submitting form: ${error.message}`);
+      showToast(`Error submitting form: ${error.message}`, 'error');
     }
   };
 
@@ -646,6 +650,7 @@ export function ReAdmission() {
 
 export function Renewal() {
   const router = useRouter();
+  const { showToast } = useToast();
   const [clientNumber, setClientNumber] = useState('');
   const [formData, setFormData] = useState({
     Name: '',
@@ -700,7 +705,7 @@ export function Renewal() {
         DateOfRenewal: format(new Date(), 'yyyy-MM-dd')
       }));
     } catch (error) {
-      alert(`Error fetching client data: ${error.message}`);
+      showToast(`Error fetching client data: ${error.message}`, 'error');
     }
   };
 
@@ -735,11 +740,11 @@ export function Renewal() {
         throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
       }
 
-      alert('Renewal submitted successfully!');
+      showToast('Renewal submitted successfully!', 'success');
       router.push("/webapp");
     } catch (error) {
       console.error('Error details:', error);
-      alert(`Error submitting form: ${error.message}`);
+      showToast(`Error submitting form: ${error.message}`, 'error');
     }
   };
 
@@ -896,6 +901,7 @@ export function Renewal() {
 
 export function PerDayBasis() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
 
   const [formData, setFormData] = useState({
     Name: '',
@@ -969,11 +975,11 @@ export function PerDayBasis() {
         throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
       }
 
-      alert('Per Day Basis admission submitted successfully!');
+      showToast('Per Day Basis admission submitted successfully!', 'success');
       navigate("/webapp");
     } catch (error) {
       console.error('Error details:', error);
-      alert(`Error submitting form: ${error.message}`);
+      showToast(`Error submitting form: ${error.message}`, 'error');
     }
   };
 
@@ -1140,6 +1146,7 @@ export function PerDayBasis() {
 
 export function ReturnMembership() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [clientNumber, setClientNumber] = useState('');
   const [formData, setFormData] = useState({
     Name: '',
@@ -1198,7 +1205,7 @@ export function ReturnMembership() {
         ReturnDate: format(new Date(), 'yyyy-MM-dd')
       }));
     } catch (error) {
-      alert(`Error fetching client data: ${error.message}`);
+      showToast(`Error fetching client data: ${error.message}`, 'error');
     }
   };
 
@@ -1233,11 +1240,11 @@ export function ReturnMembership() {
         throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
       }
 
-      alert('Membership return processed successfully!');
+      showToast('Membership return processed successfully!', 'success');
       navigate("/webapp");
     } catch (error) {
       console.error('Error details:', error);
-      alert(`Error submitting form: ${error.message}`);
+      showToast(`Error submitting form: ${error.message}`, 'error');
     }
   };
 
