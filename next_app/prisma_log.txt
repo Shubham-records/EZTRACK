@@ -1,7 +1,0 @@
-Environment variables loaded from .env
-Prisma schema loaded from prisma\schema.prisma
-Datasource "db": PostgreSQL database "eztrack", schema "public" at "localhost:5432"
-
-Error: P1000: Authentication failed against database server at `localhost`, the provided database credentials for `user` are not valid.
-
-Please make sure to provide valid database credentials for the database server at `localhost`.
