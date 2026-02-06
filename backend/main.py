@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from routers import auth, members, staff, proteins, invoices, dashboard
+from core.database import Base, engine
+
+# Create the database tables
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="EZTRACK Gym Management API")
 
@@ -34,4 +38,4 @@ def read_root():
     return {"message": "Welcome to EZTRACK API"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)

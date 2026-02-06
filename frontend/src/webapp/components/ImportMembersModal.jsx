@@ -4,7 +4,7 @@ import { Upload, FileSpreadsheet, X, Download, AlertTriangle, CheckCircle, Loade
 import { useToast } from "@/context/ToastContext";
 import ConflictResolution from './ConflictResolution';
 
-export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, theme, dataType = 'member' }) {
+export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, dataType = 'member' }) {
     const { showToast } = useToast();
     const [file, setFile] = useState(null);
     const [isUploading, setIsUploading] = useState(false);
@@ -218,15 +218,15 @@ export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, t
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-            <div className={`w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] ${theme === 'dark' ? 'bg-neutral-900 border border-neutral-800' : 'bg-white'}`}>
+            <div className="w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] bg-surface-light dark:bg-surface-dark border border-zinc-200 dark:border-zinc-800">
 
                 {/* Header */}
-                <div className={`px-6 py-4 border-b flex justify-between items-center ${theme === 'dark' ? 'border-neutral-800' : 'border-gray-100'}`}>
-                    <h2 className={`text-xl font-bold flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
-                        <FileSpreadsheet className="text-emerald-500" />
+                <div className="px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center">
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-zinc-900 dark:text-white">
+                        <FileSpreadsheet className="text-primary" />
                         Import {dataType === 'member' ? 'Members' : 'Protein Stocks'}
                     </h2>
-                    <button onClick={onClose} className={`p-2 rounded-full hover:bg-gray-100/10 transition ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                    <button onClick={onClose} className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800/50 transition text-zinc-500 dark:text-zinc-400">
                         <X size={20} />
                     </button>
                 </div>
@@ -240,8 +240,8 @@ export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, t
                             <div
                                 onClick={() => fileInputRef.current?.click()}
                                 className={`border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-all ${file
-                                    ? (theme === 'dark' ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-emerald-500 bg-emerald-50')
-                                    : (theme === 'dark' ? 'border-neutral-700 hover:border-neutral-500 hover:bg-neutral-800' : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50')
+                                    ? 'border-primary bg-teal-50 dark:bg-teal-900/10'
+                                    : 'border-zinc-300 dark:border-zinc-700 hover:border-zinc-400 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
                                     }`}
                             >
                                 <input
@@ -253,15 +253,15 @@ export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, t
                                 />
                                 {file ? (
                                     <>
-                                        <FileSpreadsheet size={48} className="text-emerald-500 mb-4" />
-                                        <p className={`text-lg font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{file.name}</p>
-                                        <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>{(file.size / 1024).toFixed(2)} KB</p>
+                                        <FileSpreadsheet size={48} className="text-primary mb-4" />
+                                        <p className="text-lg font-medium text-zinc-900 dark:text-white">{file.name}</p>
+                                        <p className="text-sm text-zinc-500">{(file.size / 1024).toFixed(2)} KB</p>
                                     </>
                                 ) : (
                                     <>
-                                        <Upload size={48} className={`mb-4 ${theme === 'dark' ? 'text-gray-600' : 'text-gray-400'}`} />
-                                        <p className={`text-lg font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Click to upload or drag and drop</p>
-                                        <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Excel (.xlsx) or CSV (.csv)</p>
+                                        <Upload size={48} className="mb-4 text-zinc-400" />
+                                        <p className="text-lg font-medium text-zinc-900 dark:text-white">Click to upload or drag and drop</p>
+                                        <p className="text-sm text-zinc-500">Excel (.xlsx) or CSV (.csv)</p>
                                     </>
                                 )}
                             </div>
@@ -269,7 +269,7 @@ export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, t
                             <div className="flex justify-between items-center">
                                 <button
                                     onClick={downloadSample}
-                                    className={`flex items-center gap-2 text-sm font-medium hover:underline ${theme === 'dark' ? 'text-blue-400' : 'text-blue-600'}`}
+                                    className="flex items-center gap-2 text-sm font-medium hover:underline text-primary"
                                 >
                                     <Download size={16} /> Download {dataType === 'member' ? 'Member' : 'Protein'} Template
                                 </button>
@@ -277,7 +277,7 @@ export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, t
                                     <button
                                         onClick={processFile}
                                         disabled={isUploading}
-                                        className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                        className="px-6 py-2 bg-primary hover:bg-teal-700 text-white rounded-lg font-bold shadow-lg shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                                     >
                                         {isUploading && <Loader2 className="animate-spin" size={18} />}
                                         {isUploading ? "Processing..." : "Start Import"}
@@ -293,19 +293,18 @@ export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, t
                             conflicts={conflicts}
                             onResolve={handleResolution}
                             onCancel={() => { setConflicts([]); setCleanRecords([]); setFile(null); }}
-                            theme={theme}
                         />
                     )}
 
                     {/* Step 3: Success */}
                     {importStats && importStats.success > 0 && (
                         <div className="p-6 flex flex-col items-center justify-center py-10 text-center animate-in fade-in zoom-in duration-300">
-                            <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-4">
+                            <div className="w-16 h-16 bg-teal-100 dark:bg-teal-900/30 text-primary rounded-full flex items-center justify-center mb-4">
                                 <CheckCircle size={32} />
                             </div>
-                            <h3 className={`text-2xl font-bold mb-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Import Successful!</h3>
-                            <p className={`${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
-                                Successfully imported/updated <span className="font-bold text-emerald-500">{importStats.success}</span> records.
+                            <h3 className="text-2xl font-bold mb-2 text-zinc-900 dark:text-white">Import Successful!</h3>
+                            <p className="text-zinc-600 dark:text-zinc-400">
+                                Successfully imported/updated <span className="font-bold text-primary">{importStats.success}</span> records.
                             </p>
                         </div>
                     )}

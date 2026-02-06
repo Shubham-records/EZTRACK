@@ -1,30 +1,50 @@
 @import "tailwindcss";
 @source "../";
 @plugin "tailwindcss-animate";
+@variant dark (&:where(.dark, .dark *));
 
 
-/* Theme Colors */
+@theme {
+  --color-primary: #008080;
+  /* Vibrant Deep Teal */
+  --color-secondary: #71717a;
+  /* Zinc 500 */
+  --color-background-light: #f8fafc;
+  --color-background-dark: #0c0c0e;
+  --color-surface-light: #ffffff;
+  --color-surface-dark: #18181b;
+  /* Zinc 900 */
+
+  --font-display: Montserrat, sans-serif;
+  --font-body: Montserrat, sans-serif;
+
+  --shadow-soft: 0 4px 12px -2px rgba(0, 0, 0, 0.05), 0 2px 6px -1px rgba(0, 0, 0, 0.03);
+
+  /* Retain standard colors if needed or rely on default palette */
+}
+
+/* Legacy Variable Mapping for components still using var(--) */
 :root {
-  --primary-bg-color: #000;
-  --primary-text-color: #fff;
-  --primary-text-dim-color: rgb(156 163 175);
-  --primary-border-color: #262626;
-  --primary-cardsbg-color: #171717;
-  --primary-logobg-color: #fa7516;
+  --primary: #008080;
+  --secondary: #71717a;
+  --background-light: #f8fafc;
+  --background-dark: #0c0c0e;
+  --surface-light: #ffffff;
+  --surface-dark: #18181b;
 
-  --secondary-bg-color: #cfcfcf;
-  /* Very light gray background for secondary elements */
+  --primary-bg-color: var(--background-light);
+  --primary-text-color: #18181b;
+  --primary-text-dim-color: #71717a;
+  --primary-border-color: #e4e4e7;
+  --primary-cardsbg-color: var(--surface-light);
+  --primary-logobg-color: var(--primary);
+
+  --secondary-bg-color: #f4f4f5;
   --secondary-text-color: #000;
-  /* Black text for contrast */
-  --secondary-text-dim-color: rgb(156 163 175);
-  /* Dimmed text color */
-  --secondary-border-color: #e0e0e0;
-  /* Lighter border for white theme */
-  --secondary-cardsbg-color: #e1e0e0;
-  /* Light gray for cards */
-  --secondary-logobg-color: #fa7516;
-  /* Orange essence for logo background */
-
+  --secondary-text-dim-color: #a1a1aa;
+  --secondary-border-color: #e4e4e7;
+  --secondary-cardsbg-color: #ffffff;
+  --secondary-logobg-color: var(--primary);
 }
 
 
@@ -614,184 +634,30 @@ a {
 
 }
 
-/* From Uiverse.io by Pradeepsaranbishnoi */
-/* Phone */
-.phone {
-  position: relative;
-  z-index: 2;
-  background-color: inherit;
-  border-radius: 40px;
-  display: -webkit-box;
-  display: -ms-flexbox;
-  display: flex;
-  -webkit-box-orient: vertical;
-  -webkit-box-direction: normal;
-  -ms-flex-direction: column;
-  flex-direction: column;
+/* STITCH THEME STYLES */
+
+.stitch-scrollbar ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-
-
-
-
-/* Middle */
-.content {
-  display: -webkit-box;
-  display: -ms-flexbox;
-  display: flex;
-  -webkit-box-orient: vertical;
-  -webkit-box-direction: normal;
-  -ms-flex-direction: column;
-  flex-direction: column;
-  text-align: center;
-  margin: 0 2rem;
-  -webkit-transform: translateY(5%);
-  -ms-transform: translateY(5%);
-  transform: translateY(5%);
+.stitch-scrollbar ::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.circle {
-  position: relative;
-  border-radius: 100%;
-  width: 8rem;
-  height: 8rem;
-  background: linear-gradient(40deg, #FF0080, #FF8C00 70%);
-  margin: auto;
+.stitch-scrollbar ::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 3px;
 }
 
-.app {
-  height: 5rem;
+.dark .stitch-scrollbar ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
 }
 
-
-label,
-.toggle {
-  height: 2.8rem;
-  border-radius: 100px;
+.chart-gradient {
+  background: linear-gradient(180deg, rgba(0, 128, 128, 0.15) 0%, rgba(0, 128, 128, 0) 100%);
 }
 
-label {
-  width: 100%;
-  border-radius: 100px;
-  position: relative;
-  margin: 1rem 0 0 0;
-  cursor: pointer;
-}
-
-.toggle {
-  position: absolute;
-  width: 50%;
-  background-color: #fff;
-  -webkit-box-shadow: 0 2px 15px rgba(0, 0, 0, .15);
-  box-shadow: 0 2px 15px rgba(0, 0, 0, .15);
-  -webkit-transition: -webkit-transform .3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  transition: -webkit-transform .3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  transition: transform .3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  transition: transform .3s cubic-bezier(0.25, 0.46, 0.45, 0.94), -webkit-transform .3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
-.names {
-  font-size: 90%;
-  font-weight: bolder;
-  color: black;
-  width: 67%;
-  margin-left: 15.5%;
-  margin-top: 6.5%;
-  position: absolute;
-  display: -webkit-box;
-  display: -ms-flexbox;
-  display: flex;
-  -webkit-box-pack: justify;
-  -ms-flex-pack: justify;
-  justify-content: space-between;
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
-}
-
-.dark {
-  opacity: .5;
-}
-
-/* -------- Switch Styles ------------*/
-[type="checkbox"] {
-  display: none;
-}
-
-/* Toggle */
-[type="checkbox"]:checked+.app .toggle {
-  -webkit-transform: translateX(100%);
-  -ms-transform: translateX(100%);
-  transform: translateX(100%);
-  background-color: #34323D;
-}
-
-[type="checkbox"]:checked+.app .dark {
-  opacity: 1;
-  color: white;
-}
-
-[type="checkbox"]:checked+.app label {
-  background: #171717;
-}
-
-[type="checkbox"]:checked+.app .light {
-  opacity: 1;
-  color: white;
-}
-
-/* App */
-[type="checkbox"]:checked+.app .body {
-
-  color: white;
-}
-
-/* Circle */
-[type="checkbox"]:checked+.app .crescent {
-  -webkit-transform: scale(1);
-  -ms-transform: scale(1);
-  transform: scale(1);
-  background: #26242E;
-}
-
-[type="checkbox"]:checked+.app .circle {
-  background: linear-gradient(40deg, #8983F7, #A3DAFB 70%);
-}
-
-[type="checkbox"]:checked+.app .main-circle {
-  background: linear-gradient(40deg, #8983F7, #A3DAFB 70%);
-}
-
-[type="checkbox"]:checked+.time {
-  color: white;
-}
-
-[type="checkbox"]:checked+.app .body .phone .menu .time {
-  color: white;
-}
-
-[type="checkbox"]:checked+.app .body .phone .menu .icons .network {
-  border-color: transparent transparent white transparent;
-}
-
-[type="checkbox"]:checked+.app .body {
-  border-radius: 40px;
-
-}
-
-.menu {
-  /*   background-color: blue; */
-  font-size: 80%;
-  opacity: .4;
-  padding: .8rem 1.8rem;
-  display: -webkit-box;
-  display: -ms-flexbox;
-  display: flex;
-  -webkit-box-pack: justify;
-  -ms-flex-pack: justify;
-  justify-content: space-between;
-  -webkit-box-align: center;
-  -ms-flex-align: center;
-  align-items: center;
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }

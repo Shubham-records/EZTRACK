@@ -1,12 +1,10 @@
-import { useState, useEffect, useMemo, useContext } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { format, parseISO, parse } from "date-fns"
 import NOIMG from "@/assets/noPhoto.jpg"
 import { ChevronDown, ChevronUp } from "lucide-react"
 // import MK from "@/assets/mk.json"
-import { ThemeContext } from './webappmain'
 
 export default function InvoiceManagerComponent() {
-  const { theme } = useContext(ThemeContext);
   // const initialInvoices = useMemo(()=>(MK),[])
 
   const invoiceTypes = ["All Bills Types", "admission", "renewal", "protein", "readmission", "perdaybasis"]
@@ -97,12 +95,12 @@ export default function InvoiceManagerComponent() {
   }
 
   return (
-    <div className={`min-h-screen p-6 ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`} style={{ padding: "5vh 15vw" }}>
+    <div className="min-h-screen p-6 secondary-bg secondary-text" style={{ padding: "5vh 15vw" }}>
       <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
         <h1 className="text-2xl font-bold">Invoices</h1>
         <div className="flex gap-4">
           <select
-            className={`w-[180px] ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} capitalize p-2 rounded`}
+            className="w-[180px] secondary-card-bg capitalize p-2 rounded"
             onChange={(e) => setSelectedType(e.target.value)}
             value={selectedType}
           >
@@ -114,7 +112,7 @@ export default function InvoiceManagerComponent() {
           </select>
 
           <select
-            className={`w-[180px] ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} capitalize p-2 rounded`}
+            className="w-[180px] secondary-card-bg capitalize p-2 rounded"
             onChange={(e) => setSelectedStatus(e.target.value)}
             value={selectedStatus}
           >
@@ -166,7 +164,7 @@ export default function InvoiceManagerComponent() {
       </div>
       <div className="space-y-6">
         {groupedInvoices.map(({ date, invoices: dayInvoices }) => (
-          <div key={date} className={`rounded-lg p-4 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}>
+          <div key={date} className="rounded-lg p-4 secondary-card-bg">
             <h2 className="text-xl font-semibold mb-4">
               {format(parseISO(date), "d MMMM yyyy (EEEE)")}
             </h2>
@@ -174,7 +172,7 @@ export default function InvoiceManagerComponent() {
               {dayInvoices.map((invoice) => (
                 <div
                   key={invoice.id}
-                  className={`border ${theme === 'dark' ? 'primary-border' : 'secondary-border'} rounded-lg overflow-hidden hover:bg-gray-900 transition-colors duration-200`}>
+                  className="border secondary-border rounded-lg overflow-hidden hover:bg-gray-200 transition-colors duration-200">
                   <div
                     className="flex items-center p-4 cursor-pointer"
                     onClick={() => toggleInvoice(invoice.id)}>
@@ -184,24 +182,24 @@ export default function InvoiceManagerComponent() {
                       className="w-20 h-20 object-cover rounded-md mr-4" />
                     <div className="flex-grow">
                       <h3 className="font-semibold">{invoice.name}</h3>
-                      <p className="text-sm text-gray-400">
+                      <p className="text-sm text-gray-500">
                         {invoice.type.charAt(0).toUpperCase() + invoice.type.slice(1)}
                       </p>
-                      <p className="text-sm text-gray-400">
+                      <p className="text-sm text-gray-500">
                         Bill Number: {invoice.number}
                       </p>
                       <p
-                        className={`text-sm capitalize ${invoice.status === 'paid' ? 'text-green-400' :
-                          invoice.status === 'pending' ? 'text-yellow-400' :
-                            invoice.status === 'returned' ? 'text-red-400' :
-                              'text-orange-400'
+                        className={`text-sm capitalize ${invoice.status === 'paid' ? 'text-green-600' :
+                          invoice.status === 'pending' ? 'text-yellow-600' :
+                            invoice.status === 'returned' ? 'text-red-600' :
+                              'text-orange-600'
                           }`}>
                         Status: {invoice.status}
                       </p>
                     </div>
                     <div className="text-right">
                       <p className="font-semibold">${invoice.amount}</p>
-                      <p className="text-sm text-gray-400">{invoice.billDate}</p>
+                      <p className="text-sm text-gray-500">{invoice.billDate}</p>
                     </div>
                     {expandedInvoices.includes(invoice.id) ? (
                       <ChevronUp className="ml-2" />
@@ -210,7 +208,7 @@ export default function InvoiceManagerComponent() {
                     )}
                   </div>
                   {expandedInvoices.includes(invoice.id) && (
-                    <div className={`p-4 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} border-t ${theme === 'dark' ? 'primary-border' : 'secondary-border'}`}>
+                    <div className="p-4 secondary-card-bg border-t secondary-border">
                       <p>Client Card No: {invoice.clientCardNo}</p>
                       {invoice.nextDueDate && (
                         <p>Next Due Date: {invoice.nextDueDate}</p>

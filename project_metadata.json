@@ -1,0 +1,265 @@
+{
+    "project_name": "EZTRACK",
+    "description": "Optimized Gym Management System - Codebase Metadata for AI Agents",
+    "version": "1.6.0",
+    "last_updated": "2026-01-31T22:25:00Z",
+    "file_management_rules": {
+        "reusability": "Check 'frontend.shared_components' and 'backend.database_schema' before creating new logic.",
+        "consistency": "Backend field names (case-sensitive) must be mirrored exactly in Frontend logic.",
+        "api_standard": "All API calls require 'Authorization: Bearer <token>' and 'X-Database-Name: <gymId>' headers."
+    },
+    "backend": {
+        "framework": "FastAPI",
+        "database": "PostgreSQL (SQLAlchemy)",
+        "models_file": "backend/models/all_models.py",
+        "core_logic": {
+            "database": {
+                "file": "backend/core/database.py",
+                "functions": {
+                    "get_db": "Dependency that provides a database session and ensures it's closed after use."
+                }
+            },
+            "security": {
+                "file": "backend/core/security.py",
+                "functions": {
+                    "verify_password": "Verifies a plain password against its bcrypt hash.",
+                    "get_password_hash": "Generates a bcrypt hash for a given password.",
+                    "create_access_token": "Generates a JWT access token containing gym ID and username."
+                }
+            },
+            "dependencies": {
+                "file": "backend/core/dependencies.py",
+                "functions": {
+                    "get_current_gym": "Main security dependency. Validates JWT, extracts gymId, and returns the Gym object."
+                }
+            }
+        },
+        "api_routers": {
+            "auth": {
+                "file": "backend/routers/auth.py",
+                "prefix": "/api/auth",
+                "functions": {
+                    "login": "Authenticates credentials and returns JWT access tokens."
+                }
+            },
+            "members": {
+                "file": "backend/routers/members.py",
+                "prefix": "/api/members",
+                "functions": {
+                    "get_members": "Fetches all members for the logged-in gym.",
+                    "create_member": "Adds a new member and automatically triggers the first admission invoice.",
+                    "update_member_body": "Processes partial updates for members using ID from the request body.",
+                    "map_member_response": "Internal helper to map SQLAlchemy objects to dictionary with legacy '_id' support."
+                }
+            },
+            "staff": {
+                "file": "backend/routers/staff.py",
+                "prefix": "/api/staff",
+                "functions": {
+                    "get_staff": "Retrieves the list of staff/users registered for this gym.",
+                    "create_staff": "Registers a new staff member with specific roles and permissions."
+                }
+            },
+            "invoices": {
+                "file": "backend/routers/invoices.py",
+                "prefix": "/api/invoices",
+                "functions": {
+                    "get_invoices": "Returns a descending list of all invoices (admission, renewal, etc.).",
+                    "create_invoice": "Handles manual invoice generation for proteins or other auxiliary services."
+                }
+            },
+            "dashboard": {
+                "file": "backend/routers/dashboard.py",
+                "prefix": "/api/dashboard",
+                "functions": {
+                    "get_dashboard_stats": "Aggregates core metrics: active members, today's collection, and upcoming expiries."
+                }
+            },
+            "proteins": {
+                "file": "backend/routers/proteins.py",
+                "prefix": "/api/proteins",
+                "functions": {
+                    "get_proteins": "Returns current stock details for supplement products.",
+                    "map_protein_response": "Internal helper to ensure JSON compatibility for protein entries."
+                }
+            }
+        },
+        "database_schema": {
+            "Gym": {
+                "tablename": "Gym",
+                "fields": {
+                    "id": "String (UUID PK)",
+                    "gymname": "String (Required)",
+                    "email": "String (Unique, Required)",
+                    "username": "String (Unique, Required)",
+                    "password": "String (Hashed, Required)",
+                    "createdAt": "DateTime (Auto)",
+                    "updatedAt": "DateTime (Auto-update)"
+                }
+            },
+            "User": {
+                "tablename": "User",
+                "fields": {
+                    "id": "String (UUID PK)",
+                    "gymId": "String (FK -> Gym.id, Required)",
+                    "username": "String (Required)",
+                    "password": "String (Required)",
+                    "role": "String (Default: STAFF)",
+                    "permissions": "ARRAY of Strings",
+                    "createdAt": "DateTime",
+                    "updatedAt": "DateTime"
+                }
+            },
+            "Invoice": {
+                "tablename": "Invoice",
+                "fields": {
+                    "id": "String (UUID PK)",
+                    "gymId": "String (FK -> Gym.id, Required)",
+                    "memberId": "String (FK -> Member.id, Nullable)",
+                    "customerName": "String (Nullable)",
+                    "invoiceDate": "DateTime (Default: now)",
+                    "dueDate": "DateTime (Nullable)",
+                    "items": "JSON (List of {description, quantity, rate, amount})",
+                    "subTotal": "Float (Required)",
+                    "tax": "Float (Default: 0)",
+                    "discount": "Float (Default: 0)",
+                    "total": "Float (Required)",
+                    "status": "String (Default: PENDING)",
+                    "paymentMode": "String (Nullable)",
+                    "lastEditedBy": "String (Nullable)",
+                    "editReason": "String (Nullable)",
+                    "createdAt": "DateTime",
+                    "updatedAt": "DateTime"
+                }
+            },
+            "Member": {
+                "tablename": "Member",
+                "fields": {
+                    "id": "String (UUID PK)",
+                    "gymId": "String (FK -> Gym.id, Required)",
+                    "Name": "String (Required)",
+                    "MembershipReceiptnumber": "Integer (Nullable)",
+                    "Gender": "String (Nullable)",
+                    "Age": "Integer (Nullable)",
+                    "AccessStatus": "String (Default: no)",
+                    "height": "Float (Nullable)",
+                    "weight": "Integer (Nullable)",
+                    "DateOfJoining": "String (ISO Date, Nullable)",
+                    "DateOfReJoin": "String (ISO Date, Nullable)",
+                    "Billtype": "String (Nullable)",
+                    "Address": "String (Nullable)",
+                    "Whatsapp": "BigInteger (Nullable)",
+                    "PlanPeriod": "String (Nullable)",
+                    "PlanType": "String (Nullable)",
+                    "MembershipStatus": "String (Default: Inactive)",
+                    "MembershipExpiryDate": "String (Nullable)",
+                    "LastPaymentDate": "String (Nullable)",
+                    "NextDuedate": "String (Nullable)",
+                    "LastPaymentAmount": "Integer (Nullable)",
+                    "RenewalReceiptNumber": "Integer (Nullable)",
+                    "Aadhaar": "BigInteger (Nullable)",
+                    "Remark": "String (Nullable)",
+                    "Mobile": "BigInteger (Nullable)",
+                    "extraDays": "String (Nullable)",
+                    "agreeTerms": "Boolean (Default: False)",
+                    "lastEditedBy": "String (Nullable)",
+                    "editReason": "String (Nullable)",
+                    "createdAt": "DateTime",
+                    "updatedAt": "DateTime"
+                }
+            },
+            "ProteinStock": {
+                "tablename": "ProteinStock",
+                "fields": {
+                    "id": "String (UUID PK)",
+                    "gymId": "String (FK -> Gym.id, Required)",
+                    "Year": "String (Nullable)",
+                    "Month": "String (Nullable)",
+                    "Brand": "String (Nullable)",
+                    "ProductName": "String (Nullable)",
+                    "Flavour": "String (Nullable)",
+                    "Weight": "String (Nullable)",
+                    "Quantity": "String (Nullable)",
+                    "MRPPrice": "String (Nullable)",
+                    "LandingPrice": "String (Nullable)",
+                    "TotalPrice": "String (Nullable)",
+                    "Remark": "String (Nullable)",
+                    "createdAt": "DateTime",
+                    "updatedAt": "DateTime"
+                }
+            }
+        }
+    },
+    "frontend": {
+        "framework": "Next.js (App Router)",
+        "webapp_views": {
+            "MainShell": {
+                "file": "frontend/src/webapp/webappmain.jsx",
+                "functions": {
+                    "fetchData": "Dual useEffect hooks for recurring (5s) member/protein sync.",
+                    "handlenavbarClick": "Dynamic page switching logic."
+                }
+            },
+            "Header": {
+                "file": "frontend/src/webapp/WebappSidebar.jsx",
+                "functions": {
+                    "fetchUser": "Retrieves logged-in gym details.",
+                    "handleLogout": "Clears localStorage and redirects.",
+                    "handleThemeToggle": "Toggle light/dark mode."
+                }
+            },
+            "TableComponent": {
+                "file": "frontend/src/webapp/table.jsx",
+                "features": [
+                    "Fuzzy Search",
+                    "Inline Edit",
+                    "Excel Export",
+                    "Delete Row"
+                ],
+                "reusable_functions": [
+                    "handleEdit - Activates editing mode.",
+                    "handleSave - Commits PATCH to backend.",
+                    "handleDelete - Commits DELETE to backend.",
+                    "fuzzyFilter - Global TanStack search."
+                ]
+            },
+            "FormManager": {
+                "file": "frontend/src/webapp/forms.jsx",
+                "sub_forms": {
+                    "NewAdmission": "Field-heavy form for new members.",
+                    "Renewal": "Logic for extending active memberships.",
+                    "ReAdmission": "Resets and restarts inactive members.",
+                    "PerDayBasis": "Guest/Walk-in management."
+                },
+                "logic": {
+                    "updateExpiryDate": "Standard calculation for NextDuedate based on PlanPeriod."
+                }
+            },
+            "InvoiceManager": {
+                "file": "frontend/src/webapp/invoice-manager.jsx",
+                "functions": {
+                    "fetchInvoices": "Retrieves gym billing history.",
+                    "groupInvoicesByDate": "Chronological sorting helper."
+                }
+            },
+            "BulkImport": {
+                "file": "frontend/src/webapp/components/ImportMembersModal.jsx",
+                "functions": {
+                    "processFile": "Excel to JSON parsing.",
+                    "bulkCreate": "Batch POST to /api/members."
+                }
+            },
+            "Dashboard": {
+                "file": "frontend/src/webapp/dashboard.jsx",
+                "functions": {
+                    "fetchStats": "Aggregates counts for active/expiry/collection stats."
+                }
+            }
+        },
+        "utility": {
+            "Toast": "Global notice via ToastContext",
+            "Theme": "Dark/Light mode via ThemeContext",
+            "cn": "Tailwind merger (lib/utils.js)"
+        }
+    }
+}

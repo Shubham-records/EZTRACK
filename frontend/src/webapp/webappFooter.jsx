@@ -1,11 +1,9 @@
-import React, { useContext } from 'react';
-import { ThemeContext } from './webappmain';
+import React from 'react';
 
 export default function WebappFooter() {
-  const { theme } = useContext(ThemeContext);
-  
+
   return (
-    <footer className={`footer ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`}>
+    <footer className="footer secondary-bg secondary-text">
       copyright @ shubham
     </footer>
   );

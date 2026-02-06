@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   BarChart,
   Bar,
@@ -14,7 +14,7 @@ import {
   AreaChart,
   Area,
 } from 'recharts';
-import { ThemeContext } from './webappmain';
+
 
 // Mock data for charts
 const memberGrowthData = [
@@ -133,7 +133,7 @@ const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8']
 
 
 export default function ComprehensiveInsightsComponent() {
-  const { theme } = useContext(ThemeContext);
+
   const [data, setData] = useState({
     memberGrowthData: [],
     memberTypeData: [], // Default to empty array, will use fallback or fetch
@@ -200,24 +200,24 @@ export default function ComprehensiveInsightsComponent() {
   }; // Wait, this logic is flawed. If data is empty, it returns object with empty arrays.
 
   return (
-    <div className={`min-h-screen p-8 ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`}>
+    <div className="min-h-screen p-8 secondary-bg secondary-text">
       <h1 className="text-4xl font-bold mb-8 text-center">Gym Insights</h1>
       {/* Membership Insights */}
       <section className="mb-16">
         <h2 className="text-3xl font-semibold mb-6">Membership Insights</h2>
 
-        <div className={`rounded-lg p-6 mb-8 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}>
+        <div className="rounded-lg p-6 mb-8 secondary-card-bg">
           <h3 className="text-2xl font-semibold mb-4">Member Growth</h3>
           <div className="h-[400px]">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={memberGrowthData}>
-                <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#444' : '#ccc'} />
-                <XAxis dataKey="month" stroke={theme === 'dark' ? '#fff' : '#000'} />
-                <YAxis stroke={theme === 'dark' ? '#fff' : '#000'} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#ccc" />
+                <XAxis dataKey="month" stroke="#000" />
+                <YAxis stroke="#000" />
                 <Tooltip contentStyle={{
-                  backgroundColor: theme === 'dark' ? '#333' : '#fff',
+                  backgroundColor: '#fff',
                   border: 'none',
-                  color: theme === 'dark' ? '#fff' : '#000'
+                  color: '#000'
                 }} />
                 <Area
                   type="monotone"
@@ -469,13 +469,13 @@ export default function ComprehensiveInsightsComponent() {
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={weeklyAttendanceData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#444' : '#ccc'} />
-                  <XAxis dataKey="week" stroke={theme === 'dark' ? '#fff' : '#000'} />
-                  <YAxis stroke={theme === 'dark' ? '#fff' : '#000'} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#ccc" />
+                  <XAxis dataKey="week" stroke="#000" />
+                  <YAxis stroke="#000" />
                   <Tooltip contentStyle={{
-                    backgroundColor: theme === 'dark' ? '#333' : '#fff',
+                    backgroundColor: '#fff',
                     border: 'none',
-                    color: theme === 'dark' ? '#fff' : '#000'
+                    color: '#000'
                   }} />
                   <Bar dataKey="activeMembers" fill="#8884d8" name="Active Members" />
                   <Bar dataKey="totalAttendance" fill="#82ca9d" name="Total Attendance" />

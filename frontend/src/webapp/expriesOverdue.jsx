@@ -1,39 +1,35 @@
-import React, { useState, useContext } from 'react'
-import { ThemeContext } from './webappmain'
+import React, { useState } from 'react'
 
 export default function ExpriesOverdue() {
-    const { theme } = useContext(ThemeContext);
     const [display, setdisplay] = useState("EX");
 
     return (
-        <div className={`expriesOverdue ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`} id='boxDiv'>
-            <span style={{
-                display: "flex",
-                borderBottom: `1px solid ${theme === 'dark' ? 'var(--primary-border-color)' : 'var(--secondary-border-color)'}`
-            }}>
-                <h2
+        <div className="w-full">
+            <div className="flex border-b border-zinc-200 dark:border-zinc-800 mb-4">
+                <button
                     onClick={() => setdisplay("EX")}
-                    className={`flex-1 text-base p-4 rounded-tl cursor-pointer ${display === "EX"
-                            ? theme === 'dark' ? 'primary-text' : 'secondary-text'
-                            : theme === 'dark' ? 'primary-bg' : 'secondary-bg'
+                    className={`flex-1 py-3 text-sm font-semibold transition-colors ${display === "EX"
+                        ? 'text-primary border-b-2 border-primary'
+                        : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
                         }`}
                 >
-                    Membership expiries
-                </h2>
-                <h2
+                    Membership Expiries
+                </button>
+                <button
                     onClick={() => setdisplay("OV")}
-                    className={`flex-1 text-base p-4 rounded-tr cursor-pointer ${display === "OV"
-                            ? theme === 'dark' ? 'primary-text' : 'secondary-text'
-                            : theme === 'dark' ? 'primary-bg' : 'secondary-bg'
+                    className={`flex-1 py-3 text-sm font-semibold transition-colors ${display === "OV"
+                        ? 'text-primary border-b-2 border-primary'
+                        : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
                         }`}
                 >
-                    Membership overdues
-                </h2>
-            </span>
-            <span style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "15rem" }}>
-                {display === "EX" ? <p>No Expiries This Month</p> : <p>NO Overdues</p>}
-            </span>
-
+                    Membership Overdues
+                </button>
+            </div>
+            <div className="flex items-center justify-center h-60 bg-zinc-50 dark:bg-zinc-900/50 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800">
+                <p className="text-zinc-500 dark:text-zinc-400 text-sm font-medium">
+                    {display === "EX" ? 'No Expiries This Month' : 'No Overdues'}
+                </p>
+            </div>
         </div>
     )
 }

@@ -1,15 +1,17 @@
 "use client";
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect } from 'react';
 import { addMonths, addYears, addDays, subDays, format, parse } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import { useToast } from "@/context/ToastContext";
-import { ThemeContext } from './webappmain';
+
+// Clean unified input style for all form components
+const inputStyle = "w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all placeholder-zinc-400";
+const labelStyle = "block text-xs font-bold text-zinc-500 uppercase tracking-wider mb-1";
+const selectStyle = "w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all appearance-none";
 
 export function NewAdmission() {
   const router = useRouter();
-  const { theme } = useContext(ThemeContext);
   const { showToast } = useToast();
-
   const [clientNumber, setClientNumber] = useState(null);
   const [formData, setFormData] = useState({
     Name: '',
@@ -44,41 +46,25 @@ export function NewAdmission() {
       try {
         const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
         const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-          throw new Error('No token or database name found.');
-        }
+        if (!jwtToken || !eztracker_jwt_databaseName_control_token) throw new Error('No token found.');
 
         const response = await fetch('/api/members/generate-client-number', {
-          headers: {
-            Authorization: `Bearer ${jwtToken}`,
-            'X-Database-Name': eztracker_jwt_databaseName_control_token
-          }
+          headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': eztracker_jwt_databaseName_control_token }
         });
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const data = await response.json();
         setClientNumber(data.clientNumber);
-        setFormData(
-          prev => ({ ...prev, MembershipReceiptnumber: data.clientNumber })
-        );
+        setFormData(prev => ({ ...prev, MembershipReceiptnumber: data.clientNumber }));
       } catch (error) {
-        showToast(
-          `Error fetching client number: ${error instanceof Error ? error.message : String(error)}`,
-          'error'
-        );
+        showToast(error.message, 'error');
       }
     };
-
     fetchClientNumber();
   }, []);
 
   useEffect(() => {
-    if (formData.PlanPeriod && formData.DateOfJoining) {
-      updateExpiryDate();
-    }
+    if (formData.PlanPeriod && formData.DateOfJoining) updateExpiryDate();
   }, [formData.PlanPeriod, formData.DateOfJoining, formData.extraDays]);
 
   const handleInputChange = (e) => {
@@ -87,16 +73,10 @@ export function NewAdmission() {
     const intFields = ['MembershipReceiptnumber', 'Age', 'weight', 'Mobile', 'Whatsapp', 'Aadhaar', 'LastPaymentAmount', 'RenewalReceiptNumber', 'extraDays'];
     const floatFields = ['height'];
 
-    if (intFields.includes(name)) {
-      newValue = value === '' ? null : parseInt(value, 10);
-    } else if (floatFields.includes(name)) {
-      newValue = value === '' ? null : parseFloat(value);
-    }
+    if (intFields.includes(name)) newValue = value === '' ? null : parseInt(value, 10);
+    else if (floatFields.includes(name)) newValue = value === '' ? null : parseFloat(value);
 
-    setFormData(prev => ({
-      ...prev,
-      [name]: newValue
-    }));
+    setFormData(prev => ({ ...prev, [name]: newValue }));
   };
 
   const updateExpiryDate = () => {
@@ -104,23 +84,13 @@ export function NewAdmission() {
     let expiryDate = joinDate;
 
     switch (formData.PlanPeriod) {
-      case 'Monthly':
-        expiryDate = subDays(addMonths(joinDate, 1), 1);
-        break;
-      case 'Quaterly':
-        expiryDate = subDays(addMonths(joinDate, 3), 1);
-        break;
-      case 'HalfYearly':
-        expiryDate = subDays(addMonths(joinDate, 6), 1);
-        break;
-      case 'Yearly':
-        expiryDate = subDays(addYears(joinDate, 1), 1);
-        break;
+      case 'Monthly': expiryDate = subDays(addMonths(joinDate, 1), 1); break;
+      case 'Quaterly': expiryDate = subDays(addMonths(joinDate, 3), 1); break;
+      case 'HalfYearly': expiryDate = subDays(addMonths(joinDate, 6), 1); break;
+      case 'Yearly': expiryDate = subDays(addYears(joinDate, 1), 1); break;
     }
 
-    if (formData.extraDays) {
-      expiryDate = addDays(expiryDate, parseInt(formData.extraDays));
-    }
+    if (formData.extraDays) expiryDate = addDays(expiryDate, parseInt(formData.extraDays));
 
     setFormData(prev => ({
       ...prev,
@@ -133,202 +103,143 @@ export function NewAdmission() {
     e.preventDefault();
     try {
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-        throw new Error('No token or database name found.');
-      }
+      const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !dbName) throw new Error('No token found.');
 
-      // Ensure all required fields are present
       const requiredFields = ['Name', 'MembershipReceiptnumber', 'Gender', 'Age', 'DateOfJoining', 'PlanPeriod', 'PlanType'];
       for (let field of requiredFields) {
-        if (!formData[field]) {
-          throw new Error(`${field} is required.`);
-        }
+        if (!formData[field]) throw new Error(`${field} is required.`);
       }
-
-      console.log('Sending data:', JSON.stringify(formData, null, 2));
 
       const response = await fetch('/api/members', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName },
         body: JSON.stringify(formData)
       });
 
       const responseData = await response.json();
+      if (!response.ok) throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
 
-      if (!response.ok) {
-        throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      console.log('Response:', responseData);
       showToast('Admission submitted successfully!', 'success');
       router.push("/webapp");
     } catch (error) {
-      console.error('Error details:', error);
-      showToast(`Error submitting form: ${error.message}`, 'error');
+      showToast(error.message, 'error');
     }
   };
 
   return (
-    (<form
-      onSubmit={handleSubmit}
-      className={theme === 'dark' ? 'primary-text' : 'secondary-text'}>
-      <span
-        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>New Admission Billing</h1>
-        <h2 style={{ color: "white" }}>Client No: {clientNumber}</h2>
-      </span>
-      <div id="gridlayout">
-        <span id="gridlayout">
-          <input
-            type="text"
-            name="Name"
-            value={formData.Name}
-            onChange={handleInputChange}
-            placeholder="Full name"
-            required />
-          <select
-            name="Gender"
-            value={formData.Gender}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            onChange={handleInputChange}
-            required>
-            <option value="" disabled hidden>Select Gender</option>
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-            <option value="O">Other</option>
-          </select>
-        </span>
-        <span
-          style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="number"
-            name="Age"
-            value={formData.Age || ''}
-            onChange={handleInputChange}
-            placeholder="Age"
-            required />
-          <input
-            type="number"
-            name="height"
-            value={formData.height || ''}
-            onChange={handleInputChange}
-            placeholder="Height (ft)"
-            required />
-          <input
-            type="number"
-            name="weight"
-            value={formData.weight || ''}
-            onChange={handleInputChange}
-            placeholder="Weight (kg)"
-            required />
-        </span>
-        <span id="gridlayout">
-          <textarea
-            name="Address"
-            value={formData.Address}
-            style={{ color: "white" }}
-            onChange={handleInputChange}
-            placeholder="Enter your address"
-            required></textarea>
-          <input
-            type="number"
-            name="Aadhaar"
-            value={formData.Aadhaar || ''}
-            onChange={handleInputChange}
-            placeholder="Aadhaar NO." />
-        </span>
-        <span
-          style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="number"
-            name="Mobile"
-            value={formData.Mobile || ''}
-            onChange={handleInputChange}
-            placeholder="Phone NO."
-            required />
-          <input
-            type="number"
-            name="Whatsapp"
-            value={formData.Whatsapp || ''}
-            onChange={handleInputChange}
-            placeholder="WhatsApp NO."
-            required />
-          <input
-            type="text"
-            name="Remark"
-            value={formData.Remark}
-            onChange={handleInputChange}
-            placeholder="Remark" />
-        </span>
-        <span id="gridlayout">
-          <select
-            name="PlanType"
-            value={formData.PlanType}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            onChange={handleInputChange}
-            required>
-            <option value="" disabled hidden>Select Gym Plan</option>
-            <option value="Strength">Strength</option>
-            <option value="CardioCrossfit">Cardio Crossfit</option>
-            <option value="Combo">Combo</option>
-            <option value="Zumba">Zumba</option>
-            <option value="Yoga">Yoga</option>
-          </select>
-          <select
-            name="PlanPeriod"
-            value={formData.PlanPeriod}
-            onChange={handleInputChange}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            required>
-            <option value="" disabled hidden>Time period</option>
-            <option value="Monthly">Monthly</option>
-            <option value="Quaterly">Quaterly</option>
-            <option value="HalfYearly">Half Yearly</option>
-            <option value="Yearly">Yearly</option>
-          </select>
-        </span>
-        <span
-          style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="date"
-            name="DateOfJoining"
-            value={formData.DateOfJoining}
-            onChange={handleInputChange}
-            required />
-          <input
-            type="date"
-            name="MembershipExpiryDate"
-            value={formData.MembershipExpiryDate}
-            readOnly />
-          <input
-            type="number"
-            name="extraDays"
-            value={formData.extraDays}
-            onChange={handleInputChange}
-            placeholder="Extra Days" />
-        </span>
-        <div style={{ display: "inline-flex" }}>
-          <input
-            type="checkbox"
-            id="agreeTerms"
-            name="agreeTerms"
-            checked={formData.agreeTerms}
-            onChange={handleInputChange}
-            style={{ width: "auto" }}
-            required />
-          <label htmlFor="agreeTerms">I agree to the terms and conditions.</label>
+    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-4xl mx-auto">
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
+          <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">New Admission</h1>
+          <div className="bg-zinc-100 dark:bg-zinc-800 px-4 py-2 rounded-lg">
+            <span className="text-xs font-bold text-zinc-500 uppercase mr-2">Client No</span>
+            <span className="text-xl font-bold text-primary">{clientNumber}</span>
+          </div>
         </div>
-      </div>
-      <button type="submit">Submit</button>
-    </form>)
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="col-span-1 md:col-span-2">
+            <label className={labelStyle}>Full Name</label>
+            <input type="text" name="Name" value={formData.Name} onChange={handleInputChange} placeholder="John Doe" className={inputStyle} required />
+          </div>
+
+          <div>
+            <label className={labelStyle}>Gender</label>
+            <select name="Gender" value={formData.Gender} onChange={handleInputChange} className={selectStyle} required>
+              <option value="" disabled hidden>Select Gender</option>
+              <option value="M">Male</option>
+              <option value="F">Female</option>
+              <option value="O">Other</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className={labelStyle}>Age</label>
+              <input type="number" name="Age" value={formData.Age || ''} onChange={handleInputChange} className={inputStyle} required />
+            </div>
+            <div>
+              <label className={labelStyle}>Height (ft)</label>
+              <input type="number" name="height" value={formData.height || ''} onChange={handleInputChange} className={inputStyle} required />
+            </div>
+            <div>
+              <label className={labelStyle}>Weight (kg)</label>
+              <input type="number" name="weight" value={formData.weight || ''} onChange={handleInputChange} className={inputStyle} required />
+            </div>
+          </div>
+
+          <div className="col-span-1 md:col-span-2">
+            <label className={labelStyle}>Address</label>
+            <textarea name="Address" value={formData.Address} onChange={handleInputChange} placeholder="Enter address..." className={inputStyle} rows="2" required></textarea>
+          </div>
+
+          <div>
+            <label className={labelStyle}>Aadhaar Number</label>
+            <input type="number" name="Aadhaar" value={formData.Aadhaar || ''} onChange={handleInputChange} className={inputStyle} />
+          </div>
+          <div>
+            <label className={labelStyle}>Mobile No</label>
+            <input type="number" name="Mobile" value={formData.Mobile || ''} onChange={handleInputChange} className={inputStyle} required />
+          </div>
+          <div>
+            <label className={labelStyle}>WhatsApp No</label>
+            <input type="number" name="Whatsapp" value={formData.Whatsapp || ''} onChange={handleInputChange} className={inputStyle} required />
+          </div>
+          <div>
+            <label className={labelStyle}>Remark</label>
+            <input type="text" name="Remark" value={formData.Remark} onChange={handleInputChange} className={inputStyle} />
+          </div>
+
+          <div>
+            <label className={labelStyle}>Gym Plan</label>
+            <select name="PlanType" value={formData.PlanType} onChange={handleInputChange} className={selectStyle} required>
+              <option value="" disabled hidden>Select Plan</option>
+              <option value="Strength">Strength</option>
+              <option value="CardioCrossfit">Cardio Crossfit</option>
+              <option value="Combo">Combo</option>
+              <option value="Zumba">Zumba</option>
+              <option value="Yoga">Yoga</option>
+            </select>
+          </div>
+
+          <div>
+            <label className={labelStyle}>Duration</label>
+            <select name="PlanPeriod" value={formData.PlanPeriod} onChange={handleInputChange} className={selectStyle} required>
+              <option value="" disabled hidden>Select Duration</option>
+              <option value="Monthly">Monthly</option>
+              <option value="Quaterly">Quaterly</option>
+              <option value="HalfYearly">Half Yearly</option>
+              <option value="Yearly">Yearly</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4 col-span-1 md:col-span-2">
+            <div>
+              <label className={labelStyle}>Join Date</label>
+              <input type="date" name="DateOfJoining" value={formData.DateOfJoining} onChange={handleInputChange} className={inputStyle} required />
+            </div>
+            <div>
+              <label className={labelStyle}>Expiry Date</label>
+              <input type="date" name="MembershipExpiryDate" value={formData.MembershipExpiryDate} readOnly className={`${inputStyle} bg-zinc-50 dark:bg-zinc-900 cursor-not-allowed`} />
+            </div>
+            <div>
+              <label className={labelStyle}>Extra Days</label>
+              <input type="number" name="extraDays" value={formData.extraDays} onChange={handleInputChange} className={inputStyle} />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 pt-4">
+          <input type="checkbox" id="agreeTerms" name="agreeTerms" checked={formData.agreeTerms} onChange={handleInputChange} className="w-5 h-5 text-primary rounded focus:ring-primary" required />
+          <label htmlFor="agreeTerms" className="text-sm text-zinc-600 dark:text-zinc-400">I agree to the terms and conditions.</label>
+        </div>
+
+        <button type="submit" className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 mt-4">
+          Submit Admission
+        </button>
+      </form>
+    </div>
   );
 }
 
@@ -337,108 +248,33 @@ export function ReAdmission() {
   const { showToast } = useToast();
   const [clientNumber, setClientNumber] = useState('');
   const [formData, setFormData] = useState({
-    Name: '',
-    MembershipReceiptnumber: '',
-    Gender: '',
-    Age: '',
-    AccessStatus: 'no',
-    height: '',
-    weight: '',
-    DateOfJoining: '',
-    DateOfReJoin: format(new Date(), 'yyyy-MM-dd'),
-    Billtype: '',
-    Address: '',
-    Whatsapp: '',
-    PlanPeriod: '',
-    PlanType: '',
-    MembershipStatus: 'Active',
-    MembershipExpiryDate: '',
-    LastPaymentDate: '',
-    NextDuedate: '',
-    LastPaymentAmount: '',
-    RenewalReceiptNumber: '',
-    Aadhaar: '',
-    Remark: '',
-    Mobile: '',
-    extraDays: '0',
-    agreeTerms: false
+    Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', AccessStatus: 'no', height: '', weight: '',
+    DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
+    PlanPeriod: '', PlanType: '', MembershipStatus: 'Active', MembershipExpiryDate: '', LastPaymentDate: '',
+    NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
+    extraDays: '0', agreeTerms: false
   });
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
+    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
   const fetchClientData = async () => {
     try {
-      await new Promise(resolve => setTimeout(resolve, 1000));
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-        throw new Error('No token or database name found.');
-      }
+      const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !dbName) throw new Error('No token found.');
 
       const response = await fetch(`/api/members/client/${clientNumber}`, {
-        headers: {
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token
-        }
+        headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName }
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
-      setFormData(prev => ({
-        ...prev,
-        ...data,
-        DateOfReJoin: format(new Date(), 'yyyy-MM-dd')
-      }));
+      setFormData(prev => ({ ...prev, ...data, DateOfReJoin: format(new Date(), 'yyyy-MM-dd') }));
     } catch (error) {
-      showToast(`Error fetching client data: ${error.message}`, 'error');
-    }
-  };
-
-  useEffect(() => {
-    if (clientNumber) {
-      fetchClientData();
-    }
-  }, [clientNumber]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-        throw new Error('No token or database name found.');
-      }
-
-      const response = await fetch('/api/members/re-admission', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token
-        },
-        body: JSON.stringify(formData)
-      });
-
-      const responseData = await response.json();
-
-      if (!response.ok) {
-        throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      showToast('Re-Admission submitted successfully!', 'success');
-      router.push("/webapp");
-    } catch (error) {
-      console.error('Error details:', error);
-      showToast(`Error submitting form: ${error.message}`, 'error');
+      showToast(error.message, 'error');
     }
   };
 
@@ -447,23 +283,13 @@ export function ReAdmission() {
     let expiryDate = joinDate;
 
     switch (formData.PlanPeriod) {
-      case 'Monthly':
-        expiryDate = subDays(addMonths(joinDate, 1), 1);
-        break;
-      case 'Quaterly':
-        expiryDate = subDays(addMonths(joinDate, 3), 1);
-        break;
-      case 'HalfYearly':
-        expiryDate = subDays(addMonths(joinDate, 6), 1);
-        break;
-      case 'Yearly':
-        expiryDate = subDays(addYears(joinDate, 1), 1);
-        break;
+      case 'Monthly': expiryDate = subDays(addMonths(joinDate, 1), 1); break;
+      case 'Quaterly': expiryDate = subDays(addMonths(joinDate, 3), 1); break;
+      case 'HalfYearly': expiryDate = subDays(addMonths(joinDate, 6), 1); break;
+      case 'Yearly': expiryDate = subDays(addYears(joinDate, 1), 1); break;
     }
 
-    if (formData.extraDays) {
-      expiryDate = addDays(expiryDate, parseInt(formData.extraDays));
-    }
+    if (formData.extraDays) expiryDate = addDays(expiryDate, parseInt(formData.extraDays));
 
     setFormData(prev => ({
       ...prev,
@@ -473,178 +299,96 @@ export function ReAdmission() {
   };
 
   useEffect(() => {
-    if (formData.PlanPeriod && formData.DateOfReJoin) {
-      updateExpiryDate();
-    }
+    if (clientNumber) fetchClientData();
+  }, [clientNumber]);
+
+  useEffect(() => {
+    if (formData.PlanPeriod && formData.DateOfReJoin) updateExpiryDate();
   }, [formData.PlanPeriod, formData.DateOfReJoin, formData.extraDays]);
 
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !dbName) throw new Error('No token found.');
+
+      const response = await fetch('/api/members/re-admission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName },
+        body: JSON.stringify(formData)
+      });
+
+      const responseData = await response.json();
+      if (!response.ok) throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
+
+      showToast('Re-Admission successful!', 'success');
+      router.push("/webapp");
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
+  };
+
   return (
-    <form onSubmit={handleSubmit} className={theme === 'dark' ? 'primary-text' : 'secondary-text'}>
-      <span style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Re-Admission Billing</h1>
-        <h2 style={{ color: "white" }}>Client No: {formData.MembershipReceiptnumber}</h2>
-      </span>
-      <div id="gridlayout">
-        <span id="gridlayout">
-          <input
-            type="text"
-            name="clientNumber"
-            value={clientNumber}
-            onChange={(e) => setClientNumber(e.target.value)}
-            onBlur={fetchClientData}
-            placeholder="Enter Client NO."
-          />
-          <select
-            name="Gender"
-            value={formData.Gender}
-            onChange={handleInputChange}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            required
-          >
-            <option value="" disabled hidden>Select Gender</option>
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-            <option value="O">Other</option>
-          </select>
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="number"
-            name="Age"
-            value={formData.Age}
-            onChange={handleInputChange}
-            placeholder="Age"
-            required
-          />
-          <input
-            type="number"
-            name="height"
-            value={formData.height}
-            onChange={handleInputChange}
-            placeholder="Height (ft)"
-            required
-          />
-          <input
-            type="number"
-            name="weight"
-            value={formData.weight}
-            onChange={handleInputChange}
-            placeholder="Weight (kg)"
-            required
-          />
-        </span>
-        <span id="gridlayout">
-          <textarea
-            name="Address"
-            value={formData.Address}
-            onChange={handleInputChange}
-            placeholder="Enter your address"
-            style={{ color: "white" }}
-            required
-          ></textarea>
-          <input
-            type="number"
-            name="Aadhaar"
-            value={formData.Aadhaar}
-            onChange={handleInputChange}
-            placeholder="Aadhaar NO."
-          />
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="number"
-            name="Mobile"
-            value={formData.Mobile}
-            onChange={handleInputChange}
-            placeholder="Phone NO."
-            required
-          />
-          <input
-            type="number"
-            name="Whatsapp"
-            value={formData.Whatsapp}
-            onChange={handleInputChange}
-            placeholder="WhatsApp NO."
-            required
-          />
-          <input
-            type="text"
-            name="Remark"
-            value={formData.Remark}
-            onChange={handleInputChange}
-            placeholder="Remark"
-          />
-        </span>
-        <span id="gridlayout">
-          <select
-            name="PlanType"
-            value={formData.PlanType}
-            onChange={handleInputChange}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            required
-          >
-            <option value="" disabled hidden>Select Gym Plan</option>
-            <option value="Strength">Strength</option>
-            <option value="CardioCrossfit">Cardio Crossfit</option>
-            <option value="Combo">Combo</option>
-            <option value="Zumba">Zumba</option>
-            <option value="Yoga">Yoga</option>
-          </select>
-          <select
-            name="PlanPeriod"
-            value={formData.PlanPeriod}
-            onChange={handleInputChange}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            required
-          >
-            <option value="" disabled hidden>Time period</option>
-            <option value="Monthly">Monthly</option>
-            <option value="Quaterly">Quaterly</option>
-            <option value="HalfYearly">Half Yearly</option>
-            <option value="Yearly">Yearly</option>
-          </select>
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="date"
-            name="DateOfReJoin"
-            value={formData.DateOfReJoin}
-            onChange={handleInputChange}
-            required
-          />
-          <input
-            type="date"
-            name="MembershipExpiryDate"
-            value={formData.MembershipExpiryDate}
-            onChange={handleInputChange}
-            readOnly
-          />
-          <input
-            type="number"
-            name="extraDays"
-            value={formData.extraDays}
-            onChange={handleInputChange}
-            placeholder="Extra Days"
-          />
-        </span>
-        <div style={{ display: "inline-flex" }}>
-          <input
-            type="checkbox"
-            id="agreeTerms"
-            name="agreeTerms"
-            checked={formData.agreeTerms}
-            onChange={handleInputChange}
-            style={{ width: "auto" }}
-            required
-          />
-          <label htmlFor="agreeTerms">I agree to the terms and conditions.</label>
+    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-4xl mx-auto">
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
+          <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Re-Admission</h1>
+          <div className="bg-zinc-100 dark:bg-zinc-800 px-4 py-2 rounded-lg">
+            <span className="text-xs font-bold text-zinc-500 uppercase mr-2">Client No</span>
+            <span className="text-xl font-bold text-primary">{formData.MembershipReceiptnumber || '-'}</span>
+          </div>
         </div>
-      </div>
-      <button type="submit">Submit</button>
-    </form>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="col-span-1 md:col-span-2">
+            <label className={labelStyle}>Search Client</label>
+            <input type="text" value={clientNumber} onChange={(e) => setClientNumber(e.target.value)} onBlur={fetchClientData} placeholder="Enter Client ID to search" className={inputStyle} />
+          </div>
+
+          <div>
+            <label className={labelStyle}>Plan</label>
+            <select name="PlanType" value={formData.PlanType} onChange={handleInputChange} className={selectStyle} required>
+              <option value="" disabled hidden>Select Plan</option>
+              <option value="Strength">Strength</option>
+              <option value="CardioCrossfit">Cardio Crossfit</option>
+              <option value="Combo">Combo</option>
+              <option value="Zumba">Zumba</option>
+              <option value="Yoga">Yoga</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelStyle}>Duration</label>
+            <select name="PlanPeriod" value={formData.PlanPeriod} onChange={handleInputChange} className={selectStyle} required>
+              <option value="" disabled hidden>Select Duration</option>
+              <option value="Monthly">Monthly</option>
+              <option value="Quaterly">Quaterly</option>
+              <option value="HalfYearly">Half Yearly</option>
+              <option value="Yearly">Yearly</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4 col-span-1 md:col-span-2">
+            <div>
+              <label className={labelStyle}>Re-Join Date</label>
+              <input type="date" name="DateOfReJoin" value={formData.DateOfReJoin} onChange={handleInputChange} className={inputStyle} required />
+            </div>
+            <div>
+              <label className={labelStyle}>Expiry Date</label>
+              <input type="date" name="MembershipExpiryDate" value={formData.MembershipExpiryDate} readOnly className={`${inputStyle} bg-zinc-50 dark:bg-zinc-900 cursor-not-allowed`} />
+            </div>
+            <div>
+              <label className={labelStyle}>Extra Days</label>
+              <input type="number" name="extraDays" value={formData.extraDays} onChange={handleInputChange} className={inputStyle} />
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 mt-4">
+          Submit Re-Admission
+        </button>
+      </form>
+    </div>
   );
 }
 
@@ -653,693 +397,138 @@ export function Renewal() {
   const { showToast } = useToast();
   const [clientNumber, setClientNumber] = useState('');
   const [formData, setFormData] = useState({
-    Name: '',
-    MembershipReceiptnumber: '',
-    LastPaymentDate: '',
-    LastValidityDate: '',
-    LastMembershipType: '',
-    Mobile: '',
-    PlanPeriod: '',
-    PlanType: '',
-    DateOfRenewal: format(new Date(), 'yyyy-MM-dd'),
-    MembershipExpiryDate: '',
-    NextDuedate: '',
-    LastPaymentAmount: '',
-    RenewalReceiptNumber: '',
-    extraDays: '0',
-    agreeTerms: false
+    Name: '', MembershipReceiptnumber: '', LastPaymentDate: '', LastValidityDate: '', LastMembershipType: '',
+    Mobile: '', PlanPeriod: '', PlanType: '', DateOfRenewal: format(new Date(), 'yyyy-MM-dd'),
+    MembershipExpiryDate: '', NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', extraDays: '0', agreeTerms: false
   });
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
+    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
   const fetchClientData = async () => {
     try {
-      await new Promise(resolve => setTimeout(resolve, 1000));
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-        throw new Error('No token or database name found.');
-      }
+      const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !dbName) throw new Error('No token found.');
 
       const response = await fetch(`/api/members/renewal/${clientNumber}`, {
-        headers: {
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token
-        }
+        headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName }
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
-      setFormData(prev => ({
-        ...prev,
-        ...data,
-        DateOfRenewal: format(new Date(), 'yyyy-MM-dd')
-      }));
+      setFormData(prev => ({ ...prev, ...data, DateOfRenewal: format(new Date(), 'yyyy-MM-dd') }));
     } catch (error) {
-      showToast(`Error fetching client data: ${error.message}`, 'error');
+      showToast(error.message, 'error');
     }
   };
 
   useEffect(() => {
-    if (clientNumber) {
-      fetchClientData();
-    }
+    if (clientNumber) fetchClientData();
   }, [clientNumber]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-        throw new Error('No token or database name found.');
-      }
-
-      const response = await fetch('/api/members/renewal', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token
-        },
-        body: JSON.stringify(formData)
-      });
-
-      const responseData = await response.json();
-
-      if (!response.ok) {
-        throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      showToast('Renewal submitted successfully!', 'success');
-      router.push("/webapp");
-    } catch (error) {
-      console.error('Error details:', error);
-      showToast(`Error submitting form: ${error.message}`, 'error');
-    }
-  };
 
   const updateExpiryDate = () => {
     const renewalDate = parse(formData.DateOfRenewal, 'yyyy-MM-dd', new Date());
     let expiryDate = renewalDate;
-
     switch (formData.PlanPeriod) {
-      case 'Monthly':
-        expiryDate = subDays(addMonths(renewalDate, 1), 1);
-        break;
-      case 'Quaterly':
-        expiryDate = subDays(addMonths(renewalDate, 3), 1);
-        break;
-      case 'HalfYearly':
-        expiryDate = subDays(addMonths(renewalDate, 6), 1);
-        break;
-      case 'Yearly':
-        expiryDate = subDays(addYears(renewalDate, 1), 1);
-        break;
+      case 'Monthly': expiryDate = subDays(addMonths(renewalDate, 1), 1); break;
+      case 'Quaterly': expiryDate = subDays(addMonths(renewalDate, 3), 1); break;
+      case 'HalfYearly': expiryDate = subDays(addMonths(renewalDate, 6), 1); break;
+      case 'Yearly': expiryDate = subDays(addYears(renewalDate, 1), 1); break;
     }
-
-    if (formData.extraDays) {
-      expiryDate = addDays(expiryDate, parseInt(formData.extraDays));
-    }
-
-    setFormData(prev => ({
-      ...prev,
-      MembershipExpiryDate: format(expiryDate, 'yyyy-MM-dd'),
-      NextDuedate: format(addDays(expiryDate, 1), 'yyyy-MM-dd')
-    }));
+    if (formData.extraDays) expiryDate = addDays(expiryDate, parseInt(formData.extraDays));
+    setFormData(prev => ({ ...prev, MembershipExpiryDate: format(expiryDate, 'yyyy-MM-dd'), NextDuedate: format(addDays(expiryDate, 1), 'yyyy-MM-dd') }));
   };
 
   useEffect(() => {
-    if (formData.PlanPeriod && formData.DateOfRenewal) {
-      updateExpiryDate();
-    }
+    if (formData.PlanPeriod && formData.DateOfRenewal) updateExpiryDate();
   }, [formData.PlanPeriod, formData.DateOfRenewal, formData.extraDays]);
 
-  return (
-    <form onSubmit={handleSubmit} className={theme === 'dark' ? 'primary-text' : 'secondary-text'}>
-      <h1>Renewal Billing</h1>
-      <div id="gridlayout">
-        <span>
-          <input
-            type="text"
-            name="clientNumber"
-            value={clientNumber}
-            onChange={(e) => setClientNumber(e.target.value)}
-            onBlur={fetchClientData}
-            placeholder="Enter Card NO."
-          />
-          <img src="/placeholder.svg?height=200&width=150" alt="Member Photo" style={{ width: "9vw", height: "20vh" }} />
-        </span>
-        <span style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Member Name:-</p>
-            <p>{formData.Name}</p>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Last payment date:-</p>
-            <p>{formData.LastPaymentDate}</p>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Last validity:-</p>
-            <p>{formData.LastValidityDate}</p>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Last membership type:-</p>
-            <p>{formData.LastMembershipType}</p>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Phone No:-</p>
-            <input
-              type="text"
-              name="Mobile"
-              value={formData.Mobile}
-              onChange={handleInputChange}
-              style={{ margin: "0", width: "auto" }}
-            />
-          </span>
-        </span>
-        <span id="gridlayout">
-          <select
-            name="PlanType"
-            value={formData.PlanType}
-            onChange={handleInputChange}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            required
-          >
-            <option value="" disabled hidden>Select Gym Plan</option>
-            <option value="Strength">Strength</option>
-            <option value="CardioCrossfit">Cardio Crossfit</option>
-            <option value="Combo">Combo</option>
-            <option value="Zumba">Zumba</option>
-            <option value="Yoga">Yoga</option>
-          </select>
-          <select
-            name="PlanPeriod"
-            value={formData.PlanPeriod}
-            onChange={handleInputChange}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            required
-          >
-            <option value="" disabled hidden>Time period</option>
-            <option value="Monthly">Monthly</option>
-            <option value="Quaterly">Quaterly</option>
-            <option value="HalfYearly">Half Yearly</option>
-            <option value="Yearly">Yearly</option>
-          </select>
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="date"
-            name="DateOfRenewal"
-            value={formData.DateOfRenewal}
-            onChange={handleInputChange}
-            required
-          />
-          <input
-            type="date"
-            name="MembershipExpiryDate"
-            value={formData.MembershipExpiryDate}
-            onChange={handleInputChange}
-            readOnly
-          />
-          <input
-            type="number"
-            name="extraDays"
-            value={formData.extraDays}
-            onChange={handleInputChange}
-            placeholder="Extra Days"
-          />
-        </span>
-        <div style={{ display: "inline-flex" }}>
-          <input
-            type="checkbox"
-            id="agreeTerms"
-            name="agreeTerms"
-            checked={formData.agreeTerms}
-            onChange={handleInputChange}
-            style={{ width: "auto" }}
-            required
-          />
-          <label htmlFor="agreeTerms">I agree to the terms and conditions.</label>
-        </div>
-      </div>
-      <button type="submit">Submit</button>
-    </form>
-  );
-}
-
-export function PerDayBasis() {
-  const navigate = useNavigate();
-  const { showToast } = useToast();
-
-  const [formData, setFormData] = useState({
-    Name: '',
-    Gender: '',
-    Age: null,
-    height: null,
-    weight: null,
-    Address: '',
-    Aadhaar: null,
-    Mobile: null,
-    Whatsapp: null,
-    MedicalHistory: '',
-    PlanType: '',
-    Days: null,
-    StartDate: format(new Date(), 'yyyy-MM-dd'),
-    EndDate: '',
-    Amount: null,
-    agreeTerms: false
-  });
-
-  const handleInputChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    let newValue = type === 'checkbox' ? checked : value;
-    const intFields = ['Age', 'weight', 'Mobile', 'Whatsapp', 'Aadhaar', 'Days', 'Amount'];
-    const floatFields = ['height'];
-
-    if (intFields.includes(name)) {
-      newValue = value === '' ? null : parseInt(value, 10);
-    } else if (floatFields.includes(name)) {
-      newValue = value === '' ? null : parseFloat(value);
-    }
-
-    setFormData(prev => ({
-      ...prev,
-      [name]: newValue
-    }));
-  };
-
-  useEffect(() => {
-    if (formData.StartDate && formData.Days) {
-      const endDate = addDays(new Date(formData.StartDate), formData.Days);
-      setFormData(prev => ({
-        ...prev,
-        EndDate: format(endDate, 'yyyy-MM-dd')
-      }));
-    }
-  }, [formData.StartDate, formData.Days]);
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-        throw new Error('No token or database name found.');
-      }
+      const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !dbName) throw new Error('No token found.');
 
-      const response = await fetch('/api/members/per-day', {
+      const response = await fetch('/api/members/renewal', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName },
         body: JSON.stringify(formData)
       });
 
       const responseData = await response.json();
+      if (!response.ok) throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
 
-      if (!response.ok) {
-        throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      showToast('Per Day Basis admission submitted successfully!', 'success');
-      navigate("/webapp");
+      showToast('Renewal successful!', 'success');
+      router.push("/webapp");
     } catch (error) {
-      console.error('Error details:', error);
-      showToast(`Error submitting form: ${error.message}`, 'error');
+      showToast(error.message, 'error');
     }
   };
 
   return (
-    <form onSubmit={handleSubmit} className={theme === 'dark' ? 'primary-text' : 'secondary-text'}>
-      <h1>Per-Day-Basis Billing</h1>
-      <div id="gridlayout">
-        <span id="gridlayout">
-          <input
-            type="text"
-            name="Name"
-            value={formData.Name}
-            onChange={handleInputChange}
-            placeholder="Full name"
-            required
-          />
-          <select
-            name="Gender"
-            value={formData.Gender}
-            onChange={handleInputChange}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            required
-          >
-            <option value="" disabled hidden>Select Gender</option>
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-            <option value="O">Other</option>
-          </select>
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="number"
-            name="Age"
-            value={formData.Age || ''}
-            onChange={handleInputChange}
-            placeholder="Age"
-            required
-          />
-          <input
-            type="number"
-            name="height"
-            value={formData.height || ''}
-            onChange={handleInputChange}
-            placeholder="Height (ft)"
-            required
-          />
-          <input
-            type="number"
-            name="weight"
-            value={formData.weight || ''}
-            onChange={handleInputChange}
-            placeholder="Weight (kg)"
-            required
-          />
-        </span>
-        <span id="gridlayout">
-          <textarea
-            name="Address"
-            value={formData.Address}
-            onChange={handleInputChange}
-            placeholder="Enter your address"
-            style={{ color: "white" }}
-            required
-          ></textarea>
-          <input
-            type="number"
-            name="Aadhaar"
-            value={formData.Aadhaar || ''}
-            onChange={handleInputChange}
-            placeholder="Aadhaar NO."
-          />
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="number"
-            name="Mobile"
-            value={formData.Mobile || ''}
-            onChange={handleInputChange}
-            placeholder="Phone NO."
-            required
-          />
-          <input
-            type="number"
-            name="Whatsapp"
-            value={formData.Whatsapp || ''}
-            onChange={handleInputChange}
-            placeholder="WhatsApp NO."
-            required
-          />
-          <input
-            type="text"
-            name="MedicalHistory"
-            value={formData.MedicalHistory}
-            onChange={handleInputChange}
-            placeholder="Medical History"
-          />
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 2rem" }}>
-          <select
-            name="PlanType"
-            value={formData.PlanType}
-            onChange={handleInputChange}
-            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'}`}
-            style={{ color: "white" }}
-            required
-          >
-            <option value="" disabled hidden>Select Gym Plan</option>
-            <option value="Strength">Strength</option>
-            <option value="CardioCrossfit">Cardio Crossfit</option>
-            <option value="Combo">Combo</option>
-            <option value="Zumba">Zumba</option>
-            <option value="Yoga">Yoga</option>
-          </select>
-          <input
-            type="number"
-            name="Days"
-            value={formData.Days || ''}
-            onChange={handleInputChange}
-            placeholder="Number of Days"
-            required
-          />
-          <input
-            type="date"
-            name="StartDate"
-            value={formData.StartDate}
-            onChange={handleInputChange}
-            required
-          />
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="date"
-            name="EndDate"
-            value={formData.EndDate}
-            readOnly
-          />
-          <input
-            type="number"
-            name="Amount"
-            value={formData.Amount || ''}
-            onChange={handleInputChange}
-            placeholder="Amount"
-            required
-          />
-        </span>
-        <div style={{ display: "inline-flex" }}>
-          <input
-            type="checkbox"
-            id="agreeTerms"
-            name="agreeTerms"
-            checked={formData.agreeTerms}
-            onChange={handleInputChange}
-            style={{ width: "auto" }}
-            required
-          />
-          <label htmlFor="agreeTerms">I agree to the terms and conditions.</label>
+    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-4xl mx-auto">
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
+          <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Renewal</h1>
+          <div className="bg-zinc-100 dark:bg-zinc-800 px-4 py-2 rounded-lg">
+            <span className="text-xs font-bold text-zinc-500 uppercase mr-2">Info</span>
+            <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300">{formData.Name || 'Search User'}</span>
+          </div>
         </div>
-      </div>
-      <button type="submit">Submit</button>
-    </form>
-  );
-}
 
-export function ReturnMembership() {
-  const navigate = useNavigate();
-  const { showToast } = useToast();
-  const [clientNumber, setClientNumber] = useState('');
-  const [formData, setFormData] = useState({
-    Name: '',
-    MembershipReceiptnumber: '',
-    LastPaymentDate: '',
-    LastValidityDate: '',
-    LastMembershipType: '',
-    Mobile: '',
-    PlanPeriod: '',
-    PlanType: '',
-    ReturnDate: format(new Date(), 'yyyy-MM-dd'),
-    RemainingDays: null,
-    RefundAmount: null,
-    Reason: '',
-    agreeTerms: false
-  });
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="col-span-1 md:col-span-2">
+            <label className={labelStyle}>Search Client</label>
+            <input type="text" value={clientNumber} onChange={(e) => setClientNumber(e.target.value)} onBlur={fetchClientData} placeholder="Enter Client ID to search" className={inputStyle} />
+          </div>
 
-  const handleInputChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    let newValue = type === 'checkbox' ? checked : value;
-    const intFields = ['MembershipReceiptnumber', 'Mobile', 'RemainingDays', 'RefundAmount'];
+          <div>
+            <label className={labelStyle}>Plan</label>
+            <select name="PlanType" value={formData.PlanType} onChange={handleInputChange} className={selectStyle} required>
+              <option value="" disabled hidden>Select Plan</option>
+              <option value="Strength">Strength</option>
+              <option value="CardioCrossfit">Cardio Crossfit</option>
+              <option value="Combo">Combo</option>
+              <option value="Zumba">Zumba</option>
+              <option value="Yoga">Yoga</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelStyle}>Duration</label>
+            <select name="PlanPeriod" value={formData.PlanPeriod} onChange={handleInputChange} className={selectStyle} required>
+              <option value="" disabled hidden>Select Duration</option>
+              <option value="Monthly">Monthly</option>
+              <option value="Quaterly">Quaterly</option>
+              <option value="HalfYearly">Half Yearly</option>
+              <option value="Yearly">Yearly</option>
+            </select>
+          </div>
 
-    if (intFields.includes(name)) {
-      newValue = value === '' ? null : parseInt(value, 10);
-    }
-
-    setFormData(prev => ({
-      ...prev,
-      [name]: newValue
-    }));
-  };
-
-  const fetchClientData = async () => {
-    try {
-      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-        throw new Error('No token or database name found.');
-      }
-
-      const response = await fetch(`/api/members/return/${clientNumber}`, {
-        headers: {
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      setFormData(prev => ({
-        ...prev,
-        ...data,
-        ReturnDate: format(new Date(), 'yyyy-MM-dd')
-      }));
-    } catch (error) {
-      showToast(`Error fetching client data: ${error.message}`, 'error');
-    }
-  };
-
-  useEffect(() => {
-    if (clientNumber) {
-      fetchClientData();
-    }
-  }, [clientNumber]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-        throw new Error('No token or database name found.');
-      }
-
-      const response = await fetch('/api/members/return', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token
-        },
-        body: JSON.stringify(formData)
-      });
-
-      const responseData = await response.json();
-
-      if (!response.ok) {
-        throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      showToast('Membership return processed successfully!', 'success');
-      navigate("/webapp");
-    } catch (error) {
-      console.error('Error details:', error);
-      showToast(`Error submitting form: ${error.message}`, 'error');
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className={theme === 'dark' ? 'primary-text' : 'secondary-text'}>
-      <h1>Return Membership</h1>
-      <div id="gridlayout">
-        <span>
-          <input
-            type="text"
-            name="clientNumber"
-            value={clientNumber}
-            onChange={(e) => setClientNumber(e.target.value)}
-            onBlur={fetchClientData}
-            placeholder="Enter Card NO."
-          />
-          <img src="/placeholder.svg?height=200&width=150" alt="Member Photo" style={{ width: "9vw", height: "20vh" }} />
-        </span>
-        <span style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Member Name:</p>
-            <p>{formData.Name}</p>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Last payment date:</p>
-            <p>{formData.LastPaymentDate}</p>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Last validity:</p>
-            <p>{formData.LastValidityDate}</p>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Last membership type:</p>
-            <p>{formData.LastMembershipType}</p>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0 1rem" }}>
-            <p>Phone No:</p>
-            <input
-              type="text"
-              name="Mobile"
-              value={formData.Mobile}
-              onChange={handleInputChange}
-              style={{ margin: "0", width: "auto" }}
-            />
-          </span>
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="date"
-            name="ReturnDate"
-            value={formData.ReturnDate}
-            onChange={handleInputChange}
-            required
-          />
-          <input
-            type="number"
-            name="RemainingDays"
-            value={formData.RemainingDays || ''}
-            onChange={handleInputChange}
-            placeholder="Remaining Days"
-            required
-          />
-        </span>
-        <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 2rem" }}>
-          <input
-            type="number"
-            name="RefundAmount"
-            value={formData.RefundAmount || ''}
-            onChange={handleInputChange}
-            placeholder="Refund Amount"
-            required
-          />
-          <textarea
-            name="Reason"
-            value={formData.Reason}
-            onChange={handleInputChange}
-            placeholder="Reason for return"
-            style={{ color: "white" }}
-            required
-          ></textarea>
-        </span>
-        <div style={{ display: "inline-flex" }}>
-          <input
-            type="checkbox"
-            id="agreeTerms"
-            name="agreeTerms"
-            checked={formData.agreeTerms}
-            onChange={handleInputChange}
-            style={{ width: "auto" }}
-            required
-          />
-          <label htmlFor="agreeTerms">I confirm that I want to return this membership.</label>
+          <div className="grid grid-cols-3 gap-4 col-span-1 md:col-span-2">
+            <div>
+              <label className={labelStyle}>Last Expiry</label>
+              <input type="text" value={formData.LastValidityDate ? format(new Date(formData.LastValidityDate), 'yyyy-MM-dd') : ''} readOnly className={`${inputStyle} bg-zinc-50 dark:bg-zinc-900 cursor-not-allowed`} />
+            </div>
+            <div>
+              <label className={labelStyle}>Renewal Date</label>
+              <input type="date" name="DateOfRenewal" value={formData.DateOfRenewal} onChange={handleInputChange} className={inputStyle} required />
+            </div>
+            <div>
+              <label className={labelStyle}>New Expiry</label>
+              <input type="date" name="MembershipExpiryDate" value={formData.MembershipExpiryDate} readOnly className={`${inputStyle} bg-zinc-50 dark:bg-zinc-900 cursor-not-allowed`} />
+            </div>
+          </div>
         </div>
-      </div>
-      <button type="submit">Process Return</button>
-    </form>
+
+        <button type="submit" className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 mt-4">
+          Submit Renewal
+        </button>
+
+      </form>
+    </div>
   );
 }

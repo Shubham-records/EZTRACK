@@ -1,10 +1,8 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { ThemeContext } from './webappmain';
+import React, { useState, useEffect } from 'react';
 import { useToast } from "@/context/ToastContext";
 import { User, Shield, Trash2, Plus, Loader2 } from 'lucide-react';
 
 export default function StaffComponent() {
-    const { theme } = useContext(ThemeContext);
     const { showToast } = useToast();
     const [staff, setStaff] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -71,7 +69,7 @@ export default function StaffComponent() {
     };
 
     return (
-        <div className={`p-8 ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`}>
+        <div className="p-8 secondary-bg secondary-text">
             <div className="flex justify-between items-center mb-8">
                 <h1 className="text-3xl font-bold flex items-center gap-3">
                     <UsersIcon className="text-orange-500" /> Staff Management
@@ -86,9 +84,9 @@ export default function StaffComponent() {
             {loading ? (
                 <div className="flex justify-center p-12"><Loader2 className="animate-spin" /></div>
             ) : (
-                <div className={`rounded-lg overflow-hidden border ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}>
+                <div className="rounded-lg overflow-hidden border border-gray-200">
                     <table className="w-full text-left">
-                        <thead className={theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100'}>
+                        <thead className="bg-gray-100">
                             <tr>
                                 <th className="p-4">Username</th>
                                 <th className="p-4">Role</th>
@@ -99,7 +97,7 @@ export default function StaffComponent() {
                         </thead>
                         <tbody>
                             {staff.map((user) => (
-                                <tr key={user.id} className={`border-t ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}>
+                                <tr key={user.id} className="border-t border-gray-200">
                                     <td className="p-4 font-medium flex items-center gap-2">
                                         <div className="w-8 h-8 rounded-full bg-blue-500/20 text-blue-500 flex items-center justify-center">
                                             <User size={16} />
@@ -138,7 +136,7 @@ export default function StaffComponent() {
             {/* Add Modal */}
             {showAddModal && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm">
-                    <form onSubmit={handleAddStaff} className={`w-full max-w-md p-6 rounded-xl shadow-2xl relative ${theme === 'dark' ? 'bg-neutral-900 border border-neutral-700' : 'bg-white'}`}>
+                    <form onSubmit={handleAddStaff} className="w-full max-w-md p-6 rounded-xl shadow-2xl relative bg-white">
                         <h2 className="text-xl font-bold mb-4">Add New Staff</h2>
 
                         <div className="space-y-4">
@@ -147,7 +145,7 @@ export default function StaffComponent() {
                                 <input
                                     required
                                     type="text"
-                                    className={`w-full p-2 rounded border ${theme === 'dark' ? 'bg-neutral-800 border-neutral-700' : 'border-gray-300'}`}
+                                    className="w-full p-2 rounded border border-gray-300"
                                     value={newStaff.username}
                                     onChange={e => setNewStaff({ ...newStaff, username: e.target.value })}
                                 />
@@ -157,7 +155,7 @@ export default function StaffComponent() {
                                 <input
                                     required
                                     type="password"
-                                    className={`w-full p-2 rounded border ${theme === 'dark' ? 'bg-neutral-800 border-neutral-700' : 'border-gray-300'}`}
+                                    className="w-full p-2 rounded border border-gray-300"
                                     value={newStaff.password}
                                     onChange={e => setNewStaff({ ...newStaff, password: e.target.value })}
                                 />
@@ -165,7 +163,7 @@ export default function StaffComponent() {
                             <div>
                                 <label className="block text-sm mb-1 opacity-80">Role</label>
                                 <select
-                                    className={`w-full p-2 rounded border ${theme === 'dark' ? 'bg-neutral-800 border-neutral-700' : 'border-gray-300'}`}
+                                    className="w-full p-2 rounded border border-gray-300"
                                     value={newStaff.role}
                                     onChange={e => setNewStaff({ ...newStaff, role: e.target.value })}
                                 >

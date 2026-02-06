@@ -20,17 +20,15 @@ export function Signupform() {
     try {
       const response = await axios.post(
         "/api/auth/signup",
-        { username, password, GYMNAME, EMAILID },
-        { responseType: "text" }
+        { username, password, GYMNAME, EMAILID }
       );
 
       showToast(response.data, 'success');
       router.push("/login");
     } catch (err) {
       console.error(err);
-
       if (err.response && err.response.data) {
-        showToast(err.response.data, 'error');
+        showToast(err.response.data.detail || "Signup failed.", 'error');
       } else {
         showToast("Signup failed.", 'error');
       }
@@ -38,98 +36,85 @@ export function Signupform() {
   }
 
   return (
-    <section className="login">
-      <div
-        style={{
-          flex: 1,
-          background:
-            "linear-gradient(rgba(140,67,230,1), rgba(239,141,109,1))",
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
-        <h1 style={{ fontSize: "3rem", fontFamily: "cursive" }}>Hey There!</h1>
-        <Image src={img} alt="Background" />
-      </div>
-      <div
-        style={{
-          display: "grid",
-          flex: 1,
-          padding: "1rem",
-          justifyContent: "center",
-          backgroundColor: "#111827", // Tailwind gray-900
-          color: "white"
-        }}
-      >
-        <Link href="/" style={{ color: '#60a5fa', marginBottom: '1rem' }}>{"< Home"}</Link>
+    <section className="flex min-h-screen bg-background-light dark:bg-background-dark font-body">
+      <div className="hidden lg:flex flex-1 flex-col justify-center items-center relative overflow-hidden bg-gradient-to-br from-primary to-teal-800 p-8">
+        <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-white/10 rounded-full blur-3xl"></div>
+        <div className="absolute bottom-[-10%] left-[-10%] w-[30%] h-[30%] bg-white/15 rounded-full blur-2xl"></div>
 
-        <div style={{ padding: "4rem" }}>
-          <div className="form-container">
-            <p className="title">Sign Up</p>
-            <form className="form" onSubmit={handleSignup}>
-              <div className="input-group" style={{ marginBottom: '1rem' }}>
-                <label htmlFor="gymname" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>GYM NAME</label>
+        <h1 className="text-6xl font-extrabold text-white text-center mb-8 tracking-tight drop-shadow-md z-10">
+          Elevate Your Gym
+        </h1>
+        <div className="w-full max-w-md relative z-10 drop-shadow-2xl">
+          <Image src={img} alt="Illustration" layout="responsive" />
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col justify-center items-center p-8 bg-surface-light dark:bg-surface-dark">
+        <div className="w-full max-w-md">
+          <Link href="/" className="text-zinc-500 hover:text-primary transition-colors mb-8 flex items-center gap-2 font-medium">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+            Back to Home
+          </Link>
+
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-8 shadow-soft">
+            <h2 className="text-3xl font-bold text-zinc-900 dark:text-white mb-2">Create Account</h2>
+            <p className="text-zinc-500 dark:text-zinc-400 mb-8">Join the EZTRACK community today</p>
+
+            <form onSubmit={handleSignup} className="flex flex-col gap-5">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">GYM NAME</label>
                 <input
                   type="text"
                   required
+                  placeholder="The Iron Temple"
                   value={GYMNAME}
                   onChange={(event) => setGYMNAME(event.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
+                  className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                 />
               </div>
-              <div className="input-group" style={{ marginBottom: '1rem' }}>
-                <label htmlFor="email" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>EMAIL ID</label>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">EMAIL ADDRESS</label>
                 <input
                   type="email"
                   required
+                  placeholder="contact@gym.com"
                   value={EMAILID}
                   onChange={(event) => setEMAILID(event.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
+                  className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                 />
               </div>
-              <div className="input-group" style={{ marginBottom: '1rem' }}>
-                <label htmlFor="username" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>Username</label>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">USERNAME</label>
                 <input
                   type="text"
                   required
+                  placeholder="admin_iron"
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
+                  className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                 />
               </div>
-
-              <div className="input-group" style={{ marginBottom: '1rem' }}>
-                <label htmlFor="password" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>Password</label>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">PASSWORD</label>
                 <input
                   type="password"
                   required
+                  placeholder="••••••••"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
+                  className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                 />
               </div>
-              <br />
-              <button type="submit" className="sign" style={{
-                width: '100%',
-                padding: '0.75rem',
-                borderRadius: '0.5rem',
-                border: 'none',
-                background: 'linear-gradient(to right, #8b5cf6, #ec4899)',
-                color: 'white',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                marginTop: '1rem'
-              }}>
-                Sign Up
+
+              <button type="submit" className="w-full py-3.5 rounded-lg border-none bg-gradient-to-r from-primary to-teal-700 text-white font-bold text-base cursor-pointer shadow-lg shadow-primary/30 hover:shadow-primary/50 transform hover:-translate-y-0.5 transition-all mt-4">
+                Start Free Trial
               </button>
             </form>
-            <br />
-            <p className="signup" style={{ textAlign: 'center', marginTop: '1rem', color: '#9ca3af' }}>
-              Already have an account?{' '}
-              <Link href="/login" style={{ color: '#60a5fa' }}>
-                Login
+
+            <p className="text-center mt-8 text-zinc-500 text-sm">
+              Already registered? {' '}
+              <Link href="/login" className="text-primary font-bold hover:underline">
+                Sign In
               </Link>
             </p>
           </div>
@@ -150,8 +135,7 @@ export function Loginform() {
     try {
       const response = await axios.post(
         "/api/auth/login",
-        { username, password },
-        { responseType: "json" }
+        { username, password }
       );
 
       showToast(response.data.message, 'success');
@@ -166,7 +150,7 @@ export function Loginform() {
     } catch (err) {
       console.error("Login error:", err);
       if (err.response && err.response.data) {
-        showToast(err.response.data.message, 'error');
+        showToast(err.response.data.detail || "Login failed.", 'error');
       } else {
         showToast("Login failed.", 'error');
       }
@@ -174,83 +158,65 @@ export function Loginform() {
   }
 
   return (
-    <section className="login">
-      <div
-        style={{
-          flex: 1,
-          background:
-            "linear-gradient(rgba(140,67,230,1), rgba(239,141,109,1))",
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
-        <h1 style={{ fontSize: "3rem", fontFamily: "cursive" }}>
-          {" "}
-          Welcome Back!
+    <section className="flex min-h-screen bg-background-light dark:bg-background-dark font-body">
+      <div className="hidden lg:flex flex-1 flex-col justify-center items-center relative overflow-hidden bg-gradient-to-br from-primary to-teal-900 p-8">
+        <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-white/5 rounded-full blur-3xl"></div>
+
+        <h1 className="text-6xl font-extrabold text-white text-center mb-8 tracking-tight drop-shadow-md z-10">
+          Welcome Back
         </h1>
-        <Image src={img} alt="Background" />
+        <div className="w-full max-w-md relative z-10 drop-shadow-2xl">
+          <Image src={img} alt="Illustration" layout="responsive" />
+        </div>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          flex: 1,
-          padding: "1rem",
-          justifyContent: "center",
-          backgroundColor: "rgba(17, 24, 39, 1)",
-        }}
-      >
-        <Link href="/" style={{ color: '#60a5fa', marginBottom: '1rem' }}>{"< Home"}</Link>
+      <div className="flex-1 flex flex-col justify-center items-center p-8 bg-surface-light dark:bg-surface-dark">
+        <div className="w-full max-w-md">
+          <Link href="/" className="text-zinc-500 hover:text-primary transition-colors mb-8 flex items-center gap-2 font-medium">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+            Back to Home
+          </Link>
 
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-8 shadow-soft">
+            <h2 className="text-3xl font-bold text-zinc-900 dark:text-white mb-2">Login</h2>
+            <p className="text-zinc-500 dark:text-zinc-400 mb-8">Access your gym dashboard</p>
 
-        <div style={{ padding: "4rem", }}>
-          <div className="form-container">
-            <p className="title" style={{ color: '#e5e7eb' }}>Login</p>
-            <form className="form" onSubmit={handlelogin}>
-              <div className="input-group" style={{ marginBottom: '1rem' }}>
-                <label htmlFor="username" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>Username</label>
+            <form onSubmit={handlelogin} className="flex flex-col gap-5">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">USERNAME</label>
                 <input
                   type="text"
                   required
+                  placeholder="admin"
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
+                  className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                 />
               </div>
-              <div className="input-group" style={{ marginBottom: '1rem' }}>
-                <label htmlFor="password" style={{ display: 'block', marginBottom: '0.5rem', color: '#e5e7eb' }}>Password</label>
+              <div className="space-y-1">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">PASSWORD</label>
+                  <Link href="/forgotpassword" className="text-sm text-primary font-bold hover:underline">Forgot password?</Link>
+                </div>
                 <input
                   type="password"
                   required
+                  placeholder="••••••••"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: 'none' }}
+                  className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                 />
-                <div className="forgot" style={{ textAlign: 'right', marginTop: '0.5rem' }}>
-                  <Link href="/forgotpassword" style={{ color: '#60a5fa', fontSize: '0.875rem' }}>Forgot Password ?</Link>
-                </div>
               </div>
-              <button type="submit" className="sign" style={{
-                width: '100%',
-                padding: '0.75rem',
-                borderRadius: '0.5rem',
-                border: 'none',
-                background: 'linear-gradient(to right, #8b5cf6, #ec4899)',
-                color: 'white',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                marginTop: '1rem'
-              }}>
-                Login
+
+              <button type="submit" className="w-full py-3.5 rounded-lg border-none bg-gradient-to-r from-primary to-teal-700 text-white font-bold text-base cursor-pointer shadow-lg shadow-primary/30 hover:shadow-primary/50 transform hover:-translate-y-0.5 transition-all mt-4">
+                Sign In
               </button>
             </form>
-            <br />
-            <p className="signup" style={{ textAlign: 'center', marginTop: '1rem', color: '#9ca3af' }}>
-              Don't have an account?{' '}
-              <Link href="/Signup" style={{ color: '#60a5fa' }}>
-                Sign up
+
+            <p className="text-center mt-8 text-zinc-500 text-sm">
+              New here? {' '}
+              <Link href="/Signup" className="text-primary font-bold hover:underline">
+                Create account
               </Link>
             </p>
           </div>
@@ -346,96 +312,76 @@ export function ForgotPassword() {
   };
 
   return (
-    <section className="login">
-      <div
-        style={{
-          flex: 1,
-          background:
-            "linear-gradient(rgba(140,67,230,1), rgba(239,141,109,1))",
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
-        <h1 style={{ fontSize: "3rem", fontFamily: "cursive" }}>
-          Huh Forgot Password!
-        </h1>
-        <Image src={img} alt="Background" />
+    <section className="flex min-h-screen bg-background-light dark:bg-background-dark font-body">
+      <div className="hidden lg:flex flex-1 flex-col justify-center items-center bg-gradient-to-br from-primary to-teal-900 p-8 text-white">
+        <h1 className="text-5xl font-extrabold mb-8 tracking-tight">Forgot Password?</h1>
+        <div className="w-full max-w-md">
+          <Image src={img} alt="Background" layout="responsive" />
+        </div>
       </div>
-      <div
-        style={{
-          display: "grid",
-          flex: 1,
-          padding: "1rem",
-          justifyContent: "center",
-          backgroundColor: "rgba(17, 24, 39, 1)",
-        }}
-      >
-        <Link href="/" style={{ color: '#60a5fa', marginBottom: '1rem' }}>{"< Home"}</Link>
+      <div className="flex-1 flex flex-col justify-center items-center p-8 bg-surface-light dark:bg-surface-dark">
+        <div className="w-full max-w-md">
+          <Link href="/" className="text-zinc-500 hover:text-primary transition-colors mb-8 flex items-center gap-2 font-medium">
+            {"< Back to Home"}
+          </Link>
 
-        <div style={{ padding: "4rem" }}>
-          {showOtpInput ? (
-            <form className="form" style={{ width: "30vw" }} onSubmit={handleVerifyOtp}>
-              <div className="input-group">
-                <label>Enter OTP</label>
-                <input
-                  type="text"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                />
-              </div>
-              <br />
-              <button className="sign" type="submit">Check OTP</button>
-            </form>
-          ) : showPasswordInputs ? (
-            <form className="form" style={{ width: "30vw" }} onSubmit={handleResetPassword}>
-              <div className="input-group">
-                <label>Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </div>
-              <br />
-              <div className="input-group">
-                <label>Re-Enter Password</label>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-
-                />
-              </div>
-              <br />
-              <button className="sign" type="submit">Reset Password</button>
-            </form>
-          ) : (
-            <form className="form" style={{ width: "30vw" }} onSubmit={handleRequestOtp}>
-              <div className="input-group">
-                <label>Enter Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                />
-              </div>
-              <br />
-              <button className="sign" type="submit">Send OTP</button>
-            </form>
-          )}
-          <br />
-          <p className="signup">
-            <Link href="/Signup" >
-              Sign up
-            </Link>
-            <span> OR </span>
-            <Link href="/login">
-              Login
-            </Link>
-          </p>
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-8 shadow-soft">
+            {showOtpInput ? (
+              <form className="flex flex-col gap-5" onSubmit={handleVerifyOtp}>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Enter OTP</label>
+                  <input
+                    type="text"
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary transition-all"
+                  />
+                </div>
+                <button className="w-full py-3.5 rounded-lg border-none bg-primary text-white font-bold cursor-pointer hover:bg-teal-700 transition-all" type="submit">Check OTP</button>
+              </form>
+            ) : showPasswordInputs ? (
+              <form className="flex flex-col gap-5" onSubmit={handleResetPassword}>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">New Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary transition-all"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Confirm Password</label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary transition-all"
+                  />
+                </div>
+                <button className="w-full py-3.5 rounded-lg border-none bg-primary text-white font-bold cursor-pointer hover:bg-teal-700 transition-all" type="submit">Reset Password</button>
+              </form>
+            ) : (
+              <form className="flex flex-col gap-5" onSubmit={handleRequestOtp}>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Enter Email</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    className="w-full px-4 py-3 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white outline-none focus:ring-2 focus:ring-primary transition-all"
+                  />
+                </div>
+                <button className="w-full py-3.5 rounded-lg border-none bg-primary text-white font-bold cursor-pointer hover:bg-teal-700 transition-all" type="submit">Send OTP</button>
+              </form>
+            )}
+            <div className="mt-8 text-center text-sm">
+              <Link href="/Signup" className="text-primary font-bold hover:underline mx-2">Sign up</Link>
+              <span className="text-zinc-400">|</span>
+              <Link href="/login" className="text-primary font-bold hover:underline mx-2">Login</Link>
+            </div>
+          </div>
         </div>
       </div>
     </section>

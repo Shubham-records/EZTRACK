@@ -3,11 +3,10 @@ import { useReactTable, getCoreRowModel, getFilteredRowModel, getSortedRowModel,
 import { rankItem } from '@tanstack/match-sorter-utils'
 import { ChevronDown, ChevronUp, Edit2, Save, X, Trash2, Search } from 'lucide-react';
 import { useToast } from "@/context/ToastContext";
-import { ThemeContext } from './webappmain';
+
 import ImportMembersModal from './components/ImportMembersModal';
 
 export default function TableComponent({ gymmemberdata, allColumns, onUpdateData, dataType, onNavigate }) {
-  const { theme } = useContext(ThemeContext);
   const { showToast } = useToast();
 
   const [data, setData] = useState(gymmemberdata)
@@ -177,41 +176,35 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
   }
 
   return (
-    (<div className={`p-6 rounded-lg ${theme === 'dark' ? 'primary-bg primary-text' : 'secondary-bg secondary-text'}`}>
-      <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-opacity-50 backdrop-blur-md p-4 rounded-xl border border-gray-700/30 shadow-sm">
+    <div className="p-6 rounded-lg bg-surface-light dark:bg-surface-dark w-full shadow-soft border border-zinc-200 dark:border-zinc-800">
+      <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-zinc-50 dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800">
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
           {/* Columns Selector */}
           <div className="relative">
             <button
               onClick={() => setIsColumnSelectorOpen(!isColumnSelectorOpen)}
-              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border ${theme === 'dark'
-                ? 'bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-gray-200'
-                : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'
-                } focus:ring-2 focus:ring-offset-2 focus:ring-blue-500`}>
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 focus:ring-2 focus:ring-offset-2 focus:ring-primary">
               <span>Columns</span>
               <ChevronDown size={14} className={`transition-transform duration-200 ${isColumnSelectorOpen ? 'rotate-180' : ''}`} />
             </button>
             {isColumnSelectorOpen && (
-              <div className={`absolute left-0 mt-2 p-3 min-w-[280px] grid grid-cols-2 gap-2 rounded-xl shadow-2xl z-50 border ${theme === 'dark'
-                ? 'bg-neutral-900 border-neutral-800'
-                : 'bg-white border-gray-100'
-                }`}>
-                <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-opacity-10 hover:bg-gray-500 cursor-pointer col-span-2 border-b border-gray-700/20 pb-2 mb-1">
+              <div className="absolute left-0 mt-2 p-3 min-w-[280px] grid grid-cols-2 gap-2 rounded-xl shadow-2xl z-50 border bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700">
+                <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer col-span-2 border-b border-zinc-100 dark:border-zinc-800 pb-2 mb-1">
                   <input
                     type="checkbox"
                     checked={visibleColumns.length === allColumns.length}
                     onChange={() => setVisibleColumns(visibleColumns.length === allColumns.length ? [] : [...allColumns])}
-                    className="rounded border-gray-500 text-blue-600 focus:ring-blue-500 w-4 h-4" />
-                  <span className="text-sm font-medium">Select All</span>
+                    className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4" />
+                  <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Select All</span>
                 </label>
                 {allColumns.map(column => (
-                  <label key={column} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-opacity-10 hover:bg-gray-500 cursor-pointer">
+                  <label key={column} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={visibleColumns.includes(column)}
                       onChange={() => toggleColumnVisibility(column)}
-                      className="rounded border-gray-500 text-blue-600 focus:ring-blue-500 w-4 h-4" />
-                    <span className="text-sm truncate" title={column}>{column}</span>
+                      className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4" />
+                    <span className="text-sm truncate text-zinc-700 dark:text-zinc-300" title={column}>{column}</span>
                   </label>
                 ))}
               </div>
@@ -221,17 +214,14 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
           {/* Search Bar */}
           <div className="relative flex-grow min-w-[200px] max-w-sm group">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className={`h-4 w-4 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'} group-focus-within:text-blue-500 transition-colors`} />
+              <Search className="h-4 w-4 text-zinc-400 group-focus-within:text-primary transition-colors" />
             </div>
             <input
               type="text"
               placeholder="Search members..."
               value={globalFilter ?? ''}
               onChange={e => setGlobalFilter(e.target.value)}
-              className={`block w-full pl-10 pr-3 py-2.5 text-sm rounded-lg border focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all ${theme === 'dark'
-                ? 'bg-neutral-900 border-neutral-800 text-white placeholder-gray-500'
-                : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400'
-                }`} />
+              className="block w-full pl-10 pr-3 py-2.5 text-sm rounded-lg border focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-white placeholder-zinc-400" />
           </div>
         </div>
 
@@ -240,10 +230,7 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
           <button
             onClick={fetchDATA}
             disabled={showloading}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border ${theme === 'dark'
-              ? 'bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-gray-200'
-              : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'
-              }`}>
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300">
             <span className={showloading ? 'animate-spin' : ''}>
               {showloading ? '⟳' : '↻'}
             </span>
@@ -252,25 +239,19 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
 
           <button
             onClick={() => setIsImportModalOpen(true)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border ${theme === 'dark'
-              ? 'bg-emerald-600/10 border-emerald-600/20 text-emerald-400 hover:bg-emerald-600/20'
-              : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
-              }`}>
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-800 text-primary hover:bg-teal-100 dark:hover:bg-teal-900/40">
             Import
           </button>
 
           <button
             onClick={clearAllFilters}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border ${theme === 'dark'
-              ? 'bg-neutral-800 border-neutral-700 hover:bg-neutral-700 text-gray-300'
-              : 'bg-gray-100 border-gray-200 hover:bg-gray-200 text-gray-700'
-              }`}>
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 border bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300">
             Clear Filters
           </button>
 
           <button
             onClick={() => onNavigate && onNavigate("Billing")}
-            className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-500 shadow-md shadow-blue-500/20 transition-all active:scale-95">
+            className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white bg-primary hover:bg-teal-700 shadow-md shadow-primary/20 transition-all active:scale-95">
             + Add
           </button>
         </div>
@@ -280,39 +261,38 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
         isOpen={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
         onImportSuccess={fetchDATA}
-        theme={theme}
         dataType={dataType}
       />
-      <div className="overflow-x-auto" style={{ height: "85vh" }}>
-        <table className="w-full">
-          <thead className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} sticky top-0 z-10`}>
+      <div className="overflow-x-auto stitch-scrollbar" style={{ height: "85vh" }}>
+        <table className="w-full border-collapse">
+          <thead className="bg-zinc-50 dark:bg-zinc-900 sticky top-0 z-10 shadow-sm">
             {table.getHeaderGroups().map(headerGroup => (
-              <tr key={headerGroup.id} className="border-b border-gray-700">
+              <tr key={headerGroup.id} className="border-b border-zinc-200 dark:border-zinc-800">
                 {headerGroup.headers.map(header => {
                   return (
-                    (<th key={header.id} className="px-4 py-2 text-left">
+                    <th key={header.id} className="px-4 py-3 text-left">
                       {header.isPlaceholder ? null : (
                         <div className="flex items-center">
                           <button
-                            className="font-bold flex cursor-pointer"
+                            className="font-bold text-xs uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex cursor-pointer hover:text-primary transition-colors"
                             onClick={header.column.getToggleSortingHandler()}>
                             {flexRender(header.column.columnDef.header, header.getContext())}
                             {{
-                              asc: <ChevronUp className="inline ml-1" />,
-                              desc: <ChevronDown className="inline ml-1" />,
+                              asc: <ChevronUp className="inline ml-1 w-4 h-4" />,
+                              desc: <ChevronDown className="inline ml-1 w-4 h-4" />,
                             }[header.column.getIsSorted()] ?? null}
                           </button>
                         </div>
                       )}
-                    </th>)
+                    </th>
                   );
                 })}
-                <th className="px-4 py-2">Actions</th>
+                <th className="px-4 py-3 text-left font-bold text-xs uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Actions</th>
               </tr>
             ))}
           </thead>
           {dataType !== "member" && (
-            <thead className="bg-gray-700 sticky top-[60px] z-9">
+            <thead className="bg-zinc-100 dark:bg-zinc-800 sticky top-[45px] z-9 font-semibold text-zinc-700 dark:text-zinc-300">
               <tr>
                 <th className="px-4 py-2"></th>
                 <th className="px-4 py-2"></th>
@@ -345,57 +325,57 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
               </tr>
             </thead>
           )}
-          <tbody>
+          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
             {table.getRowModel().rows.map(row => {
               return (
-                (<tr key={row.id} className={`border-b ${theme === 'dark' ? 'primary-border' : 'secondary-border'}`}>
+                <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors">
                   {row.getVisibleCells().map(cell => {
                     return (
-                      (<td key={cell.id} className="px-4 py-2">
+                      <td key={cell.id} className="px-4 py-3 text-sm text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
                         {editingId === row.original._id ? (
                           <input
                             type="text"
                             name={cell.column.id}
                             value={editedMember?.[cell.column.id] ?? ''}
                             onChange={handleChange}
-                            className={`${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded px-2 py-1 w-full`} />
+                            className="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1 w-full focus:ring-1 focus:ring-primary outline-none" />
                         ) : (
                           flexRender(cell.column.columnDef.cell, cell.getContext())
                         )}
-                      </td>)
+                      </td>
                     );
                   })}
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-3">
                     {editingId === row.original._id ? (
                       <div className="flex space-x-2">
-                        <button onClick={handleSave} className="text-green-400 hover:text-green-300">
-                          <Save size={18} />
+                        <button onClick={handleSave} className="text-emerald-600 hover:text-emerald-700 p-1 hover:bg-emerald-50 rounded transition-colors">
+                          <Save size={16} />
                         </button>
-                        <button onClick={handleCancel} className="text-red-400 hover:text-red-300">
-                          <X size={18} />
+                        <button onClick={handleCancel} className="text-rose-500 hover:text-rose-600 p-1 hover:bg-rose-50 rounded transition-colors">
+                          <X size={16} />
                         </button>
                       </div>
                     ) : (
                       <div className="flex space-x-2">
                         <button
                           onClick={() => handleEdit(row.original)}
-                          className="text-blue-400 hover:text-blue-300">
-                          <Edit2 size={18} />
+                          className="text-zinc-400 hover:text-primary p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors">
+                          <Edit2 size={16} />
                         </button>
                         <button
                           onClick={() => handleDelete(row.original._id)}
-                          className="text-red-400 hover:text-red-300">
-                          <Trash2 size={18} />
+                          className="text-zinc-400 hover:text-rose-500 p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors">
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     )}
                   </td>
-                </tr>)
+                </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-    </div>)
+    </div>
   );
 }

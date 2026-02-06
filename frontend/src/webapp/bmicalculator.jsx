@@ -1,8 +1,6 @@
-import React, { useState, useEffect, useContext } from 'react'
-import { ThemeContext } from './webappmain'
+import React, { useState, useEffect } from 'react'
 
 export default function BmiCalculator() {
-  const { theme } = useContext(ThemeContext)
   const [age, setAge] = useState(30)
   const [gender, setGender] = useState('male')
   const [height, setHeight] = useState(170)
@@ -53,44 +51,44 @@ export default function BmiCalculator() {
   }
 
   return (
-    (<div className={`max-w-2xl mx-auto p-6 ${theme === 'dark' ? 'primary-card-bg primary-text' : 'secondary-card-bg secondary-text'}`} style={{marginTop:"2rem"}}>
+    (<div className="max-w-2xl mx-auto p-6 secondary-card-bg secondary-text" style={{ marginTop: "2rem" }}>
       <h1 className="text-3xl font-bold text-center mb-6">BMI Calculator</h1>
-        <div className="mb-6">
-          <label className="block mb-2">Units:</label>
-          <button
-            onClick={handleUnitChange}
-            className={`px-4 py-2 ${theme === 'dark' ? 'primary-bg' : 'secondary-bg'} rounded`}>
-            {unit === 'metric' ? 'Switch to Imperial' : 'Switch to Metric'}
-          </button>
-        </div>
-      <span style={{display:"flex", gap:"1rem"}}>
+      <div className="mb-6">
+        <label className="block mb-2">Units:</label>
+        <button
+          onClick={handleUnitChange}
+          className="px-4 py-2 secondary-bg rounded">
+          {unit === 'metric' ? 'Switch to Imperial' : 'Switch to Metric'}
+        </button>
+      </div>
+      <span style={{ display: "flex", gap: "1rem" }}>
         <div className="mb-4 flex-1">
           <label className="block mb-2">Age:</label>
           <input
             type="number"
             value={age}
             onChange={(e) => setAge(parseInt(e.target.value))}
-            className={`w-full p-2 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded`} />
+            className="w-full p-2 secondary-card-bg rounded" />
         </div>
         <div className="mb-4 flex-1">
           <label className="block mb-2">Gender:</label>
           <select
             value={gender}
             onChange={(e) => setGender(e.target.value)}
-            className={`w-full p-2 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded`}>
+            className="w-full p-2 secondary-card-bg rounded">
             <option value="male">Male</option>
             <option value="female">Female</option>
           </select>
         </div>
       </span>
-      <span style={{display:"flex", gap:"1rem"}}>
+      <span style={{ display: "flex", gap: "1rem" }}>
         <div className="mb-4 flex-1">
           <label className="block mb-2">Height ({unit === 'metric' ? 'cm' : 'inches'}):</label>
           <input
             type="number"
             value={height}
             onChange={(e) => setHeight(parseFloat(e.target.value))}
-            className={`w-full p-2 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded`} />
+            className="w-full p-2 secondary-card-bg rounded" />
         </div>
         <div className="mb-6 flex-1">
           <label className="block mb-2">Weight ({unit === 'metric' ? 'kg' : 'lbs'}):</label>
@@ -98,7 +96,7 @@ export default function BmiCalculator() {
             type="number"
             value={weight}
             onChange={(e) => setWeight(parseFloat(e.target.value))}
-            className={`w-full p-2 ${theme === 'dark' ? 'primary-card-bg' : 'secondary-card-bg'} rounded`} />
+            className="w-full p-2 secondary-card-bg rounded" />
         </div>
       </span>
 
