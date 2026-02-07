@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ExpriesOverdue from './expriesOverdue'
+import QuickActions from './QuickActions'
 
 const StatCard = ({ title, value, subtext, trend, trendValue, type = "primary", icon = "trending_up" }) => {
   // Styles based on type
@@ -68,12 +69,15 @@ export default function Dashboard() {
   const [stats, setStats] = useState({
     activeMembers: 0,
     todayExpiry: 0,
+    expiringThisWeek: 0,
     todayCollection: 0,
     weekCollection: 0,
+    monthCollection: 0,
     pendingBalance: 0,
-    todayRenewal: 0,
-    lastMonthRenewal: 0,
-    memberPresent: 0
+    lowStockItems: 0,
+    todayExpenses: 0,
+    monthExpenses: 0,
+    netProfit: 0
   });
 
   useEffect(() => {
@@ -103,18 +107,18 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      {/* Stats Grid */}
+      {/* Stats Grid - Row 1 */}
       <div className="grid grid-cols-12 gap-6">
-        <StatCard title="Active Members" value={stats.activeMembers} trendValue="12%" type="primary" />
-        <StatCard title="Week Collection" value={`₹${stats.weekCollection}`} trendValue="5.4%" type="success" />
-        <StatCard title="Today Expiry" value={stats.todayExpiry} trendValue="Action Needed" type="danger" icon="warning" />
-        <StatCard title="Gym Occupancy" value={stats.memberPresent} trendValue="Current" type="info" />
+        <StatCard title="Active Members" value={stats.activeMembers} trendValue="Members" type="primary" icon="group" />
+        <StatCard title="Week Collection" value={`₹${stats.weekCollection.toLocaleString()}`} trendValue="Revenue" type="success" />
+        <StatCard title="Today Expiry" value={stats.todayExpiry} trendValue={stats.todayExpiry > 0 ? "Action Needed" : "None"} type={stats.todayExpiry > 0 ? "danger" : "primary"} icon="warning" />
+        <StatCard title="Low Stock Items" value={stats.lowStockItems} trendValue={stats.lowStockItems > 0 ? "Restock" : "OK"} type={stats.lowStockItems > 0 ? "danger" : "success"} icon="inventory" />
 
         {/* Second Row */}
-        <StatCard title="Today Collection" value={`₹${stats.todayCollection}`} trendValue="Daily" type="success" />
-        <StatCard title="Pending Balance" value={`₹${stats.pendingBalance}`} trendValue="Overdue" type="danger" icon="trending_down" />
-        <StatCard title="Today Renewal" value={`₹${stats.todayRenewal}`} trendValue="Income" type="success" />
-        <StatCard title="Last Month Renewal" value={`₹${stats.lastMonthRenewal}`} trendValue="History" type="primary" />
+        <StatCard title="Today Collection" value={`₹${stats.todayCollection.toLocaleString()}`} trendValue="Daily" type="success" />
+        <StatCard title="Month Collection" value={`₹${stats.monthCollection.toLocaleString()}`} trendValue="Monthly" type="primary" />
+        <StatCard title="Pending Balance" value={`₹${stats.pendingBalance.toLocaleString()}`} trendValue={stats.pendingBalance > 0 ? "Overdue" : "Clear"} type={stats.pendingBalance > 0 ? "danger" : "success"} icon="trending_down" />
+        <StatCard title="Month Profit" value={`₹${stats.netProfit.toLocaleString()}`} trendValue={stats.netProfit >= 0 ? "Profit" : "Loss"} type={stats.netProfit >= 0 ? "success" : "danger"} />
       </div>
 
       <div className="grid grid-cols-12 gap-6 h-96">
@@ -214,6 +218,11 @@ export default function Dashboard() {
           <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-2 px-2">Action Required</h3>
           <ExpriesOverdue />
         </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="col-span-12">
+        <QuickActions />
       </div>
     </div>
   )

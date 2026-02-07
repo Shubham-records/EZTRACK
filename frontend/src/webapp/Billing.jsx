@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { NewAdmission, ReAdmission, PerDayBasis, Renewal, ReturnMembership } from "./forms"
+import { NewAdmission, ReAdmission, PerDayBasis, Renewal, ReturnMembership, ProteinBilling, Expenses } from "./forms"
 import { UserPlus, UserCheck, RefreshCw, Calendar, ShoppingBag, RotateCcw, DollarSign } from 'lucide-react';
 
 export default function Billing() {
@@ -49,11 +49,10 @@ export default function Billing() {
           {selectedPage === "NewAdmission" && <NewAdmission />}
           {selectedPage === "ReAdmission" && <ReAdmission />}
           {selectedPage === "Renewal" && <Renewal />}
-          {selectedPage === "Protein" && <div className="p-10 text-center text-zinc-500">Protein Billing Component Coming Soon</div>}
-          {selectedPage === "ReturnMembership" && <div className="p-10 text-center text-zinc-500">Return Membership Component Coming Soon</div>}
-          {selectedPage === "ReturnProtein" && <div className="p-10 text-center text-zinc-500">Return Protein Component Coming Soon</div>}
-          {selectedPage === "Expenses" && <div className="p-10 text-center text-zinc-500">Expenses Component Coming Soon</div>}
-          {selectedPage === "PerDayBasis" && <div className="p-10 text-center text-zinc-500">Per Day Basis Component Coming Soon</div>}
+          {selectedPage === "Protein" && <ProteinBilling />}
+          {selectedPage === "ReturnMembership" && <ReturnMembership />}
+          {selectedPage === "Expenses" && <Expenses />}
+          {selectedPage === "PerDayBasis" && <PerDayBasis />}
         </div>
       </div>
     </section>

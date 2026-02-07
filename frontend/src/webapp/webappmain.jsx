@@ -5,10 +5,16 @@ import WebappFooter from "./webappFooter";
 import Dashboard from "./dashboard";
 import Billing from "./Billing";
 import TableComponent from "./table";
-import Insight from "./insights";
+
 import InvoiceManagerComponent from './invoice-manager';
 import BmiCalculator from './bmicalculator';
 import StaffComponent from './staff';
+import AdminSettings from './AdminSettings';
+import PendingBalances from './PendingBalances';
+import Analytics from './Analytics';
+import AuditLogs from './AuditLogs';
+import Invoices from './Invoices';
+import Expenses from './Expenses';
 
 export default function WebappMain() {
   const [selectedPage, setSelectedPage] = useState("Dashboard");
@@ -16,6 +22,15 @@ export default function WebappMain() {
   const [proteinsdata, Setproteinsdata] = useState([]);
 
   const { showToast } = useToast();
+
+  // Handle 401 Unauthorized - auto logout
+  const handleUnauthorized = () => {
+    console.warn('Session expired. Redirecting to login...');
+    localStorage.removeItem('eztracker_jwt_access_control_token');
+    localStorage.removeItem('eztracker_jwt_databaseName_control_token');
+    localStorage.removeItem('eztracker_user_data');
+    window.location.href = '/login';
+  };
 
   function handlenavbarClick(page) {
     setSelectedPage(page);
@@ -28,16 +43,23 @@ export default function WebappMain() {
         const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
 
         if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-          throw new Error('No token or database name found.');
+          handleUnauthorized();
+          return;
         }
 
-        const response = await fetch('/api/members', {
+        const response = await fetch('/api/members/', {
           headers: {
             Authorization: `Bearer ${jwtToken}`,
             'Content-Type': 'application/json',
             'X-Database-Name': eztracker_jwt_databaseName_control_token
           }
         });
+
+        // Auto logout on 401
+        if (response.status === 401) {
+          handleUnauthorized();
+          return;
+        }
 
         if (!response.ok) {
           throw new Error('Failed to fetch data');
@@ -62,9 +84,10 @@ export default function WebappMain() {
         const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
 
         if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
-          throw new Error('No token or database name found.');
+          handleUnauthorized();
+          return;
         }
-        const response = await fetch('/api/proteins',
+        const response = await fetch('/api/proteins/',
           {
             headers: {
               Authorization: `Bearer ${jwtToken}`,
@@ -73,6 +96,13 @@ export default function WebappMain() {
             }
           }
         );
+
+        // Auto logout on 401
+        if (response.status === 401) {
+          handleUnauthorized();
+          return;
+        }
+
         if (!response.ok) {
           throw new Error('Failed to fetch data');
         }
@@ -136,7 +166,7 @@ export default function WebappMain() {
   const inactiveMembersRecentDueDates = useMemo(() => {
     return gymmemberdata
       .filter(member =>
-        member.MembershipStatus === "Inactive" || member.MembershipStatus === "inactive"
+        (member.MembershipStatus === "Inactive" || member.MembershipStatus === "inactive") && member.NextDuedate
       )
       .map(member => ({
         ...member,
@@ -198,16 +228,21 @@ export default function WebappMain() {
 
         <div className="flex-1 overflow-y-auto p-8 stitch-scrollbar">
           {selectedPage === "Dashboard" && <Dashboard />}
-          {selectedPage === "Insight" && <Insight />}
+
           {selectedPage === "Billing" && <Billing />}
           {selectedPage === "Bmi" && <BmiCalculator />}
-          {selectedPage === "Invoices" && <InvoiceManagerComponent />}
+          {selectedPage === "Invoices" && <Invoices />}
+          {selectedPage === "Expenses" && <Expenses />}
           {selectedPage === "AllMember" && <TableComponent gymmemberdata={gymmemberdata} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
           {selectedPage === "ActiveMember" && <TableComponent gymmemberdata={activeMembersData} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
           {selectedPage === "MemberExpiries" && <TableComponent gymmemberdata={inactiveMembersRecentDueDates} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
           {selectedPage === "Protein" && <TableComponent gymmemberdata={proteinsdata} allColumns={proteins} dataType="protein" onUpdateData={handleproteinsData} />}
           {selectedPage === "AllStaff" && <StaffComponent />}
           {selectedPage === "AddStaff" && <StaffComponent />}
+          {selectedPage === "Settings" && <AdminSettings />}
+          {selectedPage === "Pending" && <PendingBalances />}
+          {selectedPage === "Analytics" && <Analytics />}
+          {selectedPage === "AuditLogs" && <AuditLogs />}
         </div>
       </main>
     </div>

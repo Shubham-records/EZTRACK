@@ -27,11 +27,147 @@ def map_member_response(member: Member):
         
     return m_dict
 
+@router.get("", response_model=List[MemberResponse])
 @router.get("/", response_model=List[MemberResponse])
 def get_members(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     members = db.query(Member).filter(Member.gymId == current_gym.id).all()
     # Map _id
     return [map_member_response(m) for m in members]
+
+
+@router.post("/check-duplicates")
+def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Check for duplicate members before import"""
+    members_list = data.get("members", [])
+    conflicts = []
+    clean = []
+    
+    for member_data in members_list:
+        name = member_data.get("Name", "")
+        mobile = member_data.get("Mobile")
+        whatsapp = member_data.get("Whatsapp")
+        
+        # Check if member exists by name or mobile
+        query = db.query(Member).filter(Member.gymId == current_gym.id)
+        
+        conditions = []
+        if name:
+            conditions.append(Member.Name == name)
+        if mobile:
+            try:
+                conditions.append(Member.Mobile == int(mobile))
+            except:
+                pass
+        if whatsapp:
+            try:
+                conditions.append(Member.Whatsapp == int(whatsapp))
+            except:
+                pass
+        
+        existing = None
+        if conditions:
+            existing = query.filter(or_(*conditions)).first()
+        
+        if existing:
+            conflicts.append({
+                "importData": member_data,
+                "existingMember": map_member_response(existing),
+                "matchedOn": "Name" if existing.Name == name else "Mobile/Whatsapp"
+            })
+        else:
+            clean.append(member_data)
+    
+    return {
+        "conflicts": conflicts,
+        "clean": clean,
+        "conflictCount": len(conflicts),
+        "cleanCount": len(clean)
+    }
+
+
+@router.post("/bulk-create")
+def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Bulk create members from import"""
+    members_list = data.get("members", [])
+    created_count = 0
+    
+    for member_data in members_list:
+        try:
+            new_member = Member(
+                gymId=current_gym.id,
+                Name=member_data.get("Name"),
+                MembershipReceiptnumber=member_data.get("MembershipReceiptnumber"),
+                Gender=member_data.get("Gender"),
+                Age=int(member_data.get("Age")) if member_data.get("Age") else None,
+                AccessStatus=member_data.get("AccessStatus", "no"),
+                height=float(member_data.get("height")) if member_data.get("height") else None,
+                weight=int(member_data.get("weight")) if member_data.get("weight") else None,
+                DateOfJoining=member_data.get("DateOfJoining"),
+                DateOfReJoin=member_data.get("DateOfReJoin"),
+                Billtype=member_data.get("Billtype"),
+                Address=member_data.get("Address"),
+                Whatsapp=int(member_data.get("Whatsapp")) if member_data.get("Whatsapp") else None,
+                PlanPeriod=member_data.get("PlanPeriod"),
+                PlanType=member_data.get("PlanType"),
+                MembershipStatus=member_data.get("MembershipStatus", "Active"),
+                MembershipExpiryDate=member_data.get("MembershipExpiryDate"),
+                LastPaymentDate=member_data.get("LastPaymentDate"),
+                NextDuedate=member_data.get("NextDuedate"),
+                LastPaymentAmount=int(member_data.get("LastPaymentAmount")) if member_data.get("LastPaymentAmount") else None,
+                RenewalReceiptNumber=member_data.get("RenewalReceiptNumber"),
+                Aadhaar=int(member_data.get("Aadhaar")) if member_data.get("Aadhaar") else None,
+                Remark=member_data.get("Remark"),
+                Mobile=int(member_data.get("Mobile")) if member_data.get("Mobile") else None,
+                extraDays=member_data.get("extraDays"),
+                agreeTerms=member_data.get("agreeTerms") in [True, "true", "True", "1", 1],
+                lastEditedBy=current_gym.username,
+                editReason='Bulk Import'
+            )
+            db.add(new_member)
+            created_count += 1
+        except Exception as e:
+            print(f"Error creating member: {e}")
+            continue
+    
+    db.commit()
+    return {"message": f"Created {created_count} members", "count": created_count}
+
+
+@router.post("/bulk-update")
+def bulk_update_members(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Bulk update members from import merge"""
+    members_list = data.get("members", [])
+    updated_count = 0
+    
+    for member_data in members_list:
+        member_id = member_data.get("id")
+        if not member_id:
+            continue
+            
+        member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+        if not member:
+            continue
+        
+        # Update fields
+        for key, value in member_data.items():
+            if key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt']:
+                continue
+            if hasattr(member, key) and value is not None:
+                try:
+                    if key in ['Mobile', 'Whatsapp', 'Aadhaar', 'Age', 'weight', 'LastPaymentAmount']:
+                        value = int(value) if value else None
+                    elif key == 'height':
+                        value = float(value) if value else None
+                    setattr(member, key, value)
+                except:
+                    pass
+        
+        member.lastEditedBy = current_gym.username
+        member.editReason = 'Bulk Update/Merge'
+        updated_count += 1
+    
+    db.commit()
+    return {"message": f"Updated {updated_count} members", "count": updated_count}
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):

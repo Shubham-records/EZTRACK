@@ -148,7 +148,7 @@ export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, d
             return count;
         } else {
             const err = await finalResponse.json();
-            throw new Error(`Failed to create ${dataType}s: ` + (err.message || ''));
+            throw new Error(`Failed to create ${dataType}s: ` + (err.detail || err.message || 'Unknown error'));
         }
     };
 

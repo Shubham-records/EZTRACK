@@ -1,41 +1,217 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Member, Invoice
+from models.all_models import Gym, Member, Invoice, ProteinStock, Expense, GymSettings, PendingBalance
 
 router = APIRouter()
 
+
 @router.get("/stats")
 def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    today = datetime.now().date()
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today.weekday())
+    month_start = today_start.replace(day=1)
+    
     # 1. Active Members
     active_members = db.query(Member).filter(
         Member.gymId == current_gym.id,
         Member.MembershipStatus.in_(['Active', 'active'])
     ).count()
     
-    # 2. Today's Collection
-    # Using Invoices
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 2. Today's Expiry (members whose MembershipExpiryDate is today)
+    today_str = today.strftime('%Y-%m-%d')
+    today_expiry = db.query(Member).filter(
+        Member.gymId == current_gym.id,
+        Member.MembershipExpiryDate == today_str
+    ).count()
     
-    # Calculate sum of Invoice.total for today
-    today_collection_query = db.query(func.sum(Invoice.total)).filter(
+    # 3. Today's Collection
+    today_collection = db.query(func.sum(Invoice.total)).filter(
         Invoice.gymId == current_gym.id,
         Invoice.invoiceDate >= today_start
-    )
-    today_collection = today_collection_query.scalar() or 0.0
+    ).scalar() or 0.0
+    
+    # 4. Week Collection
+    week_collection = db.query(func.sum(Invoice.total)).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.invoiceDate >= week_start
+    ).scalar() or 0.0
+    
+    # 5. Month Collection
+    month_collection = db.query(func.sum(Invoice.total)).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.invoiceDate >= month_start
+    ).scalar() or 0.0
+    
+    # 6. Pending Balance
+    pending_balance = db.query(func.sum(PendingBalance.amount)).filter(
+        PendingBalance.gymId == current_gym.id,
+        PendingBalance.status.in_(['pending', 'partial'])
+    ).scalar() or 0.0
+    
+    # 7. Low Stock Count
+    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    default_threshold = settings.lowStockThreshold if settings else 5
+    
+    proteins = db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()
+    low_stock_count = 0
+    for p in proteins:
+        try:
+            qty = int(p.Quantity) if p.Quantity else 0
+            threshold = p.StockThreshold or default_threshold
+            if qty < threshold:
+                low_stock_count += 1
+        except (ValueError, TypeError):
+            pass
+    
+    # 8. Expiring This Week
+    week_end = today + timedelta(days=7)
+    week_end_str = week_end.strftime('%Y-%m-%d')
+    expiring_this_week = db.query(Member).filter(
+        Member.gymId == current_gym.id,
+        Member.MembershipExpiryDate >= today_str,
+        Member.MembershipExpiryDate <= week_end_str,
+        Member.MembershipStatus.in_(['Active', 'active'])
+    ).count()
+    
+    # 9. Today's Expenses
+    today_expenses = db.query(func.sum(Expense.amount)).filter(
+        Expense.gymId == current_gym.id,
+        Expense.date == today_str
+    ).scalar() or 0.0
+    
+    # 10. Month Expenses
+    month_start_str = month_start.strftime('%Y-%m-%d')
+    month_expenses = db.query(func.sum(Expense.amount)).filter(
+        Expense.gymId == current_gym.id,
+        Expense.date >= month_start_str
+    ).scalar() or 0.0
     
     return {
         "activeMembers": active_members,
-        "todayExpiry": 0,
-        "todayCollection": today_collection,
-        "weekCollection": 0,
-        "pendingBalance": 0,
-        "todayRenewal": 0,
-        "lastMonthRenewal": 0,
-        "memberPresent": 0
+        "todayExpiry": today_expiry,
+        "expiringThisWeek": expiring_this_week,
+        "todayCollection": round(today_collection, 2),
+        "weekCollection": round(week_collection, 2),
+        "monthCollection": round(month_collection, 2),
+        "pendingBalance": round(pending_balance, 2),
+        "lowStockItems": low_stock_count,
+        "todayExpenses": round(today_expenses, 2),
+        "monthExpenses": round(month_expenses, 2),
+        "netProfit": round(month_collection - month_expenses, 2)
     }
+
+
+@router.get("/alerts")
+def get_dashboard_alerts(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Get important alerts for the dashboard."""
+    today = datetime.now().date()
+    today_str = today.strftime('%Y-%m-%d')
+    
+    alerts = []
+    
+    # Get gym settings
+    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    default_threshold = settings.lowStockThreshold if settings else 5
+    
+    # 1. Members expiring today
+    expiring_today = db.query(Member).filter(
+        Member.gymId == current_gym.id,
+        Member.MembershipExpiryDate == today_str,
+        Member.MembershipStatus.in_(['Active', 'active'])
+    ).all()
+    
+    for m in expiring_today:
+        alerts.append({
+            "type": "expiry",
+            "severity": "high",
+            "title": f"{m.Name}'s membership expires today",
+            "entityId": m.id,
+            "entityType": "member"
+        })
+    
+    # 2. Low stock items
+    proteins = db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()
+    for p in proteins:
+        try:
+            qty = int(p.Quantity) if p.Quantity else 0
+            threshold = p.StockThreshold or default_threshold
+            if qty < threshold:
+                alerts.append({
+                    "type": "low_stock",
+                    "severity": "medium",
+                    "title": f"{p.ProductName or p.Brand} is low on stock ({qty} remaining)",
+                    "entityId": p.id,
+                    "entityType": "protein"
+                })
+        except (ValueError, TypeError):
+            pass
+    
+    # 3. Pending balances overdue
+    pending = db.query(PendingBalance).filter(
+        PendingBalance.gymId == current_gym.id,
+        PendingBalance.status.in_(['pending', 'partial']),
+        PendingBalance.dueDate < today_str
+    ).all()
+    
+    for pb in pending:
+        alerts.append({
+            "type": "overdue",
+            "severity": "high",
+            "title": f"Overdue payment of ₹{pb.amount}",
+            "entityId": pb.id,
+            "entityType": "pending_balance"
+        })
+    
+    return {
+        "count": len(alerts),
+        "alerts": alerts[:10]  # Limit to 10 alerts
+    }
+
+
+@router.get("/recent-activity")
+def get_recent_activity(
+    limit: int = 10,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    """Get recent activity for the dashboard."""
+    activities = []
+    
+    # Recent invoices
+    recent_invoices = db.query(Invoice).filter(
+        Invoice.gymId == current_gym.id
+    ).order_by(Invoice.createdAt.desc()).limit(limit).all()
+    
+    for inv in recent_invoices:
+        activities.append({
+            "type": "invoice",
+            "title": f"Invoice for {inv.customerName or 'Customer'}",
+            "amount": inv.total,
+            "timestamp": inv.createdAt.isoformat() if inv.createdAt else None,
+            "entityId": inv.id
+        })
+    
+    # Recent members
+    recent_members = db.query(Member).filter(
+        Member.gymId == current_gym.id
+    ).order_by(Member.createdAt.desc()).limit(limit).all()
+    
+    for m in recent_members:
+        activities.append({
+            "type": "member",
+            "title": f"New member: {m.Name}",
+            "amount": m.LastPaymentAmount,
+            "timestamp": m.createdAt.isoformat() if m.createdAt else None,
+            "entityId": m.id
+        })
+    
+    # Sort by timestamp and return top items
+    activities.sort(key=lambda x: x.get('timestamp') or '', reverse=True)
+    return activities[:limit]

@@ -9,7 +9,6 @@ import {
   Users,
   Calendar,
   DollarSign,
-  TrendingUp,
   UserCheck,
   ChevronDown,
   ChevronRight,
@@ -17,7 +16,11 @@ import {
   Utensils,
   LogOut,
   LayoutDashboard,
-  ShieldCheck
+  ShieldCheck,
+  Settings,
+  Wallet,
+  BarChart2,
+  History
 } from 'lucide-react';
 
 export default function WebappSidebar({ clickedBUTTON }) {
@@ -58,8 +61,8 @@ export default function WebappSidebar({ clickedBUTTON }) {
       dropdownItems: []
     },
     {
-      name: 'Insight',
-      icon: TrendingUp,
+      name: 'Analytics',
+      icon: BarChart2,
       dropdownItems: []
     },
     {
@@ -91,6 +94,16 @@ export default function WebappSidebar({ clickedBUTTON }) {
       name: 'Attendance',
       icon: Calendar,
       dropdownItems: ['Attendance data', "Add face"]
+    },
+    {
+      name: 'Settings',
+      icon: Settings,
+      dropdownItems: []
+    },
+    {
+      name: 'AuditLogs',
+      icon: History,
+      dropdownItems: []
     },
   ];
 
@@ -169,8 +182,8 @@ export default function WebappSidebar({ clickedBUTTON }) {
             <div key={item.name}>
               <button
                 className={`w-full group flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-md transition-colors ${isActive
-                    ? 'bg-primary/10 text-primary'
-                    : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-white'
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-white'
                   }`}
                 onClick={() => handleItemClick(item.name)}
               >
@@ -192,8 +205,8 @@ export default function WebappSidebar({ clickedBUTTON }) {
                       <button
                         key={dropdownItem}
                         className={`w-full flex items-center px-3 py-2 text-xs font-medium rounded-md transition-colors ${isDropdownActive
-                            ? 'text-primary bg-primary/5'
-                            : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
+                          ? 'text-primary bg-primary/5'
+                          : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
                           }`}
                         onClick={(e) => {
                           e.stopPropagation();
