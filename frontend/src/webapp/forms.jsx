@@ -128,7 +128,7 @@ export function NewAdmission() {
   };
 
   return (
-    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-4xl mx-auto">
+    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">New Admission</h1>
@@ -330,7 +330,7 @@ export function ReAdmission() {
   };
 
   return (
-    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-4xl mx-auto">
+    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Re-Admission</h1>
@@ -470,7 +470,7 @@ export function Renewal() {
   };
 
   return (
-    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-4xl mx-auto">
+    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Renewal</h1>
@@ -767,7 +767,7 @@ export function ProteinBilling() {
   };
 
   return (
-    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-4xl mx-auto">
+    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Protein Billing</h1>
@@ -926,7 +926,7 @@ export function Expenses() {
   };
 
   return (
-    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-4xl mx-auto">
+    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-6">
