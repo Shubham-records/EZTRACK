@@ -35,6 +35,13 @@ def run_startup_migrations():
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "phone" VARCHAR(50)',
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "paidAmount" FLOAT DEFAULT 0',
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "notes" TEXT',
+        # GymSettings table columns
+        'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "invoiceStartNumber" INTEGER DEFAULT 1001',
+        'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "admissionExpiryDays" INTEGER DEFAULT 365',
+        'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "readmissionDiscount" INTEGER DEFAULT 50',
+        'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "expiryRange" INTEGER DEFAULT 30',
+        'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "postExpiryGraceDays" INTEGER DEFAULT 30',
+        'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "reminderDaysBefore" INTEGER DEFAULT 3',
     ]
     
     try:

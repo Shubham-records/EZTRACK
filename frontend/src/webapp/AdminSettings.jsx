@@ -134,20 +134,67 @@ export default function AdminSettings() {
 
     const handleSave = async () => {
         setSaving(true);
+        let success = true;
+
         try {
-            const res = await fetch('/api/settings', {
-                method: 'PUT',
-                headers: getAuthHeaders(),
-                body: JSON.stringify(settings)
-            });
-            if (res.ok) {
-                showToast('Settings saved successfully', 'success');
-                setInitialSettings(settings); // Update initial state to match saved
-            } else {
-                throw new Error('Failed to save');
+            // Save Settings (General, GST, Billing, Stock, Notifications)
+            if (JSON.stringify(settings) !== JSON.stringify(initialSettings)) {
+                const res = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(settings)
+                });
+                if (res.ok) {
+                    setInitialSettings(settings);
+                } else {
+                    success = false;
+                    showToast('Failed to save general settings', 'error');
+                }
+            }
+
+            // Save Pricing Matrix
+            if (JSON.stringify(pricingMatrix) !== JSON.stringify(initialPricingMatrix)) {
+                const data = {};
+                for (const [plan, periods] of Object.entries(pricingMatrix)) {
+                    data[plan] = {};
+                    for (const [period, config] of Object.entries(periods)) {
+                        data[plan][period] = config.price;
+                    }
+                }
+
+                const res = await fetch('/api/settings/pricing/member-matrix/bulk', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(data)
+                });
+                if (res.ok) {
+                    setInitialPricingMatrix(pricingMatrix);
+                } else {
+                    success = false;
+                    showToast('Failed to save pricing', 'error');
+                }
+            }
+
+            // Save Protein Defaults
+            if (JSON.stringify(proteinDefaults) !== JSON.stringify(initialProteinDefaults)) {
+                const res = await fetch('/api/settings/pricing/protein-defaults/bulk', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(proteinDefaults)
+                });
+                if (res.ok) {
+                    setInitialProteinDefaults(proteinDefaults);
+                } else {
+                    success = false;
+                    showToast('Failed to save protein defaults', 'error');
+                }
+            }
+
+            if (success) {
+                showToast('All changes saved successfully', 'success');
             }
         } catch (e) {
-            showToast('Failed to save settings', 'error');
+            showToast('An error occurred while saving', 'error');
         } finally {
             setSaving(false);
         }
@@ -173,34 +220,7 @@ export default function AdminSettings() {
         }));
     };
 
-    const handleSavePricing = async () => {
-        setSaving(true);
-        try {
-            const data = {};
-            for (const [plan, periods] of Object.entries(pricingMatrix)) {
-                data[plan] = {};
-                for (const [period, config] of Object.entries(periods)) {
-                    data[plan][period] = config.price;
-                }
-            }
-
-            const res = await fetch('/api/settings/pricing/member-matrix/bulk', {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: JSON.stringify(data)
-            });
-            if (res.ok) {
-                showToast('Pricing saved successfully', 'success');
-                setInitialPricingMatrix(pricingMatrix); // Update initial state
-            } else {
-                throw new Error('Failed to save');
-            }
-        } catch (e) {
-            showToast('Failed to save pricing', 'error');
-        } finally {
-            setSaving(false);
-        }
-    };
+    // Removed individual save handlers as we now have a global save
 
     const handleProteinDefaultChange = (brand, field, value) => {
         setProteinDefaults(prev => ({
@@ -212,32 +232,7 @@ export default function AdminSettings() {
         }));
     };
 
-    const handleSaveProteinDefaults = async () => {
-        setSaving(true);
-        try {
-            const res = await fetch('/api/settings/pricing/protein-defaults/bulk', {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: JSON.stringify(proteinDefaults)
-            });
-            if (res.ok) {
-                showToast('Protein defaults saved successfully', 'success');
-                setInitialProteinDefaults(proteinDefaults);
-            } else {
-                throw new Error('Failed to save');
-            }
-        } catch (e) {
-            showToast('Failed to save protein defaults', 'error');
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    const getSaveHandler = () => {
-        if (activeTab === 'pricing') return handleSavePricing;
-        if (activeTab === 'protein') return handleSaveProteinDefaults;
-        return handleSave;
-    };
+    // Removed individual save handlers as we now have a global save
 
     if (loading) {
         return (
@@ -251,14 +246,11 @@ export default function AdminSettings() {
     const defaultBrands = ['Optimum Nutrition', 'MuscleBlaze', 'Dymatize', 'MyProtein', 'GNC', 'MuscleTech'];
 
     const hasChanges = () => {
-        if (activeTab === 'pricing') {
-            return JSON.stringify(pricingMatrix) !== JSON.stringify(initialPricingMatrix);
-        }
-        if (activeTab === 'protein') {
-            return JSON.stringify(proteinDefaults) !== JSON.stringify(initialProteinDefaults);
-        }
-        // General, GST, Billing, Stock, Notifications -> all in 'settings'
-        return JSON.stringify(settings) !== JSON.stringify(initialSettings);
+        const settingsChanged = JSON.stringify(settings) !== JSON.stringify(initialSettings);
+        const pricingChanged = JSON.stringify(pricingMatrix) !== JSON.stringify(initialPricingMatrix);
+        const proteinChanged = JSON.stringify(proteinDefaults) !== JSON.stringify(initialProteinDefaults);
+
+        return settingsChanged || pricingChanged || proteinChanged;
     };
 
     const showSaveButton = hasChanges();
@@ -273,7 +265,7 @@ export default function AdminSettings() {
                 </div>
                 {showSaveButton && (
                     <button
-                        onClick={getSaveHandler()}
+                        onClick={handleSave}
                         disabled={saving}
                         className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white bg-primary hover:bg-teal-700 shadow-md transition-all disabled:opacity-50 animate-in fade-in slide-in-from-right-4 duration-300"
                     >
