@@ -14,7 +14,6 @@ class GymSettingsBase(BaseModel):
     enableGST: Optional[bool] = False
     memberGSTPercent: Optional[float] = 18.0
     proteinGSTPercent: Optional[float] = 18.0
-    perdayGSTPercent: Optional[float] = 18.0
     gstin: Optional[str] = None
     showGSTBreakup: Optional[bool] = True
     hsnService: Optional[str] = "99979"
@@ -32,6 +31,10 @@ class GymSettingsBase(BaseModel):
     lowStockThreshold: Optional[int] = 5
     reorderPoint: Optional[int] = 10
     expiryWarningDays: Optional[int] = 30
+    expiryRange: Optional[int] = 30 # New field
+    postExpiryGraceDays: Optional[int] = 30 # Grace period for expiry alerts
+    admissionExpiryDays: Optional[int] = 365 # Admission expiry
+    readmissionDiscount: Optional[int] = 50 # Readmission discount %
     
     # Notifications
     enableWhatsAppReminders: Optional[bool] = True

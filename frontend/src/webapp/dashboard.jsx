@@ -1,6 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import ExpriesOverdue from './expriesOverdue'
-import QuickActions from './QuickActions'
+import React, { useEffect, useState, useMemo } from 'react';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Legend
+} from 'recharts';
+import { Calendar } from 'lucide-react';
+import ExpriesOverdue from './expriesOverdue';
 
 const StatCard = ({ title, value, subtext, trend, trendValue, type = "primary", icon = "trending_up" }) => {
   // Styles based on type
@@ -65,45 +69,118 @@ const StatCard = ({ title, value, subtext, trend, trendValue, type = "primary", 
   );
 };
 
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
+
 export default function Dashboard() {
+  const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
-    activeMembers: 0,
-    todayExpiry: 0,
-    expiringThisWeek: 0,
-    todayCollection: 0,
-    weekCollection: 0,
-    monthCollection: 0,
-    pendingBalance: 0,
-    lowStockItems: 0,
-    todayExpenses: 0,
-    monthExpenses: 0,
-    netProfit: 0
+    activeMembers: 0, todayExpiry: 0, expiringThisWeek: 0,
+    todayCollection: 0, weekCollection: 0, monthCollection: 0,
+    pendingBalance: 0, lowStockItems: 0, todayExpenses: 0,
+    monthExpenses: 0, netProfit: 0
+  });
+  const [invoices, setInvoices] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [dateRange, setDateRange] = useState({
+    start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+    end: new Date().toISOString().split('T')[0]
   });
 
   useEffect(() => {
-    const fetchStats = async () => {
+    const fetchData = async () => {
       try {
         const token = localStorage.getItem('eztracker_jwt_access_control_token');
         const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token) return;
+        const headers = {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'X-Database-Name': dbName
+        };
 
-        const res = await fetch('/api/dashboard/stats', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'X-Database-Name': dbName
-          }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setStats(data);
-        }
+        const [statsRes, invoicesRes, expensesRes] = await Promise.all([
+          fetch('/api/dashboard/stats', { headers }),
+          fetch('/api/invoices', { headers }),
+          fetch('/api/expenses', { headers })
+        ]);
+
+        if (statsRes.ok) setStats(await statsRes.json());
+        if (invoicesRes.ok) setInvoices(await invoicesRes.json());
+        if (expensesRes.ok) setExpenses(await expensesRes.json());
       } catch (e) {
-        console.error(e);
+        console.error("Failed to fetch dashboard data", e);
+      } finally {
+        setLoading(false);
       }
     };
-    fetchStats();
+    fetchData();
   }, []);
+
+  // Process Data for Charts
+  const chartData = useMemo(() => {
+    // 1. Revenue vs Expenses (Last 6 Months)
+    const months = {};
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      months[key] = { name: d.toLocaleString('default', { month: 'short' }), revenue: 0, expenses: 0 };
+    }
+
+    invoices.forEach(inv => {
+      if (!inv.invoiceDate) return;
+      const key = inv.invoiceDate.substring(0, 7); // YYYY-MM
+      if (months[key]) months[key].revenue += (inv.total || 0);
+    });
+
+    expenses.forEach(exp => {
+      if (!exp.date) return;
+      const key = exp.date.substring(0, 7); // YYYY-MM
+      if (months[key]) months[key].expenses += (exp.amount || 0);
+    });
+
+    const revenueGrowth = Object.values(months);
+
+    // Filter by Date Range for Detail Charts
+    const start = new Date(dateRange.start);
+    const end = new Date(dateRange.end);
+    end.setHours(23, 59, 59, 999);
+
+    const filteredInvoices = invoices.filter(i => {
+      const d = new Date(i.invoiceDate);
+      return d >= start && d <= end;
+    });
+
+    const filteredExpenses = expenses.filter(e => {
+      const d = new Date(e.date);
+      return d >= start && d <= end;
+    });
+
+    // 2. Income Sources (by Payment Mode)
+    const incomeSourcesMap = {};
+    filteredInvoices.forEach(inv => {
+      const mode = inv.paymentMode || 'Unknown';
+      incomeSourcesMap[mode] = (incomeSourcesMap[mode] || 0) + (inv.total || 0);
+    });
+    const incomeSources = Object.entries(incomeSourcesMap).map(([name, value]) => ({ name, value }));
+
+    // 3. Expense Sources (by Category)
+    const expenseSourcesMap = {};
+    filteredExpenses.forEach(exp => {
+      const cat = exp.category || 'Other';
+      expenseSourcesMap[cat] = (expenseSourcesMap[cat] || 0) + (exp.amount || 0);
+    });
+    const expenseSources = Object.entries(expenseSourcesMap).map(([name, value]) => ({ name, value }));
+
+    return { revenueGrowth, incomeSources, expenseSources };
+  }, [invoices, expenses, dateRange]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -121,94 +198,132 @@ export default function Dashboard() {
         <StatCard title="Month Profit" value={`₹${stats.netProfit.toLocaleString()}`} trendValue={stats.netProfit >= 0 ? "Profit" : "Loss"} type={stats.netProfit >= 0 ? "success" : "danger"} />
       </div>
 
-      <div className="grid grid-cols-12 gap-6 h-96">
-        {/* Revenue Chart Section */}
-        <div className="col-span-12 lg:col-span-8 bg-surface-light dark:bg-surface-dark p-6 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 flex flex-col">
+      <div className="grid grid-cols-12 gap-6">
+        {/* Revenue & Growth Chart */}
+        <div className="col-span-12 lg:col-span-8 bg-surface-light dark:bg-surface-dark p-6 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 flex flex-col h-[400px]">
           <div className="flex justify-between items-center mb-6">
             <div>
               <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Revenue & Growth</h3>
-              <p className="text-sm text-zinc-500">Year-over-year comparison</p>
-            </div>
-            <div className="flex items-center space-x-4">
-              <span className="flex items-center text-xs font-semibold text-zinc-500">
-                <span className="w-3 h-3 rounded-full bg-primary mr-2"></span> Current
-              </span>
-              <span className="flex items-center text-xs font-semibold text-zinc-500">
-                <span className="w-3 h-3 rounded-full bg-zinc-300 dark:bg-zinc-700 mr-2"></span> Previous
-              </span>
-              <select className="ml-2 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-semibold rounded-md py-1.5 px-3 text-zinc-600 dark:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-primary">
-                <option>Last 30 Days</option>
-                <option>Last Quarter</option>
-                <option>This Year</option>
-              </select>
+              <p className="text-sm text-zinc-500">Income vs Expenses (Last 6 Months)</p>
             </div>
           </div>
-          <div className="flex-1 w-full relative">
-            <div className="absolute inset-0 flex flex-col justify-between text-xs text-zinc-400 dark:text-zinc-600">
-              <div className="w-full border-b border-dashed border-zinc-200 dark:border-zinc-800/50 pb-0"></div>
-              <div className="w-full border-b border-dashed border-zinc-200 dark:border-zinc-800/50 pb-0"></div>
-              <div className="w-full border-b border-dashed border-zinc-200 dark:border-zinc-800/50 pb-0"></div>
-              <div className="w-full border-b border-dashed border-zinc-200 dark:border-zinc-800/50 pb-0"></div>
-              <div className="w-full border-b border-zinc-200 dark:border-zinc-800 pb-0"></div>
-            </div>
-            <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 50">
-              <path d="M0 35 C 20 35, 30 40, 50 25 S 70 20, 100 30" fill="none" stroke="#d4d4d8" strokeDasharray="4" strokeWidth="2" vectorEffect="non-scaling-stroke"></path>
-              <defs>
-                <linearGradient id="fillGradient" x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="0%" stopColor="#008080" stopOpacity="0.15"></stop>
-                  <stop offset="100%" stopColor="#008080" stopOpacity="0"></stop>
-                </linearGradient>
-              </defs>
-              <path d="M0 40 C 15 35, 25 10, 40 15 S 60 40, 80 10 S 90 15, 100 5 V 50 H 0 Z" fill="url(#fillGradient)" stroke="none" vectorEffect="non-scaling-stroke"></path>
-              <path d="M0 40 C 15 35, 25 10, 40 15 S 60 40, 80 10 S 90 15, 100 5" fill="none" stroke="#008080" strokeLinecap="round" strokeWidth="3" vectorEffect="non-scaling-stroke"></path>
-              <circle className="dark:fill-zinc-800" cx="80" cy="10" fill="#ffffff" r="4" stroke="#008080" strokeWidth="2"></circle>
-            </svg>
-          </div>
-          <div className="flex justify-between text-xs font-bold text-zinc-400 mt-4 px-2">
-            <span>MON</span>
-            <span>TUE</span>
-            <span>WED</span>
-            <span>THU</span>
-            <span>FRI</span>
-            <span>SAT</span>
-            <span>SUN</span>
+          <div className="flex-1 w-full min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData.revenueGrowth} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="name" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
+                <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `₹${value}`} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                <Area type="monotone" dataKey="revenue" stroke="#10b981" fillOpacity={1} fill="url(#colorRev)" name="Revenue" />
+                <Area type="monotone" dataKey="expenses" stroke="#f43f5e" fillOpacity={1} fill="url(#colorExp)" name="Expenses" />
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Live Activity Section */}
-        <div className="col-span-12 lg:col-span-4 bg-surface-light dark:bg-surface-dark p-0 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden">
-          <div className="p-6 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center">
-            <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Live Activity</h3>
-            <div className="flex items-center">
-              <span className="relative flex h-2 w-2 mr-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
+        {/* Income & Expense Analysis Breakdown */}
+        <div className="col-span-12 lg:col-span-4 bg-surface-light dark:bg-surface-dark p-6 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 flex flex-col h-[400px]">
+          <div className="mb-4">
+            <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Income vs Expense</h3>
+            <div className="flex items-center gap-2 mt-2 bg-zinc-100 dark:bg-zinc-800 p-2 rounded-lg">
+              <Calendar size={14} className="text-zinc-500" />
+              <input
+                type="date"
+                value={dateRange.start}
+                onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                className="bg-transparent text-xs font-medium border-none focus:ring-0 p-0 text-zinc-600 dark:text-zinc-300 w-24"
+              />
+              <span className="text-zinc-400">-</span>
+              <input
+                type="date"
+                value={dateRange.end}
+                onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                className="bg-transparent text-xs font-medium border-none focus:ring-0 p-0 text-zinc-600 dark:text-zinc-300 w-24"
+              />
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            <div className="flex items-start space-x-3">
-              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold">SJ</div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-zinc-900 dark:text-white truncate">Sarah Jenkins</p>
-                <p className="text-xs text-zinc-500 font-medium">Checked in at Front Desk</p>
+
+          <div className="flex-1 overflow-y-auto pr-2 space-y-6">
+            {/* Income Breakdown */}
+            <div>
+              <h4 className="text-xs font-bold text-emerald-600 uppercase mb-2 flex justify-between">
+                <span>Income Sources</span>
+                <span>₹{chartData.incomeSources.reduce((a, b) => a + b.value, 0).toLocaleString()}</span>
+              </h4>
+              <div className="h-40">
+                {chartData.incomeSources.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={chartData.incomeSources}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={40}
+                        outerRadius={60}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {chartData.incomeSources.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value) => `₹${value.toLocaleString()}`} />
+                      <Legend verticalAlign="middle" align="right" layout="vertical" iconSize={8} wrapperStyle={{ fontSize: '10px' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-xs text-zinc-400">No data for selected period</div>
+                )}
               </div>
-              <span className="text-[10px] font-bold text-zinc-400 uppercase whitespace-nowrap">2m ago</span>
             </div>
-            {/* More items can be added here */}
-            <div className="flex items-start space-x-3">
-              <div className="w-10 h-10 rounded-full bg-teal-50 dark:bg-teal-900/30 flex items-center justify-center text-primary border border-teal-100 dark:border-teal-800/50">
-                <span className="material-symbols-outlined text-sm">payment</span>
+
+            <div className="border-t border-dashed border-zinc-200 dark:border-zinc-800"></div>
+
+            {/* Expense Breakdown */}
+            <div>
+              <h4 className="text-xs font-bold text-rose-500 uppercase mb-2 flex justify-between">
+                <span>Expense Breakdown</span>
+                <span>₹{chartData.expenseSources.reduce((a, b) => a + b.value, 0).toLocaleString()}</span>
+              </h4>
+              <div className="h-40">
+                {chartData.expenseSources.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={chartData.expenseSources}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={40}
+                        outerRadius={60}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {chartData.expenseSources.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[(index + 2) % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value) => `₹${value.toLocaleString()}`} />
+                      <Legend verticalAlign="middle" align="right" layout="vertical" iconSize={8} wrapperStyle={{ fontSize: '10px' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-xs text-zinc-400">No data for selected period</div>
+                )}
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-zinc-900 dark:text-white truncate">Membership Renewed</p>
-                <p className="text-xs text-zinc-500 font-medium">Michael Ross - Pro Plan</p>
-              </div>
-              <span className="text-[10px] font-bold text-zinc-400 uppercase whitespace-nowrap">15m ago</span>
             </div>
-          </div>
-          <div className="p-3 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/30 text-center">
-            <a className="text-xs font-bold text-primary hover:text-[#006666] transition-colors" href="#">VIEW ALL ACTIVITY</a>
           </div>
         </div>
       </div>
@@ -220,10 +335,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="col-span-12">
-        <QuickActions />
-      </div>
+
     </div>
   )
 }

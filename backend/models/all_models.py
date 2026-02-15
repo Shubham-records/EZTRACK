@@ -203,7 +203,6 @@ class GymSettings(Base):
     enableGST = Column(Boolean, default=False)
     memberGSTPercent = Column(Float, default=18.0)
     proteinGSTPercent = Column(Float, default=18.0)
-    perdayGSTPercent = Column(Float, default=18.0)
     gstin = Column(String, nullable=True)
     showGSTBreakup = Column(Boolean, default=True)
     hsnService = Column(String, default="99979")
@@ -221,6 +220,10 @@ class GymSettings(Base):
     lowStockThreshold = Column(Integer, default=5)
     reorderPoint = Column(Integer, default=10)
     expiryWarningDays = Column(Integer, default=30)
+    expiryRange = Column(Integer, default=30) # Configure expiry range for calculation
+    postExpiryGraceDays = Column(Integer, default=30) # Days after expiry to still show in "Expiry Soon"
+    admissionExpiryDays = Column(Integer, default=365) # Days after due date when admission expires
+    readmissionDiscount = Column(Integer, default=50) # Percentage discount for readmission
 
     # Notification Settings
     enableWhatsAppReminders = Column(Boolean, default=True)

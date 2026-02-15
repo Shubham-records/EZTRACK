@@ -57,7 +57,7 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
     
     # 7. Low Stock Count
     settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
-    default_threshold = settings.lowStockThreshold if settings else 5
+    default_threshold = settings.lowStockThreshold if settings else 0
     
     proteins = db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()
     low_stock_count = 0
@@ -112,36 +112,75 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
 def get_dashboard_alerts(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     """Get important alerts for the dashboard."""
     today = datetime.now().date()
-    today_str = today.strftime('%Y-%m-%d')
     
     alerts = []
     
     # Get gym settings
     settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
-    default_threshold = settings.lowStockThreshold if settings else 5
+    default_stock_threshold = settings.lowStockThreshold if settings else 0
+    expiry_range = settings.expiryRange if settings and settings.expiryRange else 0
+    grace_period = settings.postExpiryGraceDays if settings and settings.postExpiryGraceDays else 30
     
-    # 1. Members expiring today
-    expiring_today = db.query(Member).filter(
-        Member.gymId == current_gym.id,
-        Member.MembershipExpiryDate == today_str,
-        Member.MembershipStatus.in_(['Active', 'active'])
-    ).all()
+    # 1. Members Alerts
+    members = db.query(Member).filter(Member.gymId == current_gym.id).all()
     
-    for m in expiring_today:
-        alerts.append({
-            "type": "expiry",
-            "severity": "high",
-            "title": f"{m.Name}'s membership expires today",
-            "entityId": m.id,
-            "entityType": "member"
-        })
-    
+    for m in members:
+        if not m.NextDuedate:
+            continue
+            
+        try:
+            try:
+                due_date = datetime.strptime(m.NextDuedate, "%d/%m/%Y").date()
+            except ValueError:
+                due_date = datetime.strptime(m.NextDuedate, "%Y-%m-%d").date()
+            
+            days_diff = (due_date - today).days
+            # days_diff positive = future expiry
+            # days_diff negative = past expiry (e.g. -5 means expired 5 days ago)
+            
+            # Logic:
+            # Overdue: Expired BEYOND grace period (days_diff < -grace_period)
+            # Expiry Soon: Within range (future) OR Within grace period (past)
+            # Range: [-grace_period, expiry_range]
+            
+            if days_diff < -grace_period:
+                 alerts.append({
+                    "type": "overdue",
+                    "severity": "high",
+                    "title": f"Overdue by {abs(days_diff)} days ({m.Name})",
+                    "entityId": m.id,
+                    "entityType": "member_overdue"
+                })
+            
+            elif -grace_period <= days_diff <= expiry_range:
+                 # Determine status message
+                 if days_diff < 0:
+                     msg = f"Expired {abs(days_diff)} days ago"
+                     severity = "high"
+                 elif days_diff == 0:
+                     msg = "Expires today"
+                     severity = "high"
+                 else:
+                     msg = f"Expires in {days_diff} days"
+                     severity = "high" if days_diff <= 3 else "medium"
+
+                 alerts.append({
+                    "type": "expiry",
+                    "severity": severity,
+                    "title": f"{m.Name}: {msg}",
+                    "entityId": m.id,
+                    "entityType": "member_expiry"
+                })
+                
+        except Exception:
+            continue
+
     # 2. Low stock items
     proteins = db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()
     for p in proteins:
         try:
             qty = int(p.Quantity) if p.Quantity else 0
-            threshold = p.StockThreshold or default_threshold
+            threshold = p.StockThreshold or default_stock_threshold
             if qty < threshold:
                 alerts.append({
                     "type": "low_stock",
@@ -153,25 +192,28 @@ def get_dashboard_alerts(current_gym: Gym = Depends(get_current_gym), db: Sessio
         except (ValueError, TypeError):
             pass
     
-    # 3. Pending balances overdue
+    # 3. Pending balances overdue (External Contacts / Other Pending)
     pending = db.query(PendingBalance).filter(
         PendingBalance.gymId == current_gym.id,
         PendingBalance.status.in_(['pending', 'partial']),
-        PendingBalance.dueDate < today_str
+        PendingBalance.dueDate < today.strftime('%Y-%m-%d')
     ).all()
     
     for pb in pending:
         alerts.append({
-            "type": "overdue",
+            "type": "overdue_balance",
             "severity": "high",
             "title": f"Overdue payment of ₹{pb.amount}",
             "entityId": pb.id,
             "entityType": "pending_balance"
         })
     
+    # Sort alerts by severity (high first)
+    alerts.sort(key=lambda x: 0 if x['severity'] == 'high' else 1)
+
     return {
         "count": len(alerts),
-        "alerts": alerts[:10]  # Limit to 10 alerts
+        "alerts": alerts[:20]  # Limit alerts
     }
 
 

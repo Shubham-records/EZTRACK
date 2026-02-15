@@ -59,6 +59,78 @@ def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_g
     return map_invoice_response(new_invoice)
 
 
+@router.post("/bulk-create")
+def bulk_create_invoices(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Bulk create invoices from import"""
+    invoices_list = data.get("invoices", [])
+    created_count = 0
+    
+    for invoice_data in invoices_list:
+        try:
+            # Required fields
+            customer_name = invoice_data.get("CustomerName") or invoice_data.get("customerName")
+            if not customer_name:
+                continue
+                
+            total_amount = float(invoice_data.get("Total") or invoice_data.get("total") or 0)
+            
+            # Construct items if not provided
+            items = invoice_data.get("Items") or invoice_data.get("items")
+            if not items:
+                items = [{
+                    "description": "Imported Item",
+                    "quantity": 1,
+                    "rate": total_amount,
+                    "amount": total_amount
+                }]
+            
+            date_str = invoice_data.get("InvoiceDate") or invoice_data.get("invoiceDate")
+            
+            new_invoice = Invoice(
+                gymId=current_gym.id,
+                customerName=customer_name,
+                items=items,
+                subTotal=total_amount,
+                tax=0,
+                discount=0,
+                total=total_amount,
+                status=(invoice_data.get("Status") or invoice_data.get("status") or "PAID").upper(),
+                paymentMode=(invoice_data.get("PaymentMode") or invoice_data.get("paymentMode") or "CASH").upper(),
+                invoiceDate=date_str or datetime.now(),
+                dueDate=invoice_data.get("DueDate") or invoice_data.get("dueDate"),
+                lastEditedBy=current_gym.username,
+                editReason='Bulk Import'
+            )
+            db.add(new_invoice)
+            created_count += 1
+        except Exception as e:
+            print(f"Error creating invoice: {e}")
+            continue
+    
+    db.commit()
+    return {"message": f"Created {created_count} invoices", "count": created_count}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_invoices(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Bulk delete invoices"""
+    ids = data.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+    
+    try:
+        stmt = Invoice.__table__.delete().where(
+            Invoice.id.in_(ids),
+            Invoice.gymId == current_gym.id
+        )
+        result = db.execute(stmt)
+        db.commit()
+        return {"message": f"Deleted {result.rowcount} invoices", "count": result.rowcount}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{invoice_id}")
 def get_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.gymId == current_gym.id).first()

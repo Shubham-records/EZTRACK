@@ -41,6 +41,41 @@ export function NewAdmission() {
     agreeTerms: true
   });
 
+  const [plans, setPlans] = useState([]);
+  const [pricingMatrix, setPricingMatrix] = useState({});
+
+  useEffect(() => {
+    const fetchPlans = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings/pricing/member-matrix', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPricingMatrix(data);
+          setPlans(Object.keys(data));
+        }
+      } catch (e) {
+        console.error("Failed to fetch plans", e);
+      }
+    };
+    fetchPlans();
+  }, []);
+
+  // Auto-fill amount based on PlanType and PlanPeriod
+  useEffect(() => {
+    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
+      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
+      if (priceConfig && priceConfig.price) {
+        setFormData(prev => ({ ...prev, LastPaymentAmount: priceConfig.price }));
+      }
+    }
+  }, [formData.PlanType, formData.PlanPeriod]);
+
   useEffect(() => {
     const fetchClientNumber = async () => {
       try {
@@ -195,11 +230,9 @@ export function NewAdmission() {
             <label className={labelStyle}>Gym Plan</label>
             <select name="PlanType" value={formData.PlanType} onChange={handleInputChange} className={selectStyle} required>
               <option value="" disabled hidden>Select Plan</option>
-              <option value="Strength">Strength</option>
-              <option value="CardioCrossfit">Cardio Crossfit</option>
-              <option value="Combo">Combo</option>
-              <option value="Zumba">Zumba</option>
-              <option value="Yoga">Yoga</option>
+              {plans.map(plan => (
+                <option key={plan} value={plan}>{plan}</option>
+              ))}
             </select>
           </div>
 
@@ -207,12 +240,16 @@ export function NewAdmission() {
             <label className={labelStyle}>Duration</label>
             <select name="PlanPeriod" value={formData.PlanPeriod} onChange={handleInputChange} className={selectStyle} required>
               <option value="" disabled hidden>Select Duration</option>
-              <option value="Monthly">Monthly</option>
-              <option value="Quaterly">Quaterly</option>
-              <option value="HalfYearly">Half Yearly</option>
-              <option value="Yearly">Yearly</option>
+              {formData.PlanType && pricingMatrix[formData.PlanType] ? (
+                Object.keys(pricingMatrix[formData.PlanType]).map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))
+              ) : (
+                <option value="" disabled>Select a Plan first</option>
+              )}
             </select>
           </div>
+
 
           <div className="grid grid-cols-3 gap-4 col-span-1 md:col-span-2">
             <div>
@@ -254,6 +291,41 @@ export function ReAdmission() {
     NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
     extraDays: '0', agreeTerms: false
   });
+
+  const [plans, setPlans] = useState([]);
+  const [pricingMatrix, setPricingMatrix] = useState({});
+
+  useEffect(() => {
+    const fetchPlans = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings/pricing/member-matrix', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPricingMatrix(data);
+          setPlans(Object.keys(data));
+        }
+      } catch (e) {
+        console.error("Failed to fetch plans", e);
+      }
+    };
+    fetchPlans();
+  }, []);
+
+  // Auto-fill amount based on PlanType and PlanPeriod
+  useEffect(() => {
+    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
+      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
+      if (priceConfig && priceConfig.price) {
+        setFormData(prev => ({ ...prev, LastPaymentAmount: priceConfig.price }));
+      }
+    }
+  }, [formData.PlanType, formData.PlanPeriod]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -350,21 +422,22 @@ export function ReAdmission() {
             <label className={labelStyle}>Plan</label>
             <select name="PlanType" value={formData.PlanType} onChange={handleInputChange} className={selectStyle} required>
               <option value="" disabled hidden>Select Plan</option>
-              <option value="Strength">Strength</option>
-              <option value="CardioCrossfit">Cardio Crossfit</option>
-              <option value="Combo">Combo</option>
-              <option value="Zumba">Zumba</option>
-              <option value="Yoga">Yoga</option>
+              {plans.map(plan => (
+                <option key={plan} value={plan}>{plan}</option>
+              ))}
             </select>
           </div>
           <div>
             <label className={labelStyle}>Duration</label>
             <select name="PlanPeriod" value={formData.PlanPeriod} onChange={handleInputChange} className={selectStyle} required>
               <option value="" disabled hidden>Select Duration</option>
-              <option value="Monthly">Monthly</option>
-              <option value="Quaterly">Quaterly</option>
-              <option value="HalfYearly">Half Yearly</option>
-              <option value="Yearly">Yearly</option>
+              {formData.PlanType && pricingMatrix[formData.PlanType] ? (
+                Object.keys(pricingMatrix[formData.PlanType]).map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))
+              ) : (
+                <option value="" disabled>Select a Plan first</option>
+              )}
             </select>
           </div>
 
@@ -401,6 +474,41 @@ export function Renewal() {
     Mobile: '', PlanPeriod: '', PlanType: '', DateOfRenewal: format(new Date(), 'yyyy-MM-dd'),
     MembershipExpiryDate: '', NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', extraDays: '0', agreeTerms: false
   });
+
+  const [plans, setPlans] = useState([]);
+  const [pricingMatrix, setPricingMatrix] = useState({});
+
+  useEffect(() => {
+    const fetchPlans = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings/pricing/member-matrix', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPricingMatrix(data);
+          setPlans(Object.keys(data));
+        }
+      } catch (e) {
+        console.error("Failed to fetch plans", e);
+      }
+    };
+    fetchPlans();
+  }, []);
+
+  // Auto-fill amount based on PlanType and PlanPeriod
+  useEffect(() => {
+    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
+      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
+      if (priceConfig && priceConfig.price) {
+        setFormData(prev => ({ ...prev, LastPaymentAmount: priceConfig.price }));
+      }
+    }
+  }, [formData.PlanType, formData.PlanPeriod]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -490,21 +598,22 @@ export function Renewal() {
             <label className={labelStyle}>Plan</label>
             <select name="PlanType" value={formData.PlanType} onChange={handleInputChange} className={selectStyle} required>
               <option value="" disabled hidden>Select Plan</option>
-              <option value="Strength">Strength</option>
-              <option value="CardioCrossfit">Cardio Crossfit</option>
-              <option value="Combo">Combo</option>
-              <option value="Zumba">Zumba</option>
-              <option value="Yoga">Yoga</option>
+              {plans.map(plan => (
+                <option key={plan} value={plan}>{plan}</option>
+              ))}
             </select>
           </div>
           <div>
             <label className={labelStyle}>Duration</label>
             <select name="PlanPeriod" value={formData.PlanPeriod} onChange={handleInputChange} className={selectStyle} required>
               <option value="" disabled hidden>Select Duration</option>
-              <option value="Monthly">Monthly</option>
-              <option value="Quaterly">Quaterly</option>
-              <option value="HalfYearly">Half Yearly</option>
-              <option value="Yearly">Yearly</option>
+              {formData.PlanType && pricingMatrix[formData.PlanType] ? (
+                Object.keys(pricingMatrix[formData.PlanType]).map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))
+              ) : (
+                <option value="" disabled>Select a Plan first</option>
+              )}
             </select>
           </div>
 
@@ -533,119 +642,7 @@ export function Renewal() {
   );
 }
 
-// Per Day Basis Form - For walk-in daily visitors
-export function PerDayBasis() {
-  const { showToast } = useToast();
-  const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    mobile: '',
-    date: format(new Date(), 'yyyy-MM-dd'),
-    amount: '',
-    paymentMode: 'cash',
-    remarks: ''
-  });
-
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem('eztracker_jwt_access_control_token');
-    const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-    return {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'X-Database-Name': dbName,
-    };
-  };
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      // Create invoice for per-day pass
-      const invoiceData = {
-        customerName: formData.name,
-        customerPhone: formData.mobile,
-        invoiceType: 'perday',
-        items: [{ description: 'Per Day Pass', quantity: 1, price: parseFloat(formData.amount) }],
-        total: parseFloat(formData.amount),
-        paymentMode: formData.paymentMode,
-        remarks: formData.remarks
-      };
-
-      const res = await fetch('/api/invoices', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(invoiceData)
-      });
-
-      if (res.ok) {
-        showToast('Per Day Pass created successfully!', 'success');
-        setFormData({ name: '', mobile: '', date: format(new Date(), 'yyyy-MM-dd'), amount: '', paymentMode: 'cash', remarks: '' });
-      } else {
-        throw new Error('Failed to create per day pass');
-      }
-    } catch (error) {
-      showToast(error.message, 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-2xl mx-auto">
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
-          <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Per Day Pass</h1>
-          <p className="text-sm text-zinc-500 mt-1">For walk-in visitors and daily gym users</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="col-span-1 md:col-span-2">
-            <label className={labelStyle}>Visitor Name</label>
-            <input type="text" name="name" value={formData.name} onChange={handleChange} placeholder="Enter visitor name" className={inputStyle} required />
-          </div>
-
-          <div>
-            <label className={labelStyle}>Mobile Number</label>
-            <input type="tel" name="mobile" value={formData.mobile} onChange={handleChange} placeholder="Mobile number" className={inputStyle} required />
-          </div>
-
-          <div>
-            <label className={labelStyle}>Date</label>
-            <input type="date" name="date" value={formData.date} onChange={handleChange} className={inputStyle} required />
-          </div>
-
-          <div>
-            <label className={labelStyle}>Amount (₹)</label>
-            <input type="number" name="amount" value={formData.amount} onChange={handleChange} placeholder="Enter amount" className={inputStyle} required />
-          </div>
-
-          <div>
-            <label className={labelStyle}>Payment Mode</label>
-            <select name="paymentMode" value={formData.paymentMode} onChange={handleChange} className={selectStyle}>
-              <option value="cash">Cash</option>
-              <option value="upi">UPI</option>
-              <option value="card">Card</option>
-            </select>
-          </div>
-
-          <div className="col-span-1 md:col-span-2">
-            <label className={labelStyle}>Remarks</label>
-            <input type="text" name="remarks" value={formData.remarks} onChange={handleChange} placeholder="Optional remarks" className={inputStyle} />
-          </div>
-        </div>
-
-        <button type="submit" disabled={loading} className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 disabled:opacity-50">
-          {loading ? 'Processing...' : 'Generate Pass'}
-        </button>
-      </form>
-    </div>
-  );
-}
+// Per Day Basis removed
 
 // Protein Billing Form
 export function ProteinBilling() {

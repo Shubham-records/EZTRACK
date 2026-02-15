@@ -37,87 +37,98 @@ export default function WebappMain() {
   }
 
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchMembers = async (skip = 0, currentData = []) => {
       try {
         const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-        const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
 
-        if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
+        if (!jwtToken || !dbName) {
           handleUnauthorized();
           return;
         }
 
-        const response = await fetch('/api/members/', {
+        const limit = 50;
+        // Sending limit/skip params to backend. If backend ignores, it returns all.
+        const response = await fetch(`/api/members/?limit=${limit}&skip=${skip}`, {
           headers: {
             Authorization: `Bearer ${jwtToken}`,
             'Content-Type': 'application/json',
-            'X-Database-Name': eztracker_jwt_databaseName_control_token
+            'X-Database-Name': dbName
           }
         });
 
-        // Auto logout on 401
         if (response.status === 401) {
           handleUnauthorized();
           return;
         }
 
-        if (!response.ok) {
-          throw new Error('Failed to fetch data');
-        }
+        if (!response.ok) throw new Error('Failed to fetch data');
+
         const result = await response.json();
-        Setgymmemberdata(result);
+
+        // Handle if result is wrapped or just array
+        const newData = Array.isArray(result) ? result : (result.data || []);
+        const allData = [...currentData, ...newData];
+
+        Setgymmemberdata(allData);
+
+        // Recursive call if we got a full batch (implies more might exist)
+        if (newData.length === limit) {
+          // Small delay to unblock main thread
+          setTimeout(() => fetchMembers(skip + limit, allData), 100);
+        }
       } catch (err) {
         showToast(err.message, 'error');
       }
     };
 
-    const timeoutId = setTimeout(() => {
-      fetchData();
-    }, 5000);
-    return () => clearTimeout(timeoutId);
+    fetchMembers();
   }, []);
 
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchProteins = async (skip = 0, currentData = []) => {
       try {
         const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-        const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
 
-        if (!jwtToken || !eztracker_jwt_databaseName_control_token) {
+        if (!jwtToken || !dbName) {
           handleUnauthorized();
           return;
         }
-        const response = await fetch('/api/proteins/',
+
+        const limit = 50;
+        const response = await fetch(`/api/proteins/?limit=${limit}&skip=${skip}`,
           {
             headers: {
               Authorization: `Bearer ${jwtToken}`,
               'Content-Type': 'application/json',
-              'X-Database-Name': eztracker_jwt_databaseName_control_token
+              'X-Database-Name': dbName
             }
           }
         );
 
-        // Auto logout on 401
         if (response.status === 401) {
           handleUnauthorized();
           return;
         }
 
-        if (!response.ok) {
-          throw new Error('Failed to fetch data');
-        }
+        if (!response.ok) throw new Error('Failed to fetch data');
+
         const result = await response.json();
-        Setproteinsdata(result);
+        const newData = Array.isArray(result) ? result : (result.data || []);
+        const allData = [...currentData, ...newData];
+
+        Setproteinsdata(allData);
+
+        if (newData.length === limit) {
+          setTimeout(() => fetchProteins(skip + limit, allData), 100);
+        }
       } catch (err) {
         showToast(err.message, 'error');
       }
     };
 
-    const timeoutId = setTimeout(() => {
-      fetchData();
-    }, 5000);
-
-    return () => clearTimeout(timeoutId);
+    fetchProteins();
   }, []);
 
   const memberscol = [
@@ -159,25 +170,6 @@ export default function WebappMain() {
     "Remark",
   ];
 
-  const activeMembersData = useMemo(() => {
-    return gymmemberdata.filter(member => member.MembershipStatus === "Active" || member.MembershipStatus === "active");
-  }, [gymmemberdata]);
-
-  const inactiveMembersRecentDueDates = useMemo(() => {
-    return gymmemberdata
-      .filter(member =>
-        (member.MembershipStatus === "Inactive" || member.MembershipStatus === "inactive") && member.NextDuedate
-      )
-      .map(member => ({
-        ...member,
-        NextDuedate: new Date(member.NextDuedate.split('/').reverse().join('-'))
-      }))
-      .sort((a, b) => b.NextDuedate - a.NextDuedate)
-      .map(member => ({
-        ...member,
-        NextDuedate: member.NextDuedate.toLocaleDateString()
-      }));
-  }, [gymmemberdata]);
 
   const handleUpdateData = (updatedData) => {
     Setgymmemberdata(updatedData);
@@ -234,8 +226,6 @@ export default function WebappMain() {
           {selectedPage === "Invoices" && <Invoices />}
           {selectedPage === "Expenses" && <Expenses />}
           {selectedPage === "AllMember" && <TableComponent gymmemberdata={gymmemberdata} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
-          {selectedPage === "ActiveMember" && <TableComponent gymmemberdata={activeMembersData} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
-          {selectedPage === "MemberExpiries" && <TableComponent gymmemberdata={inactiveMembersRecentDueDates} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
           {selectedPage === "Protein" && <TableComponent gymmemberdata={proteinsdata} allColumns={proteins} dataType="protein" onUpdateData={handleproteinsData} />}
           {selectedPage === "AllStaff" && <StaffComponent />}
           {selectedPage === "AddStaff" && <StaffComponent />}

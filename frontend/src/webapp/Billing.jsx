@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { NewAdmission, ReAdmission, PerDayBasis, Renewal, ReturnMembership, ProteinBilling, Expenses } from "./forms"
+import { NewAdmission, ReAdmission, Renewal, ReturnMembership, ProteinBilling, Expenses } from "./forms"
 import { UserPlus, UserCheck, RefreshCw, Calendar, ShoppingBag, RotateCcw, DollarSign } from 'lucide-react';
 
 export default function Billing() {
@@ -9,7 +9,6 @@ export default function Billing() {
     { id: "NewAdmission", label: "New Admission", icon: UserPlus },
     { id: "ReAdmission", label: "Re-Admission", icon: UserCheck },
     { id: "Renewal", label: "Renewal", icon: RefreshCw },
-    { id: "PerDayBasis", label: "Per Day Basis", icon: Calendar },
     { id: "Protein", label: "Protein", icon: ShoppingBag },
     { id: "ReturnMembership", label: "Return Membership", icon: RotateCcw },
     { id: "Expenses", label: "Expenses", icon: DollarSign },
@@ -52,7 +51,6 @@ export default function Billing() {
           {selectedPage === "Protein" && <ProteinBilling />}
           {selectedPage === "ReturnMembership" && <ReturnMembership />}
           {selectedPage === "Expenses" && <Expenses />}
-          {selectedPage === "PerDayBasis" && <PerDayBasis />}
         </div>
       </div>
     </section>

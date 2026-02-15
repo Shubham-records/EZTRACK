@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useToast } from "@/context/ToastContext";
 import { Save, Settings, DollarSign, Bell, Package, FileText, Plus, Trash2 } from 'lucide-react';
+import AddPlanModal from './components/AddPlanModal';
 
 const inputStyle = "w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all";
 const labelStyle = "block text-xs font-bold text-zinc-500 uppercase tracking-wider mb-1";
@@ -11,6 +12,7 @@ export default function AdminSettings() {
     const [activeTab, setActiveTab] = useState('general');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [isAddPlanModalOpen, setIsAddPlanModalOpen] = useState(false);
 
     const [settings, setSettings] = useState({
         // General
@@ -22,7 +24,6 @@ export default function AdminSettings() {
         enableGST: false,
         memberGSTPercent: 18,
         proteinGSTPercent: 18,
-        perdayGSTPercent: 18,
         gstin: '',
         showGSTBreakup: true,
         hsnService: '99979',
@@ -41,10 +42,17 @@ export default function AdminSettings() {
         // Notifications
         enableWhatsAppReminders: true,
         reminderDaysBefore: 3,
+        expiryRange: 30, // Default 30 days
+        postExpiryGraceDays: 30, // Default 30 days
+        admissionExpiryDays: 365, // Default 365 days
+        readmissionDiscount: 50, // Default 50%
     });
 
+    const [initialSettings, setInitialSettings] = useState(null);
     const [pricingMatrix, setPricingMatrix] = useState({});
+    const [initialPricingMatrix, setInitialPricingMatrix] = useState({});
     const [proteinDefaults, setProteinDefaults] = useState({});
+    const [initialProteinDefaults, setInitialProteinDefaults] = useState({});
 
     const tabs = [
         { id: 'general', label: 'General', icon: Settings },
@@ -77,7 +85,11 @@ export default function AdminSettings() {
             const res = await fetch('/api/settings', { headers: getAuthHeaders() });
             if (res.ok) {
                 const data = await res.json();
-                setSettings(prev => ({ ...prev, ...data }));
+                setSettings(prev => {
+                    const next = { ...prev, ...data };
+                    setInitialSettings(next);
+                    return next;
+                });
             }
         } catch (e) {
             showToast('Failed to load settings', 'error');
@@ -92,6 +104,7 @@ export default function AdminSettings() {
             if (res.ok) {
                 const data = await res.json();
                 setPricingMatrix(data);
+                setInitialPricingMatrix(data);
             }
         } catch (e) {
             console.error('Failed to load pricing matrix', e);
@@ -104,6 +117,7 @@ export default function AdminSettings() {
             if (res.ok) {
                 const data = await res.json();
                 setProteinDefaults(data);
+                setInitialProteinDefaults(data);
             }
         } catch (e) {
             console.error('Failed to load protein defaults', e);
@@ -128,6 +142,7 @@ export default function AdminSettings() {
             });
             if (res.ok) {
                 showToast('Settings saved successfully', 'success');
+                setInitialSettings(settings); // Update initial state to match saved
             } else {
                 throw new Error('Failed to save');
             }
@@ -136,6 +151,16 @@ export default function AdminSettings() {
         } finally {
             setSaving(false);
         }
+    };
+
+    const handleAddPlan = (name) => {
+        if (pricingMatrix[name]) {
+            showToast(`Plan "${name}" already exists`, 'error');
+            return;
+        }
+        setPricingMatrix(prev => ({ ...prev, [name]: {} }));
+        showToast(`Plan "${name}" added`, 'success');
+        setIsAddPlanModalOpen(false);
     };
 
     const handlePricingChange = (plan, period, value) => {
@@ -166,6 +191,7 @@ export default function AdminSettings() {
             });
             if (res.ok) {
                 showToast('Pricing saved successfully', 'success');
+                setInitialPricingMatrix(pricingMatrix); // Update initial state
             } else {
                 throw new Error('Failed to save');
             }
@@ -196,6 +222,7 @@ export default function AdminSettings() {
             });
             if (res.ok) {
                 showToast('Protein defaults saved successfully', 'success');
+                setInitialProteinDefaults(proteinDefaults);
             } else {
                 throw new Error('Failed to save');
             }
@@ -220,9 +247,21 @@ export default function AdminSettings() {
         );
     }
 
-    const planTypes = ['Strength', 'Cardio', 'Combo', 'Zumba', 'Yoga', 'Personal Training'];
-    const periods = ['Daily', 'Monthly', 'Quarterly', 'HalfYearly', 'Yearly'];
+    const periods = ['Daily', 'Monthly', 'Quaterly', 'HalfYearly', 'Yearly'];
     const defaultBrands = ['Optimum Nutrition', 'MuscleBlaze', 'Dymatize', 'MyProtein', 'GNC', 'MuscleTech'];
+
+    const hasChanges = () => {
+        if (activeTab === 'pricing') {
+            return JSON.stringify(pricingMatrix) !== JSON.stringify(initialPricingMatrix);
+        }
+        if (activeTab === 'protein') {
+            return JSON.stringify(proteinDefaults) !== JSON.stringify(initialProteinDefaults);
+        }
+        // General, GST, Billing, Stock, Notifications -> all in 'settings'
+        return JSON.stringify(settings) !== JSON.stringify(initialSettings);
+    };
+
+    const showSaveButton = hasChanges();
 
     return (
         <div className="max-w-6xl mx-auto space-y-6">
@@ -232,14 +271,16 @@ export default function AdminSettings() {
                     <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Settings</h1>
                     <p className="text-sm text-zinc-500 mt-1">Configure your gym's preferences and pricing</p>
                 </div>
-                <button
-                    onClick={getSaveHandler()}
-                    disabled={saving}
-                    className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white bg-primary hover:bg-teal-700 shadow-md transition-all disabled:opacity-50"
-                >
-                    <Save size={16} />
-                    {saving ? 'Saving...' : 'Save Changes'}
-                </button>
+                {showSaveButton && (
+                    <button
+                        onClick={getSaveHandler()}
+                        disabled={saving}
+                        className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white bg-primary hover:bg-teal-700 shadow-md transition-all disabled:opacity-50 animate-in fade-in slide-in-from-right-4 duration-300"
+                    >
+                        <Save size={16} />
+                        {saving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                )}
             </div>
 
             {/* Tabs */}
@@ -251,8 +292,8 @@ export default function AdminSettings() {
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
                             className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.id
-                                    ? 'border-primary text-primary'
-                                    : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-white'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-white'
                                 }`}
                         >
                             <Icon size={16} />
@@ -297,6 +338,26 @@ export default function AdminSettings() {
                                 <option value="January">January</option>
                             </select>
                         </div>
+                        <div>
+                            <label className={labelStyle}>Plan Expiry Alert (Days before Due Date)</label>
+                            <input type="number" name="expiryRange" value={settings.expiryRange || 30} onChange={handleChange} className={inputStyle} />
+                            <p className="text-xs text-zinc-500 mt-1">Days to consider members as "Expiring Soon"</p>
+                        </div>
+                        <div>
+                            <label className={labelStyle}>Plan Expiry Grace (Days after Due Date)</label>
+                            <input type="number" name="postExpiryGraceDays" value={settings.postExpiryGraceDays || 30} onChange={handleChange} className={inputStyle} />
+                            <p className="text-xs text-zinc-500 mt-1">Days after expiry to keep in "Expiring Soon"</p>
+                        </div>
+                        <div>
+                            <label className={labelStyle}>Admission Expiry (Days after Due Date)</label>
+                            <input type="number" name="admissionExpiryDays" value={settings.admissionExpiryDays || 365} onChange={handleChange} className={inputStyle} />
+                            <p className="text-xs text-zinc-500 mt-1">Days until admission is revoked</p>
+                        </div>
+                        <div>
+                            <label className={labelStyle}>Readmission Discount (%)</label>
+                            <input type="number" name="readmissionDiscount" value={settings.readmissionDiscount || 50} onChange={handleChange} className={inputStyle} />
+                            <p className="text-xs text-zinc-500 mt-1">Discount for returning members</p>
+                        </div>
                     </div>
                 </div>
             )}
@@ -327,18 +388,20 @@ export default function AdminSettings() {
                                     <label className={labelStyle}>Member GST %</label>
                                     <input type="number" name="memberGSTPercent" value={settings.memberGSTPercent} onChange={handleChange} className={inputStyle} />
                                 </div>
-                                <div>
+                                <div className="space-y-2">
                                     <label className={labelStyle}>Protein GST %</label>
-                                    <input type="number" name="proteinGSTPercent" value={settings.proteinGSTPercent} onChange={handleChange} className={inputStyle} />
-                                </div>
-                                <div>
-                                    <label className={labelStyle}>Per Day GST %</label>
-                                    <input type="number" name="perdayGSTPercent" value={settings.perdayGSTPercent} onChange={handleChange} className={inputStyle} />
+                                    <input
+                                        type="number"
+                                        name="proteinGSTPercent"
+                                        value={settings.proteinGSTPercent}
+                                        onChange={handleInputChange}
+                                        className={inputStyle}
+                                    />
                                 </div>
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
+                                <div className="space-y-2">
                                     <label className={labelStyle}>GSTIN</label>
                                     <input type="text" name="gstin" value={settings.gstin || ''} onChange={handleChange} placeholder="Enter your GSTIN" className={inputStyle} />
                                 </div>
@@ -375,8 +438,25 @@ export default function AdminSettings() {
             {/* Member Pricing Tab */}
             {activeTab === 'pricing' && (
                 <div className={cardStyle}>
-                    <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-2">Member Pricing Matrix</h2>
-                    <p className="text-sm text-zinc-500 mb-4">Set prices for each plan type and validity period. Leave empty if not applicable.</p>
+                    <div className="flex justify-between items-center mb-4">
+                        <div>
+                            <h2 className="text-lg font-bold text-zinc-900 dark:text-white">Member Pricing Matrix</h2>
+                            <p className="text-sm text-zinc-500">Set prices for each plan type. Add custom plans as needed.</p>
+                        </div>
+                        <button
+                            onClick={() => setIsAddPlanModalOpen(true)}
+                            className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-lg text-primary bg-primary/10 hover:bg-primary/20 transition-colors"
+                        >
+                            <Plus size={14} />
+                            Add Plan
+                        </button>
+                    </div>
+
+                    <AddPlanModal
+                        isOpen={isAddPlanModalOpen}
+                        onClose={() => setIsAddPlanModalOpen(false)}
+                        onAdd={handleAddPlan}
+                    />
 
                     <div className="overflow-x-auto">
                         <table className="w-full border-collapse">
@@ -386,10 +466,18 @@ export default function AdminSettings() {
                                     {periods.map(p => (
                                         <th key={p} className="px-4 py-3 text-center text-xs font-bold text-zinc-500 uppercase">{p}</th>
                                     ))}
+                                    <th className="px-4 py-3 text-center text-xs font-bold text-zinc-500 uppercase">Action</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {planTypes.map(plan => (
+                                {Object.keys(pricingMatrix).length === 0 && (
+                                    <tr>
+                                        <td colSpan={periods.length + 2} className="px-4 py-8 text-center text-zinc-500 text-sm">
+                                            No plans configured. Click "Add Plan" to start.
+                                        </td>
+                                    </tr>
+                                )}
+                                {Object.keys(pricingMatrix).map(plan => (
                                     <tr key={plan} className="border-b border-zinc-100 dark:border-zinc-800">
                                         <td className="px-4 py-3 font-medium text-zinc-900 dark:text-white">{plan}</td>
                                         {periods.map(period => (
@@ -403,6 +491,36 @@ export default function AdminSettings() {
                                                 />
                                             </td>
                                         ))}
+                                        <td className="px-4 py-3 text-center">
+                                            <button
+                                                onClick={async () => {
+                                                    if (confirm(`Delete plan "${plan}"? This will hide it from future selections.`)) {
+                                                        try {
+                                                            const res = await fetch(`/api/settings/pricing/member-matrix/${encodeURIComponent(plan)}`, {
+                                                                method: 'DELETE',
+                                                                headers: getAuthHeaders()
+                                                            });
+                                                            if (res.ok) {
+                                                                setPricingMatrix(prev => {
+                                                                    const next = { ...prev };
+                                                                    delete next[plan];
+                                                                    setInitialPricingMatrix(next); // Sync initial state
+                                                                    return next;
+                                                                });
+                                                                showToast('Plan deleted', 'success');
+                                                            } else {
+                                                                throw new Error();
+                                                            }
+                                                        } catch (e) {
+                                                            showToast('Failed to delete plan', 'error');
+                                                        }
+                                                    }
+                                                }}
+                                                className="text-zinc-400 hover:text-rose-500 transition-colors p-1"
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>

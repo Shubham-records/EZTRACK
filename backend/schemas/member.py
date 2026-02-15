@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import Optional
-from datetime import datetime
+from typing import Optional, List
+from datetime import datetime, date
 
 class MemberBase(BaseModel):
     Name: str
@@ -55,6 +55,13 @@ class MemberResponse(MemberBase):
     Whatsapp: Optional[str] = None
     Aadhaar: Optional[str] = None
     Mobile: Optional[str] = None
+    
+    # Computed fields
+    computed_status: Optional[str] = None
+    is_expired: Optional[bool] = None
+    days_until_expiry: Optional[int] = None
+    admission_expiry_date: Optional[date] = None
+    is_admission_expired: Optional[bool] = None
 
     class Config:
         from_attributes = True

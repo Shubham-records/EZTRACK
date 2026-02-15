@@ -187,6 +187,30 @@ def update_member_pricing_bulk(
     return {"message": "Pricing updated successfully"}
 
 
+@router.delete("/pricing/member-matrix/{plan_type}")
+def delete_member_plan(
+    plan_type: str,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    """Soft delete all pricing configs for a specific plan type."""
+    configs = db.query(PricingConfig).filter(
+        PricingConfig.gymId == current_gym.id,
+        PricingConfig.configType == "member",
+        PricingConfig.planType == plan_type,
+        PricingConfig.isActive == True
+    ).all()
+    
+    if not configs:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    
+    for config in configs:
+        config.isActive = False
+    
+    db.commit()
+    return {"message": f"Plan '{plan_type}' deleted successfully"}
+
+
 # ============ PROTEIN PRICING DEFAULTS ============
 
 @router.get("/pricing/protein-defaults")

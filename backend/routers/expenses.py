@@ -57,6 +57,67 @@ def create_expense(
     return map_expense_response(expense)
 
 
+@router.post("/bulk-create")
+def bulk_create_expenses(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Bulk create expenses from import"""
+    expenses_list = data.get("items", []) # Aligning naming with frontend generic 'items' or 'expenses'
+    # Actually frontend usually sends { "expenses": [...] } or generic. Let's support "expenses"
+    if not expenses_list:
+        expenses_list = data.get("expenses", [])
+
+    created_count = 0
+    
+    for expense_data in expenses_list:
+        try:
+            # Basic validation: Amount is required.
+            amount = expense_data.get("Amount") or expense_data.get("amount")
+            if not amount:
+                continue
+
+            # Parse date or default to today
+            date_str = expense_data.get("Date") or expense_data.get("date")
+            
+            new_expense = Expense(
+                gymId=current_gym.id,
+                description=expense_data.get("Description") or expense_data.get("description") or "Imported Expense",
+                amount=float(amount),
+                category=expense_data.get("Category") or expense_data.get("category") or "Other",
+                paymentMode=expense_data.get("PaymentMode") or expense_data.get("paymentMode") or "Cash",
+                date=date_str,
+                notes=expense_data.get("Notes") or expense_data.get("notes"),
+                lastEditedBy=current_gym.username,
+                editReason='Bulk Import'
+            )
+            db.add(new_expense)
+            created_count += 1
+        except Exception as e:
+            print(f"Error creating expense: {e}")
+            continue
+    
+    db.commit()
+    return {"message": f"Created {created_count} expenses", "count": created_count}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_expenses(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Bulk delete expenses"""
+    ids = data.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+    
+    try:
+        stmt = Expense.__table__.delete().where(
+            Expense.id.in_(ids),
+            Expense.gymId == current_gym.id
+        )
+        result = db.execute(stmt)
+        db.commit()
+        return {"message": f"Deleted {result.rowcount} expenses", "count": result.rowcount}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/{expense_id}", response_model=ExpenseResponse)
 def update_expense(
     expense_id: str,

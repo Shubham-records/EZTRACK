@@ -238,6 +238,26 @@ def bulk_create_proteins(data: dict, current_gym: Gym = Depends(get_current_gym)
     return {"message": f"Created {created_count} proteins", "count": created_count}
 
 
+@router.post("/bulk-delete")
+def bulk_delete_proteins(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Bulk delete proteins"""
+    ids = data.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+    
+    try:
+        stmt = ProteinStock.__table__.delete().where(
+            ProteinStock.id.in_(ids),
+            ProteinStock.gymId == current_gym.id
+        )
+        result = db.execute(stmt)
+        db.commit()
+        return {"message": f"Deleted {result.rowcount} proteins", "count": result.rowcount}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/{protein_id}", response_model=ProteinResponse)
 
 def update_protein(

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from typing import List
 from datetime import datetime
 
@@ -11,13 +11,73 @@ from schemas.member import MemberCreate, MemberResponse, MemberUpdate
 
 router = APIRouter()
 
-def map_member_response(member: Member):
+
+def calculate_member_status(member: Member, admission_expiry_days: int = 365) -> dict:
+    today = datetime.now().date()
+    status_data = {
+        "computed_status": "Active",
+        "is_expired": False,
+        "days_until_expiry": None,
+        "admission_expiry_date": None,
+        "is_admission_expired": False
+    }
+    
+    # Check if member has a NextDueDate
+    if member.NextDuedate:
+        try:
+            # Parse date - handle potential formats
+            # Attempt to parse DD/MM/YYYY or YYYY-MM-DD
+            try:
+                due_date = datetime.strptime(member.NextDuedate, "%d/%m/%Y").date()
+            except ValueError:
+                due_date = datetime.strptime(member.NextDuedate, "%Y-%m-%d").date()
+                
+            delta = (due_date - today).days
+            status_data["days_until_expiry"] = delta
+            
+            # 1. Plan Expiry (Monthly Dues)
+            if due_date < today:
+                status_data["computed_status"] = "Expired"
+                status_data["is_expired"] = True
+            else:
+                 # Check if expiring soon? Typically "Active" until actually expired.
+                 # Frontend determines "Expiring Soon" visual with warnings, 
+                 # but status is simply Active or Expired.
+                 status_data["computed_status"] = "Active"
+                 status_data["is_expired"] = False
+            
+            # 2. Admission Expiry (Long-term)
+            # Admission Expires X days AFTER the Next Due Date (if not renewed)
+            # OR typically calculated from Join Date? 
+            # User said: "membership admission expiry to 365 days, so bob membership expiry date is 2nd jan 26 as per the next due date of his"
+            # So dependent on NextDueDate.
+            from datetime import timedelta
+            admission_expiry_date = due_date + timedelta(days=admission_expiry_days)
+            status_data["admission_expiry_date"] = admission_expiry_date
+            
+            if today > admission_expiry_date:
+                status_data["is_admission_expired"] = True
+            else:
+                status_data["is_admission_expired"] = False
+                 
+        except Exception:
+            # If date parse fails, fallback to existing status or default
+            status_data["computed_status"] = member.MembershipStatus
+            
+    else:
+        # No due date
+        status_data["computed_status"] = member.MembershipStatus
+        # Without a due date, we can't calculate admission expiry accurately yet via this logic. 
+        # Falls back to defaults (None/False)
+
+    return status_data
+
+def map_member_response(member: Member, admission_expiry_days: int = 365):
     # Convert SQLAlchemy object to dict to add _id and perform string conversions safely
     m_dict = member.__dict__.copy()
     m_dict['_id'] = member.id
     
-    # Handle BigInt to str conversion explicitly if needed, 
-    # though Pydantic response_model usually handles int->str coercion if schema says str.
+    # Handle BigInt to str conversion explicitly if needed
     if m_dict.get('Mobile') is not None:
         m_dict['Mobile'] = str(m_dict['Mobile'])
     if m_dict.get('Whatsapp') is not None:
@@ -25,14 +85,37 @@ def map_member_response(member: Member):
     if m_dict.get('Aadhaar') is not None:
         m_dict['Aadhaar'] = str(m_dict['Aadhaar'])
         
+    # Calculate Dynamic Status
+    status_info = calculate_member_status(member, admission_expiry_days)
+    m_dict.update(status_info)
+    
+    # Validating pydantic model effectively ignores extra fields if not in schema,
+    # but we added them to schema.
+        
     return m_dict
+
+@router.get("/generate-client-number")
+def generate_client_number(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Generate the next available client number"""
+    try:
+        max_number = db.query(func.max(Member.MembershipReceiptnumber)).filter(Member.gymId == current_gym.id).scalar()
+        next_number = (max_number or 0) + 1
+        return {"clientNumber": next_number}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+from models.all_models import Gym, Member, Invoice, GymSettings
 
 @router.get("", response_model=List[MemberResponse])
 @router.get("/", response_model=List[MemberResponse])
 def get_members(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     members = db.query(Member).filter(Member.gymId == current_gym.id).all()
-    # Map _id
-    return [map_member_response(m) for m in members]
+    # Fetch settings for admission expiry
+    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
+    
+    # Map _id and compute status
+    return [map_member_response(m, admission_expiry_days) for m in members]
 
 
 @router.post("/check-duplicates")
@@ -131,6 +214,28 @@ def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym),
     
     db.commit()
     return {"message": f"Created {created_count} members", "count": created_count}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_members(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Bulk delete members"""
+    ids = data.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+    
+    # Check if all members belong to current gym
+    # We can delete in one query for efficiency
+    try:
+        stmt = Member.__table__.delete().where(
+            Member.id.in_(ids),
+            Member.gymId == current_gym.id
+        )
+        result = db.execute(stmt)
+        db.commit()
+        return {"message": f"Deleted {result.rowcount} members", "count": result.rowcount}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/bulk-update")
@@ -250,6 +355,33 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
         "invoiceCreated": (data.LastPaymentAmount is not None and data.LastPaymentAmount > 0),
         **response_data 
     }
+
+@router.put("/{id}", response_model=MemberResponse)
+def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    member = db.query(Member).filter(Member.id == id, Member.gymId == current_gym.id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+        
+    for key, value in data.items():
+        if key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'tableData']:
+             continue
+        if hasattr(member, key):
+             # Type conversion checks
+             try:
+                 if key in ['Mobile', 'Whatsapp', 'Aadhaar', 'Age', 'weight', 'LastPaymentAmount', 'MembershipReceiptnumber', 'RenewalReceiptNumber']:
+                     value = int(value) if value is not None and value != '' else None
+                 elif key in ['height']:
+                     value = float(value) if value is not None and value != '' else None
+                 setattr(member, key, value)
+             except Exception:
+                 pass # Ignore conversion errors, keep original or skip
+             
+    member.lastEditedBy = current_gym.username
+    member.editReason = 'Update via Web'
+    
+    db.commit()
+    db.refresh(member)
+    return map_member_response(member)
 
 @router.patch("/", response_model=MemberResponse)
 def update_member(data: MemberUpdate, id: str, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):

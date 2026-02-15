@@ -73,7 +73,7 @@ export default function WebappSidebar({ clickedBUTTON }) {
     {
       name: 'Members',
       icon: Users,
-      dropdownItems: ['All Member', 'Active Member', 'Member Expiries']
+      dropdownItems: ['All Member']
     },
     {
       name: 'Supplements',

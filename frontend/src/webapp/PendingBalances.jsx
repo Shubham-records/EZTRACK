@@ -200,8 +200,8 @@ export default function PendingBalances() {
                         key={f}
                         onClick={() => setFilter(f)}
                         className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${filter === f
-                                ? 'bg-primary text-white'
-                                : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                            ? 'bg-primary text-white'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700'
                             }`}
                     >
                         {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -300,7 +300,6 @@ export default function PendingBalances() {
                                 >
                                     <option value="member">Member</option>
                                     <option value="protein">Protein Sale</option>
-                                    <option value="perday">Per Day Pass</option>
                                 </select>
                             </div>
                             <div>

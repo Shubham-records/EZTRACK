@@ -2,8 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import { useToast } from "@/context/ToastContext";
 import {
-    Receipt, Plus, Search, Filter, Calendar, Trash2, Edit, X
+    Receipt, Plus, Search, Filter, Calendar, Trash2, Edit, X, FileSpreadsheet,
+    ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
+import ImportDataModal from './components/ImportDataModal';
 
 const cardStyle = "bg-surface-light dark:bg-surface-dark p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm";
 
@@ -13,12 +15,18 @@ export default function Expenses() {
     const [expenses, setExpenses] = useState([]);
     const [categories, setCategories] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
+    const [selectedIds, setSelectedIds] = useState([]);
     const [showAddModal, setShowAddModal] = useState(false);
+    const [showImportModal, setShowImportModal] = useState(false);
     const [filters, setFilters] = useState({
         category: 'all',
         dateFrom: '',
         dateTo: ''
     });
+
+    // Pagination
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 30;
     const [formData, setFormData] = useState({
         description: '',
         amount: '',
@@ -43,12 +51,19 @@ export default function Expenses() {
         fetchCategories();
     }, []);
 
-    const fetchExpenses = async () => {
+    const fetchExpenses = async (skip = 0, currentData = []) => {
         try {
-            const res = await fetch('/api/expenses', { headers: getAuthHeaders() });
+            const limit = 50;
+            const res = await fetch(`/api/expenses?limit=${limit}&skip=${skip}`, { headers: getAuthHeaders() });
             if (res.ok) {
                 const data = await res.json();
-                setExpenses(data);
+                const newData = Array.isArray(data) ? data : (data.data || []);
+                const allData = [...currentData, ...newData];
+                setExpenses(allData);
+
+                if (newData.length === limit) {
+                    setTimeout(() => fetchExpenses(skip + limit, allData), 100);
+                }
             }
         } catch (error) {
             showToast('Failed to fetch expenses', 'error');
@@ -108,11 +123,55 @@ export default function Expenses() {
         }
     };
 
+    const handleBulkDelete = async () => {
+        if (selectedIds.length === 0) return;
+        if (!confirm(`Are you sure you want to delete ${selectedIds.length} expenses?`)) return;
+
+        try {
+            const res = await fetch('/api/expenses/bulk-delete', {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ ids: selectedIds })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setExpenses(prev => prev.filter(e => !selectedIds.includes(e.id)));
+                setSelectedIds([]);
+                showToast(`Deleted ${data.count} expenses`, 'success');
+            } else {
+                showToast(data.detail || 'Failed to bulk delete', 'error');
+            }
+        } catch (error) {
+            showToast('Failed to bulk delete', 'error');
+        }
+    };
+
+    const toggleSelectAll = (e) => {
+        if (e.target.checked) {
+            setSelectedIds(filteredExpenses.map(e => e.id));
+        } else {
+            setSelectedIds([]);
+        }
+    };
+
+    const toggleSelectOne = (id) => {
+        setSelectedIds(prev =>
+            prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]
+        );
+    };
+
     const filteredExpenses = expenses.filter(exp => {
         if (searchTerm && !exp.description?.toLowerCase().includes(searchTerm.toLowerCase())) return false;
         if (filters.category !== 'all' && exp.category !== filters.category) return false;
         return true;
     });
+
+    // Pagination Logic
+    const totalPages = Math.ceil(filteredExpenses.length / itemsPerPage);
+    const paginatedExpenses = filteredExpenses.slice(
+        (currentPage - 1) * itemsPerPage,
+        currentPage * itemsPerPage
+    );
 
     const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     const thisMonthExpenses = expenses.filter(e => {
@@ -151,17 +210,33 @@ export default function Expenses() {
                     <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Expenses</h1>
                     <p className="text-sm text-zinc-500 mt-1">Track and manage your expenses</p>
                 </div>
-                <button
-                    onClick={() => setShowAddModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
-                >
-                    <Plus size={16} /> Add Expense
-                </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setShowImportModal(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors"
+                    >
+                        <FileSpreadsheet size={16} /> Import
+                    </button>
+                    {selectedIds.length > 0 && (
+                        <button
+                            onClick={handleBulkDelete}
+                            className="flex items-center gap-2 px-4 py-2 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 rounded-lg hover:bg-rose-100 dark:hover:bg-rose-900/40 transition-colors"
+                        >
+                            <Trash2 size={16} /> Delete ({selectedIds.length})
+                        </button>
+                    )}
+                    <button
+                        onClick={() => setShowAddModal(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
+                    >
+                        <Plus size={16} /> Add Expense
+                    </button>
+                </div>
             </div>
 
             {/* Filters */}
             <div className={`${cardStyle} !p-4`}>
-                <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-4">
                     <div className="relative flex-1 min-w-[200px]">
                         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
                         <input
@@ -175,7 +250,7 @@ export default function Expenses() {
                     <select
                         value={filters.category}
                         onChange={(e) => setFilters(p => ({ ...p, category: e.target.value }))}
-                        className="px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700"
+                        className="px-3 py-2 flex-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700"
                     >
                         <option value="all">All Categories</option>
                         {categories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -211,6 +286,14 @@ export default function Expenses() {
                     <table className="w-full">
                         <thead>
                             <tr className="text-left text-xs font-bold text-zinc-500 uppercase border-b border-zinc-200 dark:border-zinc-700">
+                                <th className="pb-3 w-10">
+                                    <input
+                                        type="checkbox"
+                                        className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                                        checked={selectedIds.length === filteredExpenses.length && filteredExpenses.length > 0}
+                                        onChange={toggleSelectAll}
+                                    />
+                                </th>
                                 <th className="pb-3">Date</th>
                                 <th className="pb-3">Description</th>
                                 <th className="pb-3">Category</th>
@@ -220,8 +303,16 @@ export default function Expenses() {
                             </tr>
                         </thead>
                         <tbody className="text-sm">
-                            {filteredExpenses.map((exp, idx) => (
+                            {paginatedExpenses.map((exp, idx) => (
                                 <tr key={exp.id || idx} className="border-b border-zinc-100 dark:border-zinc-800">
+                                    <td className="py-4">
+                                        <input
+                                            type="checkbox"
+                                            className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                                            checked={selectedIds.includes(exp.id)}
+                                            onChange={() => toggleSelectOne(exp.id)}
+                                        />
+                                    </td>
                                     <td className="py-4">{exp.date ? new Date(exp.date).toLocaleDateString() : '-'}</td>
                                     <td className="py-4 font-medium">{exp.description || '-'}</td>
                                     <td className="py-4">
@@ -333,6 +424,13 @@ export default function Expenses() {
                     </div>
                 </div>
             )}
+            {/* Import Modal */}
+            <ImportDataModal
+                isOpen={showImportModal}
+                onClose={() => setShowImportModal(false)}
+                onSuccess={fetchExpenses}
+                dataType="expense"
+            />
         </div>
     );
 }
