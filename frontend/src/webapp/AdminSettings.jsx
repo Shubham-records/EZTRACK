@@ -46,6 +46,9 @@ export default function AdminSettings() {
         postExpiryGraceDays: 30, // Default 30 days
         admissionExpiryDays: 365, // Default 365 days
         readmissionDiscount: 50, // Default 50%
+        // Fees
+        admissionFee: 0,
+        reAdmissionFee: 0,
     });
 
     const [initialSettings, setInitialSettings] = useState(null);
@@ -593,6 +596,20 @@ export default function AdminSettings() {
                         <div>
                             <label className={labelStyle}>Starting Invoice Number</label>
                             <input type="number" name="invoiceStartNumber" value={settings.invoiceStartNumber} onChange={handleChange} className={inputStyle} />
+                        </div>
+                    </div>
+
+                    <div className="mt-6 pt-6 border-t border-zinc-200 dark:border-zinc-700">
+                        <h3 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider mb-4">Default Fees</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className={labelStyle}>Admission Fee (₹)</label>
+                                <input type="number" name="admissionFee" value={settings.admissionFee} onChange={handleChange} className={inputStyle} min="0" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>Re-Admission Fee (₹)</label>
+                                <input type="number" name="reAdmissionFee" value={settings.reAdmissionFee} onChange={handleChange} className={inputStyle} min="0" />
+                            </div>
                         </div>
                     </div>
 

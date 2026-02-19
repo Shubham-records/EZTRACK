@@ -31,11 +31,11 @@ function IndeterminateCheckbox({
   )
 }
 
-export default function TableComponent({ gymmemberdata, allColumns, onUpdateData, dataType, onNavigate }) {
+export default function TableComponent({ gymmemberdata, allColumns, onUpdateData, dataType, onNavigate, initialFilter = '' }) {
   const { showToast } = useToast();
 
   const [data, setData] = useState(gymmemberdata)
-  const [globalFilter, setGlobalFilter] = useState('')
+  const [globalFilter, setGlobalFilter] = useState(initialFilter)
   const [rowSelection, setRowSelection] = useState({})
   const [visibleColumns, setVisibleColumns] = useState(allColumns)
   const [isColumnSelectorOpen, setIsColumnSelectorOpen] = useState(false)

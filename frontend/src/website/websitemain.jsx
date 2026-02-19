@@ -20,14 +20,6 @@ export default function WebsiteMain() {
             <span>EZTRACK</span>
           </div>
 
-          {/* Desktop Nav */}
-          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-zinc-400">
-            <Link href="#" className="hover:text-white transition-colors">Features</Link>
-            <Link href="#" className="hover:text-white transition-colors">Pricing</Link>
-            <Link href="#" className="hover:text-white transition-colors">Resources</Link>
-            <Link href="#" className="hover:text-white transition-colors">Company</Link>
-          </nav>
-
           <div className="hidden md:flex items-center gap-4">
             <Link href="/login" className="text-sm font-medium hover:text-white text-zinc-400 transition-colors">
               Log In
@@ -43,26 +35,11 @@ export default function WebsiteMain() {
           </button>
         </div>
 
-        {/* Mobile Menu */}
-        {isMenuOpen && (
-          <div className="md:hidden border-t border-white/5 bg-[#050505] p-6 space-y-4">
-            <Link href="#" className="block text-zinc-400 hover:text-white">Features</Link>
-            <Link href="#" className="block text-zinc-400 hover:text-white">Pricing</Link>
-            <Link href="/login" className="block text-zinc-400 hover:text-white">Log In</Link>
-            <Link href="/Signup" className="block w-full text-center px-5 py-3 bg-white text-black font-bold rounded-lg">Sign Up</Link>
-          </div>
-        )}
       </header>
 
       <main className="pt-32 pb-24 overflow-hidden">
         {/* Hero Section */}
         <section className="relative max-w-7xl mx-auto px-6 text-center">
-
-          {/* Pill Badge */}
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-medium text-teal-400 mb-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
-            <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse"></span>
-            <span>v2.0 is now live</span>
-          </div>
 
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 bg-gradient-to-b from-white to-zinc-500 bg-clip-text text-transparent max-w-5xl mx-auto leading-[1.1]">
             Next-Gen Software for <br className="hidden md:block" />

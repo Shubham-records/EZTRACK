@@ -25,6 +25,7 @@ def get_invoices(current_gym: Gym = Depends(get_current_gym), db: Session = Depe
     return [map_invoice_response(i) for i in invoices]
 
 
+@router.post("", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     # Calculate totals

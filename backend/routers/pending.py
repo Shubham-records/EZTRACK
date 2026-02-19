@@ -108,6 +108,7 @@ def get_pending_balance(
     return map_pending_response(pending)
 
 
+@router.post("", response_model=PendingBalanceResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=PendingBalanceResponse, status_code=status.HTTP_201_CREATED)
 def create_pending_balance(
     data: PendingBalanceCreate,

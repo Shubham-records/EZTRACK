@@ -170,6 +170,7 @@ def get_protein(
     return map_protein_response(protein)
 
 
+@router.post("", response_model=ProteinResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ProteinResponse, status_code=status.HTTP_201_CREATED)
 def create_protein(
     data: ProteinCreate,

@@ -17,6 +17,7 @@ def map_contact_response(c: ExternalContact):
     return c_dict
 
 
+@router.get("", response_model=List[ExternalContactResponse])
 @router.get("/", response_model=List[ExternalContactResponse])
 def get_contacts(
     contact_type: Optional[str] = None,
@@ -60,6 +61,7 @@ def get_contact(
     return map_contact_response(contact)
 
 
+@router.post("", response_model=ExternalContactResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ExternalContactResponse, status_code=status.HTTP_201_CREATED)
 def create_contact(
     data: ExternalContactCreate,

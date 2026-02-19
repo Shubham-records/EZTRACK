@@ -225,6 +225,10 @@ class GymSettings(Base):
     admissionExpiryDays = Column(Integer, default=365) # Days after due date when admission expires
     readmissionDiscount = Column(Integer, default=50) # Percentage discount for readmission
 
+    # Fee Settings
+    admissionFee = Column(Float, default=0.0)
+    reAdmissionFee = Column(Float, default=0.0)
+
     # Notification Settings
     enableWhatsAppReminders = Column(Boolean, default=True)
     reminderDaysBefore = Column(Integer, default=3)

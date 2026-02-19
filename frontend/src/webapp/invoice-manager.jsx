@@ -215,6 +215,24 @@ export default function InvoiceManagerComponent() {
                       )}
                       {invoice.planPeriod && <p>Plan Period: {invoice.planPeriod}</p>}
                       {invoice.planType && <p>Plan Type: {invoice.planType}</p>}
+
+                      {invoice.items && invoice.items.length > 0 && (
+                        <div className="mt-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg p-4 border border-zinc-200 dark:border-zinc-700">
+                          <h4 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider mb-4 border-b border-zinc-200 dark:border-zinc-700 pb-2">Bill Detail</h4>
+                          <div className="space-y-3 text-sm">
+                            {invoice.items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between">
+                                <span className="text-zinc-600 dark:text-zinc-400">{item.description}</span>
+                                <span className="font-medium">₹{item.amount.toLocaleString()}</span>
+                              </div>
+                            ))}
+                            <div className="pt-3 border-t border-zinc-200 dark:border-zinc-700 flex justify-between items-center mt-2">
+                              <span className="font-bold text-zinc-900 dark:text-white">Total Paid</span>
+                              <span className="font-bold text-lg text-primary">₹{invoice.amount.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

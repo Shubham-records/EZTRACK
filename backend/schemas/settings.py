@@ -35,6 +35,8 @@ class GymSettingsBase(BaseModel):
     postExpiryGraceDays: Optional[int] = 30 # Grace period for expiry alerts
     admissionExpiryDays: Optional[int] = 365 # Admission expiry
     readmissionDiscount: Optional[int] = 50 # Readmission discount %
+    admissionFee: Optional[float] = 0.0
+    reAdmissionFee: Optional[float] = 0.0
     
     # Notifications
     enableWhatsAppReminders: Optional[bool] = True

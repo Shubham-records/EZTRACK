@@ -16,10 +16,20 @@ import AuditLogs from './AuditLogs';
 import Invoices from './Invoices';
 import Expenses from './Expenses';
 
+import SearchResultsPage from './SearchResults';
+
 export default function WebappMain() {
   const [selectedPage, setSelectedPage] = useState("Dashboard");
   const [gymmemberdata, Setgymmemberdata] = useState([]);
   const [proteinsdata, Setproteinsdata] = useState([]);
+
+  // Search State
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [activeSearchCategory, setActiveSearchCategory] = useState('');
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [pageSearchFilter, setPageSearchFilter] = useState('');
 
   const { showToast } = useToast();
 
@@ -34,7 +44,118 @@ export default function WebappMain() {
 
   function handlenavbarClick(page) {
     setSelectedPage(page);
+    setPageSearchFilter(''); // Clear filter on nav change
   }
+
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('eztracker_jwt_access_control_token');
+    const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+    return {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Database-Name': dbName,
+    };
+  };
+
+  const fetchAllExpenses = async () => {
+    let allData = [];
+    let skip = 0;
+    const limit = 50;
+    try {
+      while (true) {
+        const res = await fetch(`/api/expenses?limit=${limit}&skip=${skip}`, { headers: getAuthHeaders() });
+        if (!res.ok) break;
+        const data = await res.json();
+        const batch = Array.isArray(data) ? data : (data.data || []);
+        if (batch.length === 0) break;
+        allData = [...allData, ...batch];
+        if (batch.length < limit) break;
+        skip += limit;
+      }
+    } catch (e) {
+      console.error("Error fetching expenses", e);
+    }
+    return allData;
+  };
+
+  const fetchAllInvoices = async () => {
+    let allData = [];
+    let skip = 0;
+    const limit = 50;
+    try {
+      while (true) {
+        const res = await fetch(`/api/invoices?limit=${limit}&skip=${skip}`, { headers: getAuthHeaders() });
+        if (!res.ok) break;
+        const data = await res.json();
+        const batch = Array.isArray(data) ? data : (data.data || []);
+        if (batch.length === 0) break;
+        allData = [...allData, ...batch];
+        if (batch.length < limit) break;
+        skip += limit;
+      }
+    } catch (e) {
+      console.error("Error fetching invoices", e);
+    }
+    return allData;
+  };
+
+  const handleGlobalSearch = async (category) => {
+    if (!searchTerm.trim()) return;
+
+    setActiveSearchCategory(category);
+    setIsSearching(true);
+    setShowDropdown(false);
+
+    let results = [];
+    const lowerTerm = searchTerm.toLowerCase();
+
+    try {
+      if (category === 'Member') {
+        results = gymmemberdata.filter(m => m.Name?.toLowerCase().includes(lowerTerm));
+      } else if (category === 'Protein') {
+        results = proteinsdata.filter(p => p.ProductName?.toLowerCase().includes(lowerTerm) || p.Brand?.toLowerCase().includes(lowerTerm));
+      } else if (category === 'Expense') {
+        const data = await fetchAllExpenses();
+        results = data.filter(e => e.description?.toLowerCase().includes(lowerTerm));
+      } else if (category === 'Invoice') {
+        const data = await fetchAllInvoices();
+        results = data.filter(i => i.customerName?.toLowerCase().includes(lowerTerm));
+      }
+
+      if (results.length > 0) {
+        setSearchResults(results);
+        setSelectedPage('SearchResults');
+      } else {
+        showToast(`No ${category} record found for "${searchTerm}"`, 'error');
+      }
+    } catch (err) {
+      showToast('Search failed', 'error');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSearchResultRedirect = (item, category) => {
+    let filterVal = '';
+    let targetPage = '';
+
+    if (category === 'Member') {
+      filterVal = item.Name;
+      targetPage = 'AllMember';
+    } else if (category === 'Protein') {
+      filterVal = item.ProductName;
+      targetPage = 'Protein';
+    } else if (category === 'Expense') {
+      filterVal = item.description;
+      targetPage = 'Expenses';
+    } else if (category === 'Invoice') {
+      filterVal = item.customerName; // Invoices search by customer name usually
+      targetPage = 'Invoices';
+    }
+
+    setPageSearchFilter(filterVal);
+    setSelectedPage(targetPage);
+  };
 
   useEffect(() => {
     const fetchMembers = async (skip = 0, currentData = []) => {
@@ -186,7 +307,7 @@ export default function WebappMain() {
         {/* Header from theme */}
         <header className="h-16 flex items-center justify-between px-8 bg-surface-light/80 dark:bg-surface-dark/80 backdrop-blur border-b border-zinc-200 dark:border-zinc-800 sticky top-0 z-10">
           <div className="flex items-center text-sm text-zinc-500 dark:text-zinc-400">
-            <span className="hover:text-primary cursor-pointer transition-colors">Home</span>
+            <span className="hover:text-primary cursor-pointer transition-colors" onClick={() => setSelectedPage('Dashboard')}>Home</span>
             <span className="material-symbols-outlined text-[10px] mx-2">chevron_right</span>
             <span className="font-semibold text-zinc-900 dark:text-white">{selectedPage}</span>
           </div>
@@ -197,7 +318,29 @@ export default function WebappMain() {
                 className="w-full bg-zinc-100 dark:bg-zinc-900 border-none rounded-full py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 shadow-inner transition-all outline-none"
                 placeholder="Search..."
                 type="text"
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setShowDropdown(true);
+                }}
+                onFocus={() => setShowDropdown(true)}
+                onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
               />
+
+              {showDropdown && searchTerm && (
+                <div className="absolute top-full mt-2 w-full bg-white dark:bg-zinc-900 rounded-xl shadow-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
+                  {['Member', 'Protein', 'Invoice', 'Expense'].map((cat) => (
+                    <div
+                      key={cat}
+                      className="px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 transition-colors"
+                      onClick={() => handleGlobalSearch(cat)}
+                    >
+                      <span className="text-primary font-medium">Search {cat} for:</span>
+                      <span className="font-bold italic">"{searchTerm}"</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <button className="relative text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors">
               <span className="material-symbols-outlined">notifications</span>
@@ -219,14 +362,29 @@ export default function WebappMain() {
         </header>
 
         <div className="flex-1 overflow-y-auto p-8 stitch-scrollbar">
-          {selectedPage === "Dashboard" && <Dashboard />}
+          {isSearching && (
+            <div className="flex justify-center items-center h-64">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+            </div>
+          )}
+
+          {!isSearching && selectedPage === "Dashboard" && <Dashboard />}
+
+          {!isSearching && selectedPage === "SearchResults" && (
+            <SearchResultsPage
+              results={searchResults}
+              category={activeSearchCategory}
+              onRedirect={handleSearchResultRedirect}
+              onBack={() => setSelectedPage('Dashboard')}
+            />
+          )}
 
           {selectedPage === "Billing" && <Billing />}
           {selectedPage === "Bmi" && <BmiCalculator />}
-          {selectedPage === "Invoices" && <Invoices />}
-          {selectedPage === "Expenses" && <Expenses />}
-          {selectedPage === "AllMember" && <TableComponent gymmemberdata={gymmemberdata} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
-          {selectedPage === "Protein" && <TableComponent gymmemberdata={proteinsdata} allColumns={proteins} dataType="protein" onUpdateData={handleproteinsData} />}
+          {selectedPage === "Invoices" && <Invoices initialFilter={pageSearchFilter} />}
+          {selectedPage === "Expenses" && <Expenses initialFilter={pageSearchFilter} />}
+          {selectedPage === "AllMember" && <TableComponent initialFilter={pageSearchFilter} gymmemberdata={gymmemberdata} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
+          {selectedPage === "Protein" && <TableComponent initialFilter={pageSearchFilter} gymmemberdata={proteinsdata} allColumns={proteins} dataType="protein" onUpdateData={handleproteinsData} />}
           {selectedPage === "AllStaff" && <StaffComponent />}
           {selectedPage === "AddStaff" && <StaffComponent />}
           {selectedPage === "Settings" && <AdminSettings />}

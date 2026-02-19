@@ -9,6 +9,63 @@ const inputStyle = "w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark
 const labelStyle = "block text-xs font-bold text-zinc-500 uppercase tracking-wider mb-1";
 const selectStyle = "w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all appearance-none";
 
+function DuplicateModal({ isOpen, onClose, onContinue, duplicates }) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800">
+        <div className="p-6 border-b border-zinc-100 dark:border-zinc-800">
+          <h2 className="text-xl font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+            <span className="text-amber-500">⚠️</span> Potential Duplicate Members
+          </h2>
+          <p className="text-sm text-zinc-500 mt-1">
+            We found existing members with similar details. Please review before proceeding.
+          </p>
+        </div>
+
+        <div className="p-6 max-h-[60vh] overflow-y-auto space-y-4">
+          {duplicates.map((member) => (
+            <div key={member.id} className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-100 dark:border-zinc-800">
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <h3 className="font-bold text-zinc-900 dark:text-white">{member.Name}</h3>
+                  <p className="text-xs text-zinc-500">ID: {member.MembershipReceiptnumber}</p>
+                </div>
+                <span className={`px-2 py-1 rounded text-xs font-bold ${member.computed_status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                  }`}>
+                  {member.computed_status}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                <p>📞 {member.Mobile}</p>
+                <p>💬 {member.Whatsapp}</p>
+                {member.Aadhaar && <p>🆔 {member.Aadhaar}</p>}
+                <p>📅 Joined: {member.DateOfJoining}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="p-6 border-t border-zinc-100 dark:border-zinc-800 flex justify-end gap-3 bg-zinc-50 dark:bg-zinc-900/50">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-zinc-700 dark:text-zinc-300 font-medium hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-lg transition-colors"
+          >
+            Cancel & Review
+          </button>
+          <button
+            onClick={onContinue}
+            className="px-4 py-2 bg-primary hover:bg-teal-700 text-white font-bold rounded-lg shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5"
+          >
+            Continue Anyway
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function NewAdmission() {
   const router = useRouter();
   const { showToast } = useToast();
@@ -38,11 +95,19 @@ export function NewAdmission() {
     Remark: '',
     Mobile: null,
     extraDays: '0',
-    agreeTerms: true
+    agreeTerms: true,
+    admissionPrice: 0,
+    extraAmount: 0,
+    paymentMode: 'CASH',
+    paidAmount: null
   });
+
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [duplicates, setDuplicates] = useState([]);
 
   const [plans, setPlans] = useState([]);
   const [pricingMatrix, setPricingMatrix] = useState({});
+  const [applyAdmissionFee, setApplyAdmissionFee] = useState(true);
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -63,18 +128,70 @@ export function NewAdmission() {
         console.error("Failed to fetch plans", e);
       }
     };
+
+    const fetchSettings = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.admissionFee) {
+            setFormData(prev => ({ ...prev, admissionPrice: data.admissionFee }));
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch settings", e);
+      }
+    };
     fetchPlans();
+    fetchSettings();
   }, []);
 
+  // Auto-fill amount based on PlanType and PlanPeriod
   // Auto-fill amount based on PlanType and PlanPeriod
   useEffect(() => {
     if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
       const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
       if (priceConfig && priceConfig.price) {
-        setFormData(prev => ({ ...prev, LastPaymentAmount: priceConfig.price }));
+        const basePrice = parseFloat(priceConfig.price) || 0;
+        const admission = applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
+        const extra = parseFloat(formData.extraAmount) || 0;
+        const total = basePrice + admission + extra;
+        setFormData(prev => ({
+          ...prev,
+          LastPaymentAmount: total,
+          paidAmount: total
+        }));
       }
     }
-  }, [formData.PlanType, formData.PlanPeriod]);
+  }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee]);
+
+  // Calculate extra amount based on extra days
+  useEffect(() => {
+    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
+      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
+      if (priceConfig && priceConfig.price) {
+        const basePrice = parseFloat(priceConfig.price) || 0;
+        const extraDays = parseInt(formData.extraDays) || 0;
+
+        if (extraDays >= 0) {
+          let duration = 30;
+          if (formData.PlanPeriod === 'Monthly') duration = 30;
+          else if (formData.PlanPeriod === 'Quaterly') duration = 90;
+          else if (formData.PlanPeriod === 'HalfYearly') duration = 180;
+          else if (formData.PlanPeriod === 'Yearly') duration = 365;
+
+          const calculatedExtra = Math.round((basePrice / duration) * extraDays);
+          setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
+        }
+      }
+    }
+  }, [formData.extraDays, formData.PlanType, formData.PlanPeriod, pricingMatrix]);
 
   useEffect(() => {
     const fetchClientNumber = async () => {
@@ -106,7 +223,7 @@ export function NewAdmission() {
     const { name, value, type } = e.target;
     let newValue = type === 'checkbox' ? e.target.checked : value;
     const intFields = ['MembershipReceiptnumber', 'Age', 'weight', 'Mobile', 'Whatsapp', 'Aadhaar', 'LastPaymentAmount', 'RenewalReceiptNumber', 'extraDays'];
-    const floatFields = ['height'];
+    const floatFields = ['height', 'admissionPrice', 'extraAmount', 'paidAmount'];
 
     if (intFields.includes(name)) newValue = value === '' ? null : parseInt(value, 10);
     else if (floatFields.includes(name)) newValue = value === '' ? null : parseFloat(value);
@@ -136,6 +253,43 @@ export function NewAdmission() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    // Check for duplicates first
+    try {
+      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+      const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+      if (!jwtToken || !dbName) throw new Error('No token found.');
+
+      const dupRes = await fetch('/api/members/search-duplicates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName },
+        body: JSON.stringify({
+          Name: formData.Name,
+          Mobile: formData.Mobile,
+          Whatsapp: formData.Whatsapp,
+          Aadhaar: formData.Aadhaar
+        })
+      });
+
+      if (dupRes.ok) {
+        const potentialDuplicates = await dupRes.json();
+        if (potentialDuplicates.length > 0) {
+          setDuplicates(potentialDuplicates);
+          setShowDuplicateModal(true);
+          return; // Stop here and wait for user confirmation
+        }
+      }
+    } catch (error) {
+      console.error("Duplicate check failed", error);
+      // Fail silently on duplicate check error and proceed? Or block?
+      // Let's proceed if check fails, assuming it's a network glitch, or maybe show warning.
+      // For now, proceeding.
+    }
+
+    await submitAdmission();
+  };
+
+  const submitAdmission = async () => {
     try {
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
       const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
@@ -262,7 +416,99 @@ export function NewAdmission() {
             </div>
             <div>
               <label className={labelStyle}>Extra Days</label>
-              <input type="number" name="extraDays" value={formData.extraDays} onChange={handleInputChange} className={inputStyle} />
+              <input type="number" name="extraDays" value={formData.extraDays || ''} onChange={handleInputChange} className={inputStyle} />
+            </div>
+          </div>
+
+          <div className="md:col-span-3 mt-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg p-4 border border-zinc-200 dark:border-zinc-700">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider mb-4 border-b border-zinc-200 dark:border-zinc-700 pb-2">Bill Summary</h3>
+
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-zinc-600 dark:text-zinc-400">Base Plan Price ({formData.PlanType} - {formData.PlanPeriod})</span>
+                <span className="font-medium">₹{(formData.LastPaymentAmount - (parseFloat(formData.admissionPrice) || 0) - (parseFloat(formData.extraAmount) || 0)).toLocaleString()}</span>
+              </div>
+
+              <div className="flex justify-between items-center group">
+                <span className="text-zinc-600 dark:text-zinc-400 flex items-center gap-2">
+                  Admission Fee
+                </span>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 mr-2">
+                    <input
+                      type="checkbox"
+                      checked={applyAdmissionFee}
+                      onChange={(e) => setApplyAdmissionFee(e.target.checked)}
+                      className="w-4 h-4 text-primary rounded focus:ring-primary"
+                    />
+                    <span className="text-xs text-zinc-500">Apply</span>
+                  </div>
+                  <span className="text-zinc-400 text-xs mr-2">Editable</span>
+                  <input
+                    type="number"
+                    name="admissionPrice"
+                    value={formData.admissionPrice}
+                    onChange={handleInputChange}
+                    className={`w-24 text-right bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none ${!applyAdmissionFee && 'opacity-50'}`}
+                    min="0"
+                    disabled={!applyAdmissionFee}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center group">
+                <span className="text-zinc-600 dark:text-zinc-400 flex items-center gap-2">
+                  Extra Charges
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-400 text-xs mr-2">Editable</span>
+                  <input
+                    type="number"
+                    name="extraAmount"
+                    value={formData.extraAmount}
+                    onChange={handleInputChange}
+                    className="w-24 text-right bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none"
+                    min="0"
+                  />
+                </div>
+              </div>
+
+
+
+              {/* Payment Details */}
+              <div className="pt-3 border-t border-zinc-200 dark:border-zinc-700 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-zinc-900 dark:text-white">Total Payable</span>
+                  <span className="font-bold text-xl text-primary">₹{(parseFloat(formData.LastPaymentAmount) || 0).toLocaleString()}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Paid Amount</label>
+                    <input
+                      type="number"
+                      name="paidAmount"
+                      value={formData.paidAmount === null ? '' : formData.paidAmount}
+                      onChange={handleInputChange}
+                      className={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Payment Mode</label>
+                    <select name="paymentMode" value={formData.paymentMode} onChange={handleInputChange} className={selectStyle}>
+                      <option value="CASH">Cash</option>
+                      <option value="UPI">UPI</option>
+                      <option value="CARD">Card</option>
+                      <option value="BANK">Bank Transfer</option>
+                    </select>
+                  </div>
+                </div>
+                {(parseFloat(formData.LastPaymentAmount) - (parseFloat(formData.paidAmount) || 0)) > 0 && (
+                  <div className="text-right text-rose-500 font-bold text-sm">
+                    Pending Balance: ₹{(parseFloat(formData.LastPaymentAmount) - (parseFloat(formData.paidAmount) || 0)).toLocaleString()}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -275,8 +521,18 @@ export function NewAdmission() {
         <button type="submit" className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 mt-4">
           Submit Admission
         </button>
-      </form>
-    </div>
+      </form >
+
+      <DuplicateModal
+        isOpen={showDuplicateModal}
+        onClose={() => setShowDuplicateModal(false)}
+        onContinue={() => {
+          setShowDuplicateModal(false);
+          submitAdmission();
+        }}
+        duplicates={duplicates}
+      />
+    </div >
   );
 }
 
@@ -289,11 +545,14 @@ export function ReAdmission() {
     DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
     PlanPeriod: '', PlanType: '', MembershipStatus: 'Active', MembershipExpiryDate: '', LastPaymentDate: '',
     NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
-    extraDays: '0', agreeTerms: false
+    extraDays: '0', agreeTerms: false,
+    admissionPrice: 0, extraAmount: 0,
+    paymentMode: 'CASH', paidAmount: null
   });
 
   const [plans, setPlans] = useState([]);
   const [pricingMatrix, setPricingMatrix] = useState({});
+  const [applyAdmissionFee, setApplyAdmissionFee] = useState(true);
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -314,18 +573,70 @@ export function ReAdmission() {
         console.error("Failed to fetch plans", e);
       }
     };
+
+    const fetchSettings = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.reAdmissionFee) {
+            setFormData(prev => ({ ...prev, admissionPrice: data.reAdmissionFee }));
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch settings", e);
+      }
+    };
     fetchPlans();
+    fetchSettings();
   }, []);
 
+  // Auto-fill amount based on PlanType and PlanPeriod
   // Auto-fill amount based on PlanType and PlanPeriod
   useEffect(() => {
     if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
       const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
       if (priceConfig && priceConfig.price) {
-        setFormData(prev => ({ ...prev, LastPaymentAmount: priceConfig.price }));
+        const basePrice = parseFloat(priceConfig.price) || 0;
+        const admission = applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
+        const extra = parseFloat(formData.extraAmount) || 0;
+        const total = basePrice + admission + extra;
+        setFormData(prev => ({
+          ...prev,
+          LastPaymentAmount: total,
+          paidAmount: total
+        }));
       }
     }
-  }, [formData.PlanType, formData.PlanPeriod]);
+  }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee]);
+
+  // Calculate extra amount based on extra days
+  useEffect(() => {
+    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
+      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
+      if (priceConfig && priceConfig.price) {
+        const basePrice = parseFloat(priceConfig.price) || 0;
+        const extraDays = parseInt(formData.extraDays) || 0;
+
+        if (extraDays >= 0) {
+          let duration = 30;
+          if (formData.PlanPeriod === 'Monthly') duration = 30;
+          else if (formData.PlanPeriod === 'Quaterly') duration = 90;
+          else if (formData.PlanPeriod === 'HalfYearly') duration = 180;
+          else if (formData.PlanPeriod === 'Yearly') duration = 365;
+
+          const calculatedExtra = Math.round((basePrice / duration) * extraDays);
+          setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
+        }
+      }
+    }
+  }, [formData.extraDays, formData.PlanType, formData.PlanPeriod, pricingMatrix]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -452,7 +763,99 @@ export function ReAdmission() {
             </div>
             <div>
               <label className={labelStyle}>Extra Days</label>
-              <input type="number" name="extraDays" value={formData.extraDays} onChange={handleInputChange} className={inputStyle} />
+              <input type="number" name="extraDays" value={formData.extraDays || ''} onChange={handleInputChange} className={inputStyle} />
+            </div>
+          </div>
+
+          <div className="md:col-span-3 mt-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg p-4 border border-zinc-200 dark:border-zinc-700">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider mb-4 border-b border-zinc-200 dark:border-zinc-700 pb-2">Bill Summary</h3>
+
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-zinc-600 dark:text-zinc-400">Base Plan Price ({formData.PlanType} - {formData.PlanPeriod})</span>
+                <span className="font-medium">₹{(formData.LastPaymentAmount - (parseFloat(formData.admissionPrice) || 0) - (parseFloat(formData.extraAmount) || 0)).toLocaleString()}</span>
+              </div>
+
+              <div className="flex justify-between items-center group">
+                <span className="text-zinc-600 dark:text-zinc-400 flex items-center gap-2">
+                  Admission Fee
+                </span>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 mr-2">
+                    <input
+                      type="checkbox"
+                      checked={applyAdmissionFee}
+                      onChange={(e) => setApplyAdmissionFee(e.target.checked)}
+                      className="w-4 h-4 text-primary rounded focus:ring-primary"
+                    />
+                    <span className="text-xs text-zinc-500">Apply</span>
+                  </div>
+                  <span className="text-zinc-400 text-xs mr-2">Editable</span>
+                  <input
+                    type="number"
+                    name="admissionPrice"
+                    value={formData.admissionPrice}
+                    onChange={handleInputChange}
+                    className={`w-24 text-right bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none ${!applyAdmissionFee && 'opacity-50'}`}
+                    min="0"
+                    disabled={!applyAdmissionFee}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center group">
+                <span className="text-zinc-600 dark:text-zinc-400 flex items-center gap-2">
+                  Extra Charges
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-400 text-xs mr-2">Editable</span>
+                  <input
+                    type="number"
+                    name="extraAmount"
+                    value={formData.extraAmount}
+                    onChange={handleInputChange}
+                    className="w-24 text-right bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none"
+                    min="0"
+                  />
+                </div>
+
+
+              </div>
+
+              {/* Payment Details */}
+              <div className="pt-3 border-t border-zinc-200 dark:border-zinc-700 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-zinc-900 dark:text-white">Total Payable</span>
+                  <span className="font-bold text-xl text-primary">₹{(parseFloat(formData.LastPaymentAmount) || 0).toLocaleString()}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Paid Amount</label>
+                    <input
+                      type="number"
+                      name="paidAmount"
+                      value={formData.paidAmount === null ? '' : formData.paidAmount}
+                      onChange={handleInputChange}
+                      className={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Payment Mode</label>
+                    <select name="paymentMode" value={formData.paymentMode} onChange={handleInputChange} className={selectStyle}>
+                      <option value="CASH">Cash</option>
+                      <option value="UPI">UPI</option>
+                      <option value="CARD">Card</option>
+                      <option value="BANK">Bank Transfer</option>
+                    </select>
+                  </div>
+                </div>
+                {(parseFloat(formData.LastPaymentAmount) - (parseFloat(formData.paidAmount) || 0)) > 0 && (
+                  <div className="text-right text-rose-500 font-bold text-sm">
+                    Pending Balance: ₹{(parseFloat(formData.LastPaymentAmount) - (parseFloat(formData.paidAmount) || 0)).toLocaleString()}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -460,8 +863,8 @@ export function ReAdmission() {
         <button type="submit" className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 mt-4">
           Submit Re-Admission
         </button>
-      </form>
-    </div>
+      </form >
+    </div >
   );
 }
 
@@ -1001,14 +1404,3 @@ export function Expenses() {
   );
 }
 
-// Return Membership placeholder
-export function ReturnMembership() {
-  return (
-    <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm max-w-2xl mx-auto">
-      <div className="text-center py-12">
-        <h1 className="text-2xl font-bold text-zinc-900 dark:text-white mb-4">Return Membership</h1>
-        <p className="text-zinc-500">This feature is coming soon. Contact admin for membership returns.</p>
-      </div>
-    </div>
-  );
-}

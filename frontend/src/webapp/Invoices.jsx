@@ -10,11 +10,11 @@ import ImportDataModal from './components/ImportDataModal';
 
 const cardStyle = "bg-surface-light dark:bg-surface-dark p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm";
 
-export default function Invoices() {
+export default function Invoices({ initialFilter = '' }) {
     const { showToast } = useToast();
     const [loading, setLoading] = useState(true);
     const [invoices, setInvoices] = useState([]);
-    const [searchTerm, setSearchTerm] = useState('');
+    const [searchTerm, setSearchTerm] = useState(initialFilter);
     const [selectedIds, setSelectedIds] = useState([]);
     const [showImportModal, setShowImportModal] = useState(false);
     const [filters, setFilters] = useState({

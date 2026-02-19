@@ -9,12 +9,12 @@ import ImportDataModal from './components/ImportDataModal';
 
 const cardStyle = "bg-surface-light dark:bg-surface-dark p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm";
 
-export default function Expenses() {
+export default function Expenses({ initialFilter = '' }) {
     const { showToast } = useToast();
     const [loading, setLoading] = useState(true);
     const [expenses, setExpenses] = useState([]);
     const [categories, setCategories] = useState([]);
-    const [searchTerm, setSearchTerm] = useState('');
+    const [searchTerm, setSearchTerm] = useState(initialFilter);
     const [selectedIds, setSelectedIds] = useState([]);
     const [showAddModal, setShowAddModal] = useState(false);
     const [showImportModal, setShowImportModal] = useState(false);

@@ -28,9 +28,14 @@ class MemberBase(BaseModel):
     Mobile: Optional[int] = None
     extraDays: Optional[str] = "0"
     agreeTerms: Optional[bool] = False
+    
+    # Billing fields (not stored in Member table, but used for Invoice)
+    admissionPrice: Optional[float] = 0.0
+    extraAmount: Optional[float] = 0.0
 
 class MemberCreate(MemberBase):
-    pass
+    paymentMode: Optional[str] = "CASH"
+    paidAmount: Optional[float] = None
 
 class MemberUpdate(MemberBase):
     # All fields from Base are optional by default if not '...' required, 

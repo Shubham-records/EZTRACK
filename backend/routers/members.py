@@ -6,7 +6,7 @@ from datetime import datetime
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Member, Invoice
+from models.all_models import Gym, Member, Invoice, PendingBalance
 from schemas.member import MemberCreate, MemberResponse, MemberUpdate
 
 router = APIRouter()
@@ -117,6 +117,48 @@ def get_members(current_gym: Gym = Depends(get_current_gym), db: Session = Depen
     # Map _id and compute status
     return [map_member_response(m, admission_expiry_days) for m in members]
 
+
+
+@router.post("/search-duplicates")
+def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Search for potential duplicates based on Name, Mobile, Whatsapp, or Aadhaar"""
+    name = data.get("Name")
+    mobile = data.get("Mobile")
+    whatsapp = data.get("Whatsapp")
+    aadhaar = data.get("Aadhaar")
+    
+    if not any([name, mobile, whatsapp, aadhaar]):
+        return []
+        
+    conditions = []
+    if name:
+        conditions.append(Member.Name == name)
+    if mobile:
+        try:
+            conditions.append(Member.Mobile == int(mobile))
+        except:
+            pass
+    if whatsapp:
+        try:
+            conditions.append(Member.Whatsapp == int(whatsapp))
+        except:
+            pass
+    if aadhaar:
+        try:
+            conditions.append(Member.Aadhaar == int(aadhaar))
+        except:
+            pass
+            
+    if not conditions:
+        return []
+        
+    # Find matches
+    matches = db.query(Member).filter(
+        Member.gymId == current_gym.id,
+        or_(*conditions)
+    ).all()
+    
+    return [map_member_response(m) for m in matches]
 
 @router.post("/check-duplicates")
 def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
@@ -274,6 +316,140 @@ def bulk_update_members(data: dict, current_gym: Gym = Depends(get_current_gym),
     db.commit()
     return {"message": f"Updated {updated_count} members", "count": updated_count}
 
+@router.post("/re-admission", status_code=status.HTTP_200_OK)
+def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Re-activate a member and create invoice"""
+    # Find existing member by receipt number (client ID)
+    if not data.MembershipReceiptnumber:
+        raise HTTPException(status_code=400, detail="Client ID (MembershipReceiptnumber) required for re-admission")
+        
+    member = db.query(Member).filter(
+        Member.MembershipReceiptnumber == data.MembershipReceiptnumber,
+        Member.gymId == current_gym.id
+    ).first()
+    
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+        
+    # Update member details
+    member.Name = data.Name
+    member.Gender = data.Gender
+    member.Age = data.Age
+    member.AccessStatus = data.AccessStatus
+    member.height = data.height
+    member.weight = data.weight
+    member.DateOfReJoin = data.DateOfReJoin
+    member.Billtype = data.Billtype
+    member.Address = data.Address
+    member.Whatsapp = data.Whatsapp
+    member.PlanPeriod = data.PlanPeriod
+    member.PlanType = data.PlanType
+    member.MembershipStatus = "Active"
+    member.MembershipExpiryDate = data.MembershipExpiryDate
+    member.LastPaymentDate = data.LastPaymentDate # Usually DateOfReJoin
+    member.NextDuedate = data.NextDuedate
+    member.LastPaymentAmount = data.LastPaymentAmount
+    member.RenewalReceiptNumber = data.RenewalReceiptNumber
+    member.Aadhaar = data.Aadhaar
+    member.Remark = data.Remark
+    member.Mobile = data.Mobile
+    member.extraDays = data.extraDays
+    member.agreeTerms = data.agreeTerms
+    
+    member.lastEditedBy = current_gym.username
+    member.editReason = 'Re-Admission'
+    
+    # Store changes
+    db.commit()
+    
+    # Create Invoice with breakdown
+    if data.LastPaymentAmount and data.LastPaymentAmount > 0:
+        items = []
+        
+        # Calculate base plan price
+        base_plan_price = float(data.LastPaymentAmount)
+        admission_price = float(data.admissionPrice or 0)
+        extra_amount = float(data.extraAmount or 0)
+        
+        base_plan_price = base_plan_price - admission_price - extra_amount
+            
+        # Add items
+        if base_plan_price > 0:
+            items.append({
+                "description": f"Re-Admission Plan - {data.PlanType} ({data.PlanPeriod})",
+                "quantity": 1,
+                "rate": base_plan_price,
+                "amount": base_plan_price
+            })
+
+        if admission_price > 0:
+            items.append({
+                "description": "Admission Fee",
+                "quantity": 1,
+                "rate": admission_price,
+                "amount": admission_price
+            })
+            
+        if extra_amount > 0:
+            items.append({
+                "description": "Extra Charges",
+                "quantity": 1,
+                "rate": extra_amount,
+                "amount": extra_amount
+            })
+
+        # Calculate payment details
+        total_amount = float(data.LastPaymentAmount)
+        paid_amount = float(data.paidAmount) if data.paidAmount is not None else total_amount
+        balance = total_amount - paid_amount
+        
+        payment_status = 'PAID'
+        if balance > 0:
+            payment_status = 'PARTIAL' if paid_amount > 0 else 'PENDING'
+
+        new_invoice = Invoice(
+            gymId=current_gym.id,
+            memberId=member.id,
+            customerName=member.Name,
+            invoiceDate=datetime.now(),
+            items=items,
+            subTotal=total_amount,
+            total=total_amount,
+            status=payment_status,
+            paymentMode=data.paymentMode, 
+            tax=0.0,
+            discount=0.0,
+            lastEditedBy=current_gym.username,
+            editReason="Re-Admission Invoice"
+        )
+        db.add(new_invoice)
+
+        # Create Pending Balance if needed
+        if balance > 0:
+            pending_entry = PendingBalance(
+                gymId=current_gym.id,
+                entityType="member",
+                entityName=member.Name,
+                phone=str(member.Mobile) if member.Mobile else None,
+                memberId=member.id,
+                amount=total_amount,
+                paidAmount=paid_amount,
+                dueDate=data.NextDuedate, 
+                status="partial" if paid_amount > 0 else "pending",
+                notes=f"Balance from Re-Admission. Invoice amount: {total_amount}, Paid: {paid_amount}"
+            )
+            db.add(pending_entry)
+        db.commit()
+
+    db.refresh(member)
+    return {
+        "message": "Re-instate member successfully",
+        "id": member.id,
+        "invoiceCreated": (data.LastPaymentAmount is not None and data.LastPaymentAmount > 0),
+        **map_member_response(member)
+    }
+
+@router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     # Basic validation logic mirrored from Next.js
@@ -321,28 +497,82 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
     db.add(new_member)
     db.flush() # Populate ID
 
-    # Create Invoice
+    # Create Invoice with breakdown
     if data.LastPaymentAmount and data.LastPaymentAmount > 0:
+        items = []
+        
+        # Calculate base plan price
+        base_plan_price = float(data.LastPaymentAmount)
+        admission_price = float(data.admissionPrice or 0)
+        extra_amount = float(data.extraAmount or 0)
+        
+        base_plan_price = base_plan_price - admission_price - extra_amount
+            
+        # Add items
+        if base_plan_price > 0:
+            items.append({
+                "description": f"New Admission - {data.PlanType} ({data.PlanPeriod})",
+                "quantity": 1,
+                "rate": base_plan_price,
+                "amount": base_plan_price
+            })
+
+        if admission_price > 0:
+            items.append({
+                "description": "Admission Fee",
+                "quantity": 1,
+                "rate": admission_price,
+                "amount": admission_price
+            })
+            
+        if extra_amount > 0:
+            items.append({
+                "description": "Extra Charges",
+                "quantity": 1,
+                "rate": extra_amount,
+                "amount": extra_amount
+            })
+
+        # Calculate payment details
+        total_amount = float(data.LastPaymentAmount)
+        paid_amount = float(data.paidAmount) if data.paidAmount is not None else total_amount
+        balance = total_amount - paid_amount
+        
+        payment_status = 'PAID'
+        if balance > 0:
+            payment_status = 'PARTIAL' if paid_amount > 0 else 'PENDING'
+
         new_invoice = Invoice(
             gymId=current_gym.id,
             memberId=new_member.id,
             customerName=new_member.Name,
             invoiceDate=datetime.now(),
-            items=[{
-                "description": f"New Admission - {data.PlanType} ({data.PlanPeriod})",
-                "quantity": 1,
-                "rate": data.LastPaymentAmount,
-                "amount": data.LastPaymentAmount
-            }],
-            subTotal=float(data.LastPaymentAmount),
-            total=float(data.LastPaymentAmount),
-            status='PAID',
-            paymentMode='CASH', 
+            items=items,
+            subTotal=total_amount,
+            total=total_amount,
+            status=payment_status,
+            paymentMode=data.paymentMode, 
             tax=0.0,
             discount=0.0,
             lastEditedBy=current_gym.username
         )
         db.add(new_invoice)
+
+        # Create Pending Balance if needed
+        if balance > 0:
+            pending_entry = PendingBalance(
+                gymId=current_gym.id,
+                entityType="member",
+                entityName=new_member.Name,
+                phone=str(new_member.Mobile) if new_member.Mobile else None,
+                memberId=new_member.id,
+                amount=total_amount,
+                paidAmount=paid_amount,
+                dueDate=data.NextDuedate, # Use NextDueDate as likely payment due date for balance
+                status="partial" if paid_amount > 0 else "pending",
+                notes=f"Balance from New Admission. Invoice amount: {total_amount}, Paid: {paid_amount}"
+            )
+            db.add(pending_entry)
     
     db.commit()
     db.refresh(new_member)
@@ -383,6 +613,7 @@ def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_curren
     db.refresh(member)
     return map_member_response(member)
 
+@router.patch("", response_model=MemberResponse)
 @router.patch("/", response_model=MemberResponse)
 def update_member(data: MemberUpdate, id: str, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     # Note: Next.js reads 'id' from body, but using query param or path param is standard.
@@ -427,3 +658,20 @@ def update_member_body(data: dict, current_gym: Gym = Depends(get_current_gym), 
     db.refresh(member)
     
     return map_member_response(member)
+
+@router.get("/client/{client_number}", response_model=MemberResponse)
+def get_member_by_client_number(client_number: int, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Get member details by client number (receipt number)"""
+    member = db.query(Member).filter(
+        Member.MembershipReceiptnumber == client_number,
+        Member.gymId == current_gym.id
+    ).first()
+    
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+        
+    # Fetch settings for admission expiry to correctly map status
+    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
+        
+    return map_member_response(member, admission_expiry_days)

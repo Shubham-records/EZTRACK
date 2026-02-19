@@ -14,6 +14,7 @@ router = APIRouter()
 # ============ GYM SETTINGS ============
 
 @router.get("", response_model=GymSettingsResponse)
+@router.get("/", response_model=GymSettingsResponse)
 def get_settings(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     """Get gym settings. Creates default if not exists."""
     settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
@@ -29,6 +30,7 @@ def get_settings(current_gym: Gym = Depends(get_current_gym), db: Session = Depe
 
 
 @router.put("", response_model=GymSettingsResponse)
+@router.put("/", response_model=GymSettingsResponse)
 def update_settings(
     data: GymSettingsUpdate,
     current_gym: Gym = Depends(get_current_gym),

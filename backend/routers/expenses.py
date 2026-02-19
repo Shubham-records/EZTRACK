@@ -43,6 +43,7 @@ def get_expenses(
     return [map_expense_response(e) for e in expenses]
 
 
+@router.post("", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 def create_expense(
     data: ExpenseCreate,

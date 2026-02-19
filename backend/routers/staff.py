@@ -9,6 +9,7 @@ from typing import List
 
 router = APIRouter()
 
+@router.get("", response_model=List[UserResponse])
 @router.get("/", response_model=List[UserResponse])
 def get_staff(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     # Any authenticated user of the gym can list?
@@ -17,6 +18,7 @@ def get_staff(current_gym: Gym = Depends(get_current_gym), db: Session = Depends
     users = db.query(User).filter(User.gymId == current_gym.id).all()
     return users
 
+@router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_staff(data: UserCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     # Role Check: Needs to be OWNER or MANAGER
