@@ -553,6 +553,13 @@ export function ReAdmission() {
   const [plans, setPlans] = useState([]);
   const [pricingMatrix, setPricingMatrix] = useState({});
   const [applyAdmissionFee, setApplyAdmissionFee] = useState(true);
+  const [gymSettings, setGymSettings] = useState({
+    admissionFee: 0,
+    reAdmissionFee: 0,
+    readmissionDiscount: 50,
+    admissionExpiryDays: 365
+  });
+  const [isAdmissionActive, setIsAdmissionActive] = useState(false);
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -585,9 +592,15 @@ export function ReAdmission() {
         });
         if (res.ok) {
           const data = await res.json();
-          if (data.reAdmissionFee) {
-            setFormData(prev => ({ ...prev, admissionPrice: data.reAdmissionFee }));
-          }
+          const settings = {
+            admissionFee: parseFloat(data.admissionFee) || 0,
+            reAdmissionFee: parseFloat(data.reAdmissionFee) || 0,
+            readmissionDiscount: parseFloat(data.readmissionDiscount) || 50,
+            admissionExpiryDays: parseInt(data.admissionExpiryDays) || 365
+          };
+          setGymSettings(settings);
+          // Default to flat reAdmissionFee until member data is loaded
+          setFormData(prev => ({ ...prev, admissionPrice: settings.reAdmissionFee }));
         }
       } catch (e) {
         console.error("Failed to fetch settings", e);
@@ -655,7 +668,32 @@ export function ReAdmission() {
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
-      setFormData(prev => ({ ...prev, ...data, DateOfReJoin: format(new Date(), 'yyyy-MM-dd') }));
+
+      // Check if admission is still active based on DateOfJoining
+      let admissionActive = false;
+      let computedAdmissionPrice = gymSettings.reAdmissionFee;
+      if (data.DateOfJoining) {
+        try {
+          const joinDate = parse(data.DateOfJoining, 'yyyy-MM-dd', new Date());
+          const daysSinceJoining = Math.floor((new Date() - joinDate) / (1000 * 60 * 60 * 24));
+          if (daysSinceJoining <= gymSettings.admissionExpiryDays) {
+            admissionActive = true;
+            computedAdmissionPrice = Math.round(
+              gymSettings.admissionFee * (gymSettings.readmissionDiscount / 100)
+            );
+          }
+        } catch (e) {
+          console.error("Error parsing DateOfJoining", e);
+        }
+      }
+
+      setIsAdmissionActive(admissionActive);
+      setFormData(prev => ({
+        ...prev,
+        ...data,
+        DateOfReJoin: format(new Date(), 'yyyy-MM-dd'),
+        admissionPrice: computedAdmissionPrice
+      }));
     } catch (error) {
       showToast(error.message, 'error');
     }
@@ -779,6 +817,11 @@ export function ReAdmission() {
               <div className="flex justify-between items-center group">
                 <span className="text-zinc-600 dark:text-zinc-400 flex items-center gap-2">
                   Admission Fee
+                  {isAdmissionActive && (
+                    <span className="text-xs text-green-600 dark:text-green-400 font-medium bg-green-50 dark:bg-green-900/30 px-2 py-0.5 rounded-full">
+                      Active: ₹{gymSettings.admissionFee} × {gymSettings.readmissionDiscount}%
+                    </span>
+                  )}
                 </span>
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-2 mr-2">
