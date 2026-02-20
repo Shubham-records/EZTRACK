@@ -370,8 +370,9 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
         base_plan_price = float(data.LastPaymentAmount)
         admission_price = float(data.admissionPrice or 0)
         extra_amount = float(data.extraAmount or 0)
+        pt_amount = float(data.ptAmount or 0) if data.ptPlanType else 0
         
-        base_plan_price = base_plan_price - admission_price - extra_amount
+        base_plan_price = base_plan_price - admission_price - extra_amount - pt_amount
             
         # Add items
         if base_plan_price > 0:
@@ -396,6 +397,15 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
                 "quantity": 1,
                 "rate": extra_amount,
                 "amount": extra_amount
+            })
+
+        if pt_amount > 0:
+            pt_desc = f"Personal Training - {data.ptPlanType or 'PT'}" + (f" ({data.ptPlanPeriod})" if data.ptPlanPeriod else "")
+            items.append({
+                "description": pt_desc,
+                "quantity": 1,
+                "rate": pt_amount,
+                "amount": pt_amount
             })
 
         # Calculate payment details
@@ -444,6 +454,120 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     db.refresh(member)
     return {
         "message": "Re-instate member successfully",
+        "id": member.id,
+        "invoiceCreated": (data.LastPaymentAmount is not None and data.LastPaymentAmount > 0),
+        **map_member_response(member)
+    }
+
+@router.post("/renewal", status_code=status.HTTP_200_OK)
+def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Renew a member's plan and create invoice"""
+    if not data.MembershipReceiptnumber:
+        raise HTTPException(status_code=400, detail="Client ID (MembershipReceiptnumber) required for renewal")
+    
+    member = db.query(Member).filter(
+        Member.MembershipReceiptnumber == data.MembershipReceiptnumber,
+        Member.gymId == current_gym.id
+    ).first()
+    
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    
+    # Update member plan details
+    member.PlanPeriod = data.PlanPeriod
+    member.PlanType = data.PlanType
+    member.MembershipStatus = "Active"
+    member.MembershipExpiryDate = data.MembershipExpiryDate
+    member.LastPaymentDate = data.LastPaymentDate or data.DateOfReJoin
+    member.NextDuedate = data.NextDuedate
+    member.LastPaymentAmount = data.LastPaymentAmount
+    member.RenewalReceiptNumber = data.RenewalReceiptNumber
+    member.extraDays = data.extraDays
+    
+    member.lastEditedBy = current_gym.username
+    member.editReason = 'Renewal'
+    
+    db.commit()
+    
+    # Create Invoice with breakdown
+    if data.LastPaymentAmount and data.LastPaymentAmount > 0:
+        items = []
+        
+        base_plan_price = float(data.LastPaymentAmount)
+        extra_amount = float(data.extraAmount or 0)
+        pt_amount = float(data.ptAmount or 0) if data.ptPlanType else 0
+        
+        base_plan_price = base_plan_price - extra_amount - pt_amount
+        
+        if base_plan_price > 0:
+            items.append({
+                "description": f"Renewal - {data.PlanType} ({data.PlanPeriod})",
+                "quantity": 1,
+                "rate": base_plan_price,
+                "amount": base_plan_price
+            })
+        
+        if extra_amount > 0:
+            items.append({
+                "description": "Extra Charges",
+                "quantity": 1,
+                "rate": extra_amount,
+                "amount": extra_amount
+            })
+        
+        if pt_amount > 0:
+            pt_desc = f"Personal Training - {data.ptPlanType or 'PT'}" + (f" ({data.ptPlanPeriod})" if data.ptPlanPeriod else "")
+            items.append({
+                "description": pt_desc,
+                "quantity": 1,
+                "rate": pt_amount,
+                "amount": pt_amount
+            })
+        
+        total_amount = float(data.LastPaymentAmount)
+        paid_amount = float(data.paidAmount) if data.paidAmount is not None else total_amount
+        balance = total_amount - paid_amount
+        
+        payment_status = 'PAID'
+        if balance > 0:
+            payment_status = 'PARTIAL' if paid_amount > 0 else 'PENDING'
+        
+        new_invoice = Invoice(
+            gymId=current_gym.id,
+            memberId=member.id,
+            customerName=member.Name,
+            invoiceDate=datetime.now(),
+            items=items,
+            subTotal=total_amount,
+            total=total_amount,
+            status=payment_status,
+            paymentMode=data.paymentMode,
+            tax=0.0,
+            discount=0.0,
+            lastEditedBy=current_gym.username,
+            editReason="Renewal Invoice"
+        )
+        db.add(new_invoice)
+        
+        if balance > 0:
+            pending_entry = PendingBalance(
+                gymId=current_gym.id,
+                entityType="member",
+                entityName=member.Name,
+                phone=str(member.Mobile) if member.Mobile else None,
+                memberId=member.id,
+                amount=total_amount,
+                paidAmount=paid_amount,
+                dueDate=data.NextDuedate,
+                status="partial" if paid_amount > 0 else "pending",
+                notes=f"Balance from Renewal. Invoice amount: {total_amount}, Paid: {paid_amount}"
+            )
+            db.add(pending_entry)
+        db.commit()
+    
+    db.refresh(member)
+    return {
+        "message": "Renewal successful",
         "id": member.id,
         "invoiceCreated": (data.LastPaymentAmount is not None and data.LastPaymentAmount > 0),
         **map_member_response(member)
@@ -505,8 +629,9 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
         base_plan_price = float(data.LastPaymentAmount)
         admission_price = float(data.admissionPrice or 0)
         extra_amount = float(data.extraAmount or 0)
+        pt_amount = float(data.ptAmount or 0) if data.ptPlanType else 0
         
-        base_plan_price = base_plan_price - admission_price - extra_amount
+        base_plan_price = base_plan_price - admission_price - extra_amount - pt_amount
             
         # Add items
         if base_plan_price > 0:
@@ -531,6 +656,15 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
                 "quantity": 1,
                 "rate": extra_amount,
                 "amount": extra_amount
+            })
+
+        if pt_amount > 0:
+            pt_desc = f"Personal Training - {data.ptPlanType or 'PT'}" + (f" ({data.ptPlanPeriod})" if data.ptPlanPeriod else "")
+            items.append({
+                "description": pt_desc,
+                "quantity": 1,
+                "rate": pt_amount,
+                "amount": pt_amount
             })
 
         # Calculate payment details

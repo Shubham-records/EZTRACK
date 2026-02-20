@@ -348,7 +348,7 @@ export default function Expenses({ initialFilter = '' }) {
                             <h2 className="text-lg font-bold">Add Expense</h2>
                             <button onClick={() => setShowAddModal(false)}><X size={20} /></button>
                         </div>
-                        <form onSubmit={handleCreate} className="space-y-4">
+                        <form autoComplete="off" onSubmit={handleCreate} className="space-y-4">
                             <div>
                                 <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Description</label>
                                 <input

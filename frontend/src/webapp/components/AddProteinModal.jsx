@@ -84,7 +84,7 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                     </button>
                 </div>
 
-                <form onSubmit={handleSubmit} className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <form autoComplete="off" onSubmit={handleSubmit} className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1">
                         <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Year</label>
                         <input type="number" name="Year" value={formData.Year} onChange={handleChange} className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800" />

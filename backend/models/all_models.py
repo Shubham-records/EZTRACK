@@ -229,6 +229,9 @@ class GymSettings(Base):
     admissionFee = Column(Float, default=0.0)
     reAdmissionFee = Column(Float, default=0.0)
 
+    # Personal Training Settings
+    enablePersonalTraining = Column(Boolean, default=False)
+
     # Notification Settings
     enableWhatsAppReminders = Column(Boolean, default=True)
     reminderDaysBefore = Column(Integer, default=3)

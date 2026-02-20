@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect } from 'react';
-import { addMonths, addYears, addDays, subDays, format, parse } from 'date-fns';
+import { addMonths, addYears, addDays, subDays, format, parse, parseISO } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import { useToast } from "@/context/ToastContext";
 
@@ -99,7 +99,9 @@ export function NewAdmission() {
     admissionPrice: 0,
     extraAmount: 0,
     paymentMode: 'CASH',
-    paidAmount: null
+    paidAmount: null,
+    ptPlanType: '',
+    ptAmount: 0
   });
 
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -108,6 +110,9 @@ export function NewAdmission() {
   const [plans, setPlans] = useState([]);
   const [pricingMatrix, setPricingMatrix] = useState({});
   const [applyAdmissionFee, setApplyAdmissionFee] = useState(true);
+  const [ptPricingMatrix, setPtPricingMatrix] = useState({});
+  const [ptPlans, setPtPlans] = useState([]);
+  const [enablePersonalTraining, setEnablePersonalTraining] = useState(false);
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -143,33 +148,70 @@ export function NewAdmission() {
           if (data.admissionFee) {
             setFormData(prev => ({ ...prev, admissionPrice: data.admissionFee }));
           }
+          if (data.enablePersonalTraining) {
+            setEnablePersonalTraining(true);
+          }
         }
       } catch (e) {
         console.error("Failed to fetch settings", e);
       }
     };
+
+    const fetchPtPlans = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings/pricing/pt-matrix', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPtPricingMatrix(data);
+          setPtPlans(Object.keys(data));
+        }
+      } catch (e) {
+        console.error("Failed to fetch PT plans", e);
+      }
+    };
     fetchPlans();
     fetchSettings();
+    fetchPtPlans();
   }, []);
 
   // Auto-fill amount based on PlanType and PlanPeriod
-  // Auto-fill amount based on PlanType and PlanPeriod
   useEffect(() => {
+    let basePrice = 0;
     if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
       const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
       if (priceConfig && priceConfig.price) {
-        const basePrice = parseFloat(priceConfig.price) || 0;
-        const admission = applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
-        const extra = parseFloat(formData.extraAmount) || 0;
-        const total = basePrice + admission + extra;
-        setFormData(prev => ({
-          ...prev,
-          LastPaymentAmount: total,
-          paidAmount: total
-        }));
+        basePrice = parseFloat(priceConfig.price) || 0;
       }
     }
-  }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee]);
+    const admission = applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
+    const extra = parseFloat(formData.extraAmount) || 0;
+    const pt = formData.ptPlanType ? (parseFloat(formData.ptAmount) || 0) : 0;
+    const total = basePrice + admission + extra + pt;
+
+    setFormData(prev => ({
+      ...prev,
+      LastPaymentAmount: total,
+      paidAmount: total
+    }));
+  }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee, formData.ptPlanType, formData.ptAmount, pricingMatrix]);
+
+  // Auto-fill PT amount based on PT plan + gym PlanPeriod
+  useEffect(() => {
+    if (formData.ptPlanType && formData.PlanPeriod && ptPricingMatrix[formData.ptPlanType]) {
+      const ptConfig = ptPricingMatrix[formData.ptPlanType][formData.PlanPeriod];
+      if (ptConfig && ptConfig.price) {
+        setFormData(prev => ({ ...prev, ptAmount: parseFloat(ptConfig.price) || 0 }));
+      }
+    } else if (!formData.ptPlanType) {
+      setFormData(prev => ({ ...prev, ptAmount: 0 }));
+    }
+  }, [formData.ptPlanType, formData.PlanPeriod, ptPricingMatrix]);
 
   // Calculate extra amount based on extra days
   useEffect(() => {
@@ -318,7 +360,7 @@ export function NewAdmission() {
 
   return (
     <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form autoComplete="off" onSubmit={handleSubmit} className="space-y-6">
         <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">New Admission</h1>
           <div className="bg-zinc-100 dark:bg-zinc-800 px-4 py-2 rounded-lg">
@@ -420,6 +462,23 @@ export function NewAdmission() {
             </div>
           </div>
 
+          {/* Personal Training - beside Extra Days */}
+          {enablePersonalTraining && ptPlans.length > 0 && (
+            <div className="col-span-1 md:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-4 items-end">
+              <div>
+                <label className={labelStyle}>Personal Training</label>
+                <select
+                  value={formData.ptPlanType || ''}
+                  onChange={(e) => setFormData(prev => ({ ...prev, ptPlanType: e.target.value }))}
+                  className={selectStyle}
+                >
+                  <option value="">None</option>
+                  {ptPlans.map(p => (<option key={p} value={p}>{p}</option>))}
+                </select>
+              </div>
+            </div>
+          )}
+
           <div className="md:col-span-3 mt-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg p-4 border border-zinc-200 dark:border-zinc-700">
             <h3 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider mb-4 border-b border-zinc-200 dark:border-zinc-700 pb-2">Bill Summary</h3>
 
@@ -472,6 +531,14 @@ export function NewAdmission() {
                   />
                 </div>
               </div>
+
+              {/* Personal Training line item */}
+              {formData.ptPlanType && formData.ptAmount > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-600 dark:text-zinc-400">🏋️ Personal Training ({formData.ptPlanType})</span>
+                  <span className="font-medium">₹{parseFloat(formData.ptAmount).toLocaleString()}</span>
+                </div>
+              )}
 
 
 
@@ -547,7 +614,8 @@ export function ReAdmission() {
     NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
     extraDays: '0', agreeTerms: false,
     admissionPrice: 0, extraAmount: 0,
-    paymentMode: 'CASH', paidAmount: null
+    paymentMode: 'CASH', paidAmount: null,
+    ptPlanType: '', ptAmount: 0
   });
 
   const [plans, setPlans] = useState([]);
@@ -560,6 +628,9 @@ export function ReAdmission() {
     admissionExpiryDays: 365
   });
   const [isAdmissionActive, setIsAdmissionActive] = useState(false);
+  const [ptPricingMatrix, setPtPricingMatrix] = useState({});
+  const [ptPlans, setPtPlans] = useState([]);
+  const [enablePersonalTraining, setEnablePersonalTraining] = useState(false);
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -601,33 +672,70 @@ export function ReAdmission() {
           setGymSettings(settings);
           // Default to flat reAdmissionFee until member data is loaded
           setFormData(prev => ({ ...prev, admissionPrice: settings.reAdmissionFee }));
+          if (data.enablePersonalTraining) {
+            setEnablePersonalTraining(true);
+          }
         }
       } catch (e) {
         console.error("Failed to fetch settings", e);
       }
     };
+
+    const fetchPtPlans = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings/pricing/pt-matrix', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPtPricingMatrix(data);
+          setPtPlans(Object.keys(data));
+        }
+      } catch (e) {
+        console.error("Failed to fetch PT plans", e);
+      }
+    };
     fetchPlans();
     fetchSettings();
+    fetchPtPlans();
   }, []);
 
   // Auto-fill amount based on PlanType and PlanPeriod
-  // Auto-fill amount based on PlanType and PlanPeriod
   useEffect(() => {
+    let basePrice = 0;
     if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
       const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
       if (priceConfig && priceConfig.price) {
-        const basePrice = parseFloat(priceConfig.price) || 0;
-        const admission = applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
-        const extra = parseFloat(formData.extraAmount) || 0;
-        const total = basePrice + admission + extra;
-        setFormData(prev => ({
-          ...prev,
-          LastPaymentAmount: total,
-          paidAmount: total
-        }));
+        basePrice = parseFloat(priceConfig.price) || 0;
       }
     }
-  }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee]);
+    const admission = applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
+    const extra = parseFloat(formData.extraAmount) || 0;
+    const pt = formData.ptPlanType ? (parseFloat(formData.ptAmount) || 0) : 0;
+    const total = basePrice + admission + extra + pt;
+
+    setFormData(prev => ({
+      ...prev,
+      LastPaymentAmount: total,
+      paidAmount: total
+    }));
+  }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee, formData.ptPlanType, formData.ptAmount, pricingMatrix]);
+
+  // Auto-fill PT amount based on PT plan + gym PlanPeriod
+  useEffect(() => {
+    if (formData.ptPlanType && formData.PlanPeriod && ptPricingMatrix[formData.ptPlanType]) {
+      const ptConfig = ptPricingMatrix[formData.ptPlanType][formData.PlanPeriod];
+      if (ptConfig && ptConfig.price) {
+        setFormData(prev => ({ ...prev, ptAmount: parseFloat(ptConfig.price) || 0 }));
+      }
+    } else if (!formData.ptPlanType) {
+      setFormData(prev => ({ ...prev, ptAmount: 0 }));
+    }
+  }, [formData.ptPlanType, formData.PlanPeriod, ptPricingMatrix]);
 
   // Calculate extra amount based on extra days
   useEffect(() => {
@@ -666,8 +774,24 @@ export function ReAdmission() {
         headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName }
       });
 
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      if (!response.ok) {
+        if (response.status === 404) {
+          setFormData({
+            Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', AccessStatus: 'no', height: '', weight: '',
+            DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
+            PlanPeriod: '', PlanType: '', MembershipStatus: 'Active', MembershipExpiryDate: '', LastPaymentDate: '',
+            NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
+            extraDays: '0', agreeTerms: false,
+            admissionPrice: gymSettings?.reAdmissionFee || 0, extraAmount: 0,
+            paymentMode: 'CASH', paidAmount: null,
+            ptPlanType: '', ptAmount: 0
+          });
+          throw new Error('Client not found');
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       const data = await response.json();
+      showToast('Client found', 'success');
 
       // Check if admission is still active based on DateOfJoining
       let admissionActive = false;
@@ -720,7 +844,21 @@ export function ReAdmission() {
   };
 
   useEffect(() => {
-    if (clientNumber) fetchClientData();
+    if (clientNumber) {
+      fetchClientData();
+    } else {
+      setFormData({
+        Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', AccessStatus: 'no', height: '', weight: '',
+        DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
+        PlanPeriod: '', PlanType: '', MembershipStatus: 'Active', MembershipExpiryDate: '', LastPaymentDate: '',
+        NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
+        extraDays: '0', agreeTerms: false,
+        admissionPrice: gymSettings?.reAdmissionFee || 0, extraAmount: 0,
+        paymentMode: 'CASH', paidAmount: null,
+        ptPlanType: '', ptAmount: 0
+      });
+      setIsAdmissionActive(false);
+    }
   }, [clientNumber]);
 
   useEffect(() => {
@@ -752,7 +890,7 @@ export function ReAdmission() {
 
   return (
     <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form autoComplete="off" onSubmit={handleSubmit} className="space-y-6">
         <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Re-Admission</h1>
           <div className="bg-zinc-100 dark:bg-zinc-800 px-4 py-2 rounded-lg">
@@ -804,6 +942,23 @@ export function ReAdmission() {
               <input type="number" name="extraDays" value={formData.extraDays || ''} onChange={handleInputChange} className={inputStyle} />
             </div>
           </div>
+
+          {/* Personal Training - beside Extra Days */}
+          {enablePersonalTraining && ptPlans.length > 0 && (
+            <div className="col-span-1 md:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-4 items-end">
+              <div>
+                <label className={labelStyle}>Personal Training</label>
+                <select
+                  value={formData.ptPlanType || ''}
+                  onChange={(e) => setFormData(prev => ({ ...prev, ptPlanType: e.target.value }))}
+                  className={selectStyle}
+                >
+                  <option value="">None</option>
+                  {ptPlans.map(p => (<option key={p} value={p}>{p}</option>))}
+                </select>
+              </div>
+            </div>
+          )}
 
           <div className="md:col-span-3 mt-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg p-4 border border-zinc-200 dark:border-zinc-700">
             <h3 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-wider mb-4 border-b border-zinc-200 dark:border-zinc-700 pb-2">Bill Summary</h3>
@@ -865,6 +1020,14 @@ export function ReAdmission() {
 
               </div>
 
+              {/* Personal Training line item */}
+              {formData.ptPlanType && formData.ptAmount > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-600 dark:text-zinc-400">🏋️ Personal Training ({formData.ptPlanType})</span>
+                  <span className="font-medium">₹{parseFloat(formData.ptAmount).toLocaleString()}</span>
+                </div>
+              )}
+
               {/* Payment Details */}
               <div className="pt-3 border-t border-zinc-200 dark:border-zinc-700 space-y-3">
                 <div className="flex justify-between items-center">
@@ -918,11 +1081,18 @@ export function Renewal() {
   const [formData, setFormData] = useState({
     Name: '', MembershipReceiptnumber: '', LastPaymentDate: '', LastValidityDate: '', LastMembershipType: '',
     Mobile: '', PlanPeriod: '', PlanType: '', DateOfRenewal: format(new Date(), 'yyyy-MM-dd'),
-    MembershipExpiryDate: '', NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', extraDays: '0', agreeTerms: false
+    MembershipExpiryDate: '', NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', extraDays: '0', agreeTerms: false,
+    LastExpiryDate: '',
+    extraAmount: 0, paymentMode: 'CASH', paidAmount: null,
+    ptPlanType: '', ptAmount: 0
   });
 
   const [plans, setPlans] = useState([]);
   const [pricingMatrix, setPricingMatrix] = useState({});
+  const [ptPricingMatrix, setPtPricingMatrix] = useState({});
+  const [ptPlans, setPtPlans] = useState([]);
+  const [enablePersonalTraining, setEnablePersonalTraining] = useState(false);
+  const [dateFormat, setDateFormat] = useState('dd/MM/yyyy');
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -943,18 +1113,107 @@ export function Renewal() {
         console.error("Failed to fetch plans", e);
       }
     };
+
+    const fetchSettings = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.enablePersonalTraining) {
+            setEnablePersonalTraining(true);
+          }
+          if (data.dateFormat) {
+            // Map DD/MM/YYYY to dd/MM/yyyy for date-fns
+            setDateFormat(data.dateFormat.replace(/D/g, 'd').replace(/Y/g, 'y'));
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch settings", e);
+      }
+    };
+
+    const fetchPtPlans = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token || !dbName) return;
+
+        const res = await fetch('/api/settings/pricing/pt-matrix', {
+          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPtPricingMatrix(data);
+          setPtPlans(Object.keys(data));
+        }
+      } catch (e) {
+        console.error("Failed to fetch PT plans", e);
+      }
+    };
     fetchPlans();
+    fetchSettings();
+    fetchPtPlans();
   }, []);
 
   // Auto-fill amount based on PlanType and PlanPeriod
   useEffect(() => {
+    let basePrice = 0;
     if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
       const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
       if (priceConfig && priceConfig.price) {
-        setFormData(prev => ({ ...prev, LastPaymentAmount: priceConfig.price }));
+        basePrice = parseFloat(priceConfig.price) || 0;
       }
     }
-  }, [formData.PlanType, formData.PlanPeriod]);
+    const extra = parseFloat(formData.extraAmount) || 0;
+    const pt = formData.ptPlanType ? (parseFloat(formData.ptAmount) || 0) : 0;
+    const total = basePrice + extra + pt;
+
+    setFormData(prev => ({
+      ...prev,
+      LastPaymentAmount: total,
+      paidAmount: total
+    }));
+  }, [formData.PlanType, formData.PlanPeriod, formData.extraAmount, formData.ptPlanType, formData.ptAmount, pricingMatrix]);
+
+  // Calculate extra amount based on extra days
+  useEffect(() => {
+    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
+      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
+      if (priceConfig && priceConfig.price) {
+        const basePrice = parseFloat(priceConfig.price) || 0;
+        const extraDays = parseInt(formData.extraDays) || 0;
+
+        if (extraDays >= 0) {
+          let duration = 30;
+          if (formData.PlanPeriod === 'Monthly') duration = 30;
+          else if (formData.PlanPeriod === 'Quaterly') duration = 90;
+          else if (formData.PlanPeriod === 'HalfYearly') duration = 180;
+          else if (formData.PlanPeriod === 'Yearly') duration = 365;
+
+          const calculatedExtra = Math.round((basePrice / duration) * extraDays);
+          setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
+        }
+      }
+    }
+  }, [formData.extraDays, formData.PlanType, formData.PlanPeriod, pricingMatrix]);
+
+  // PT Amount effect remains separate as it depends on its own matrix
+  useEffect(() => {
+    if (formData.ptPlanType && formData.PlanPeriod && ptPricingMatrix[formData.ptPlanType]) {
+      const ptConfig = ptPricingMatrix[formData.ptPlanType][formData.PlanPeriod];
+      if (ptConfig && ptConfig.price) {
+        setFormData(prev => ({ ...prev, ptAmount: parseFloat(ptConfig.price) || 0 }));
+      }
+    } else if (!formData.ptPlanType) {
+      setFormData(prev => ({ ...prev, ptAmount: 0 }));
+    }
+  }, [formData.ptPlanType, formData.PlanPeriod, ptPricingMatrix]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -967,23 +1226,86 @@ export function Renewal() {
       const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
       if (!jwtToken || !dbName) throw new Error('No token found.');
 
-      const response = await fetch(`/api/members/renewal/${clientNumber}`, {
+      const response = await fetch(`/api/members/client/${clientNumber}`, {
         headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName }
       });
 
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      if (!response.ok) {
+        if (response.status === 404) {
+          setFormData({
+            Name: '', MembershipReceiptnumber: '', LastPaymentDate: '', LastValidityDate: '', LastMembershipType: '',
+            Mobile: '', PlanPeriod: '', PlanType: '', DateOfRenewal: format(new Date(), 'yyyy-MM-dd'),
+            MembershipExpiryDate: '', NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', extraDays: '0', agreeTerms: false,
+            LastExpiryDate: '',
+            extraAmount: 0, paymentMode: 'CASH', paidAmount: null,
+            ptPlanType: '', ptAmount: 0
+          });
+          throw new Error('Client not found');
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       const data = await response.json();
-      setFormData(prev => ({ ...prev, ...data, DateOfRenewal: format(new Date(), 'yyyy-MM-dd') }));
+      showToast('Client found', 'success');
+      // Use NextDuedate as last expiry, but blank the renewal date for user to fill
+      const lastExp = data.NextDuedate ? format(new Date(data.NextDuedate), 'yyyy-MM-dd') : '';
+      setFormData(prev => ({
+        ...prev,
+        ...data,
+        LastExpiryDate: lastExp,
+        DateOfRenewal: '',
+        MembershipExpiryDate: '',
+        NextDuedate: '',
+        admissionPrice: 0,
+        extraAmount: 0,
+        extraDays: '0',
+        ptPlanType: '',
+        ptAmount: 0
+      }));
+
+      // Compute total payable immediately from returned client data (fallback)
+      try {
+        let basePrice = 0;
+        if (data.PlanType && data.PlanPeriod && pricingMatrix[data.PlanType]) {
+          const priceConfig = pricingMatrix[data.PlanType][data.PlanPeriod];
+          if (priceConfig && priceConfig.price) basePrice = parseFloat(priceConfig.price) || 0;
+        }
+
+        const extra = 0; // we reset extraAmount to 0 on load
+
+        let pt = 0;
+        if (data.ptPlanType && ptPricingMatrix[data.ptPlanType]) {
+          const ptConfig = ptPricingMatrix[data.ptPlanType][data.PlanPeriod];
+          if (ptConfig && ptConfig.price) pt = parseFloat(ptConfig.price) || 0;
+        }
+
+        const total = basePrice + extra + pt;
+        setFormData(prev => ({ ...prev, LastPaymentAmount: total, paidAmount: total }));
+      } catch (err) {
+        // silently ignore calculation errors - auto-fill effect will try again
+        console.debug('Could not compute total from client data yet', err);
+      }
     } catch (error) {
       showToast(error.message, 'error');
     }
   };
 
   useEffect(() => {
-    if (clientNumber) fetchClientData();
+    if (clientNumber) {
+      fetchClientData();
+    } else {
+      setFormData({
+        Name: '', MembershipReceiptnumber: '', LastPaymentDate: '', LastValidityDate: '', LastMembershipType: '',
+        Mobile: '', PlanPeriod: '', PlanType: '', DateOfRenewal: format(new Date(), 'yyyy-MM-dd'),
+        MembershipExpiryDate: '', NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', extraDays: '0', agreeTerms: false,
+        LastExpiryDate: '',
+        extraAmount: 0, paymentMode: 'CASH', paidAmount: null,
+        ptPlanType: '', ptAmount: 0
+      });
+    }
   }, [clientNumber]);
 
   const updateExpiryDate = () => {
+    if (!formData.DateOfRenewal) return;
     const renewalDate = parse(formData.DateOfRenewal, 'yyyy-MM-dd', new Date());
     let expiryDate = renewalDate;
     switch (formData.PlanPeriod) {
@@ -1025,7 +1347,7 @@ export function Renewal() {
 
   return (
     <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form autoComplete="off" onSubmit={handleSubmit} className="space-y-6">
         <div className="flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Renewal</h1>
           <div className="bg-zinc-100 dark:bg-zinc-800 px-4 py-2 rounded-lg">
@@ -1063,10 +1385,15 @@ export function Renewal() {
             </select>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 col-span-1 md:col-span-2">
+          <div className="grid grid-cols-4 gap-4 col-span-1 md:col-span-2">
             <div>
-              <label className={labelStyle}>Last Expiry</label>
-              <input type="text" value={formData.LastValidityDate ? format(new Date(formData.LastValidityDate), 'yyyy-MM-dd') : ''} readOnly className={`${inputStyle} bg-zinc-50 dark:bg-zinc-900 cursor-not-allowed`} />
+              <label className={labelStyle}>Last Expiry Date</label>
+              <input
+                type="text"
+                value={formData.LastExpiryDate ? format(parseISO(formData.LastExpiryDate), dateFormat) : ''}
+                readOnly
+                className={`${inputStyle} bg-zinc-50 dark:bg-zinc-900 cursor-not-allowed`}
+              />
             </div>
             <div>
               <label className={labelStyle}>Renewal Date</label>
@@ -1074,7 +1401,109 @@ export function Renewal() {
             </div>
             <div>
               <label className={labelStyle}>New Expiry</label>
-              <input type="date" name="MembershipExpiryDate" value={formData.MembershipExpiryDate} readOnly className={`${inputStyle} bg-zinc-50 dark:bg-zinc-900 cursor-not-allowed`} />
+              <input
+                type="text"
+                value={formData.MembershipExpiryDate ? format(parseISO(formData.MembershipExpiryDate), dateFormat) : ''}
+                readOnly
+                className={`${inputStyle} bg-zinc-50 dark:bg-zinc-900 cursor-not-allowed`}
+              />
+            </div>
+            <div>
+              <label className={labelStyle}>Extra Days</label>
+              <input type="number" name="extraDays" value={formData.extraDays || ''} onChange={handleInputChange} className={inputStyle} />
+            </div>
+          </div>
+
+          {/* Personal Training - beside Extra Days */}
+          {enablePersonalTraining && ptPlans.length > 0 && (
+            <div className="col-span-1 md:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-4 items-end">
+              <div>
+                <label className={labelStyle}>Personal Training</label>
+                <select
+                  value={formData.ptPlanType || ''}
+                  onChange={(e) => setFormData(prev => ({ ...prev, ptPlanType: e.target.value }))}
+                  className={selectStyle}
+                >
+                  <option value="">None</option>
+                  {ptPlans.map(p => (<option key={p} value={p}>{p}</option>))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Bill Summary */}
+          <div className="col-span-1 md:col-span-2">
+            <div className="bg-zinc-50 dark:bg-zinc-900 rounded-xl p-5 space-y-4 border border-zinc-200 dark:border-zinc-700">
+              <h3 className="font-bold text-zinc-900 dark:text-white text-base">Bill Summary</h3>
+
+              <div className="flex justify-between items-center">
+                <span className="text-zinc-600 dark:text-zinc-400">Plan Price</span>
+                <span className="font-medium text-zinc-900 dark:text-white">
+                  ₹{formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]?.[formData.PlanPeriod]?.price
+                    ? parseFloat(pricingMatrix[formData.PlanType][formData.PlanPeriod].price).toLocaleString()
+                    : '0'}
+                </span>
+              </div>
+
+              <div className="flex justify-between items-center group">
+                <span className="text-zinc-600 dark:text-zinc-400 flex items-center gap-2">
+                  Extra Charges
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-400 text-xs mr-2">Editable</span>
+                  <input
+                    type="number"
+                    name="extraAmount"
+                    value={formData.extraAmount}
+                    onChange={handleInputChange}
+                    className="w-24 text-right bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none"
+                    min="0"
+                  />
+                </div>
+              </div>
+
+              {/* Personal Training line item */}
+              {formData.ptPlanType && formData.ptAmount > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-600 dark:text-zinc-400">🏋️ Personal Training ({formData.ptPlanType})</span>
+                  <span className="font-medium">₹{parseFloat(formData.ptAmount).toLocaleString()}</span>
+                </div>
+              )}
+
+              {/* Payment Details */}
+              <div className="pt-3 border-t border-zinc-200 dark:border-zinc-700 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-zinc-900 dark:text-white">Total Payable</span>
+                  <span className="font-bold text-xl text-primary">₹{(parseFloat(formData.LastPaymentAmount) || 0).toLocaleString()}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Paid Amount</label>
+                    <input
+                      type="number"
+                      name="paidAmount"
+                      value={formData.paidAmount === null ? '' : formData.paidAmount}
+                      onChange={handleInputChange}
+                      className={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Payment Mode</label>
+                    <select name="paymentMode" value={formData.paymentMode} onChange={handleInputChange} className={selectStyle}>
+                      <option value="CASH">Cash</option>
+                      <option value="UPI">UPI</option>
+                      <option value="CARD">Card</option>
+                      <option value="BANK">Bank Transfer</option>
+                    </select>
+                  </div>
+                </div>
+                {(parseFloat(formData.LastPaymentAmount) - (parseFloat(formData.paidAmount) || 0)) > 0 && (
+                  <div className="text-right text-rose-500 font-bold text-sm">
+                    Pending Balance: ₹{(parseFloat(formData.LastPaymentAmount) - (parseFloat(formData.paidAmount) || 0)).toLocaleString()}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1087,8 +1516,6 @@ export function Renewal() {
     </div>
   );
 }
-
-// Per Day Basis removed
 
 // Protein Billing Form
 export function ProteinBilling() {
@@ -1211,7 +1638,7 @@ export function ProteinBilling() {
 
   return (
     <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form autoComplete="off" onSubmit={handleSubmit} className="space-y-6">
         <div className="border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Protein Billing</h1>
           <p className="text-sm text-zinc-500 mt-1">Sell protein supplements and products</p>
@@ -1372,7 +1799,7 @@ export function Expenses() {
     <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form autoComplete="off" onSubmit={handleSubmit} className="space-y-6">
           <div className="border-b border-zinc-100 dark:border-zinc-800 pb-4 mb-4">
             <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Record Expense</h1>
             <p className="text-sm text-zinc-500 mt-1">Track gym operational expenses</p>

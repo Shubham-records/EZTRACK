@@ -32,6 +32,12 @@ class MemberBase(BaseModel):
     # Billing fields (not stored in Member table, but used for Invoice)
     admissionPrice: Optional[float] = 0.0
     extraAmount: Optional[float] = 0.0
+    
+    # Personal Training fields (billing only)
+    applyPersonalTraining: Optional[bool] = False
+    ptPlanType: Optional[str] = None
+    ptPlanPeriod: Optional[str] = None
+    ptAmount: Optional[float] = 0.0
 
 class MemberCreate(MemberBase):
     paymentMode: Optional[str] = "CASH"

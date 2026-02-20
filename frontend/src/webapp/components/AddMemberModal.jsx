@@ -120,7 +120,7 @@ export default function AddMemberModal({ isOpen, onClose, onSuccess }) {
                     </button>
                 </div>
 
-                <form onSubmit={handleSubmit} className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <form autoComplete="off" onSubmit={handleSubmit} className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {/* Personal Info */}
                     {/* ... (keep personal info fields same) ... */}
                     <div className="col-span-full border-b border-zinc-100 dark:border-zinc-800 pb-2 mb-2">

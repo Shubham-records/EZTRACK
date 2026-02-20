@@ -37,6 +37,7 @@ class GymSettingsBase(BaseModel):
     readmissionDiscount: Optional[int] = 50 # Readmission discount %
     admissionFee: Optional[float] = 0.0
     reAdmissionFee: Optional[float] = 0.0
+    enablePersonalTraining: Optional[bool] = False
     
     # Notifications
     enableWhatsAppReminders: Optional[bool] = True

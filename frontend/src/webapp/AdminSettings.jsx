@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useToast } from "@/context/ToastContext";
-import { Save, Settings, DollarSign, Bell, Package, FileText, Plus, Trash2 } from 'lucide-react';
+import { Save, Settings, DollarSign, Bell, Package, FileText, Plus, Trash2, Dumbbell } from 'lucide-react';
 import AddPlanModal from './components/AddPlanModal';
 
 const inputStyle = "w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all";
@@ -13,6 +13,7 @@ export default function AdminSettings() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [isAddPlanModalOpen, setIsAddPlanModalOpen] = useState(false);
+    const [isAddPtPlanModalOpen, setIsAddPtPlanModalOpen] = useState(false);
 
     const [settings, setSettings] = useState({
         // General
@@ -49,6 +50,7 @@ export default function AdminSettings() {
         // Fees
         admissionFee: 0,
         reAdmissionFee: 0,
+        enablePersonalTraining: false,
     });
 
     const [initialSettings, setInitialSettings] = useState(null);
@@ -56,11 +58,14 @@ export default function AdminSettings() {
     const [initialPricingMatrix, setInitialPricingMatrix] = useState({});
     const [proteinDefaults, setProteinDefaults] = useState({});
     const [initialProteinDefaults, setInitialProteinDefaults] = useState({});
+    const [ptPricingMatrix, setPtPricingMatrix] = useState({});
+    const [initialPtPricingMatrix, setInitialPtPricingMatrix] = useState({});
 
     const tabs = [
         { id: 'general', label: 'General', icon: Settings },
         { id: 'gst', label: 'GST & Tax', icon: FileText },
         { id: 'pricing', label: 'Member Pricing', icon: DollarSign },
+        { id: 'ptPricing', label: 'PT Pricing', icon: Dumbbell },
         { id: 'protein', label: 'Protein Pricing', icon: Package },
         { id: 'billing', label: 'Billing', icon: FileText },
         { id: 'stock', label: 'Stock Settings', icon: Package },
@@ -70,6 +75,7 @@ export default function AdminSettings() {
     useEffect(() => {
         fetchSettings();
         fetchPricingMatrix();
+        fetchPtPricingMatrix();
         fetchProteinDefaults();
     }, []);
 
@@ -111,6 +117,19 @@ export default function AdminSettings() {
             }
         } catch (e) {
             console.error('Failed to load pricing matrix', e);
+        }
+    };
+
+    const fetchPtPricingMatrix = async () => {
+        try {
+            const res = await fetch('/api/settings/pricing/pt-matrix', { headers: getAuthHeaders() });
+            if (res.ok) {
+                const data = await res.json();
+                setPtPricingMatrix(data);
+                setInitialPtPricingMatrix(data);
+            }
+        } catch (e) {
+            console.error('Failed to load PT pricing matrix', e);
         }
     };
 
@@ -178,6 +197,29 @@ export default function AdminSettings() {
                 }
             }
 
+            // Save PT Pricing Matrix
+            if (JSON.stringify(ptPricingMatrix) !== JSON.stringify(initialPtPricingMatrix)) {
+                const data = {};
+                for (const [plan, periods] of Object.entries(ptPricingMatrix)) {
+                    data[plan] = {};
+                    for (const [period, config] of Object.entries(periods)) {
+                        data[plan][period] = config.price;
+                    }
+                }
+
+                const res = await fetch('/api/settings/pricing/pt-matrix/bulk', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(data)
+                });
+                if (res.ok) {
+                    setInitialPtPricingMatrix(ptPricingMatrix);
+                } else {
+                    success = false;
+                    showToast('Failed to save PT pricing', 'error');
+                }
+            }
+
             // Save Protein Defaults
             if (JSON.stringify(proteinDefaults) !== JSON.stringify(initialProteinDefaults)) {
                 const res = await fetch('/api/settings/pricing/protein-defaults/bulk', {
@@ -223,6 +265,26 @@ export default function AdminSettings() {
         }));
     };
 
+    const handleAddPtPlan = (name) => {
+        if (ptPricingMatrix[name]) {
+            showToast(`PT Plan "${name}" already exists`, 'error');
+            return;
+        }
+        setPtPricingMatrix(prev => ({ ...prev, [name]: {} }));
+        showToast(`PT Plan "${name}" added`, 'success');
+        setIsAddPtPlanModalOpen(false);
+    };
+
+    const handlePtPricingChange = (plan, period, value) => {
+        setPtPricingMatrix(prev => ({
+            ...prev,
+            [plan]: {
+                ...(prev[plan] || {}),
+                [period]: { ...(prev[plan]?.[period] || {}), price: parseFloat(value) || 0 }
+            }
+        }));
+    };
+
     // Removed individual save handlers as we now have a global save
 
     const handleProteinDefaultChange = (brand, field, value) => {
@@ -251,9 +313,10 @@ export default function AdminSettings() {
     const hasChanges = () => {
         const settingsChanged = JSON.stringify(settings) !== JSON.stringify(initialSettings);
         const pricingChanged = JSON.stringify(pricingMatrix) !== JSON.stringify(initialPricingMatrix);
+        const ptPricingChanged = JSON.stringify(ptPricingMatrix) !== JSON.stringify(initialPtPricingMatrix);
         const proteinChanged = JSON.stringify(proteinDefaults) !== JSON.stringify(initialProteinDefaults);
 
-        return settingsChanged || pricingChanged || proteinChanged;
+        return settingsChanged || pricingChanged || ptPricingChanged || proteinChanged;
     };
 
     const showSaveButton = hasChanges();
@@ -508,6 +571,120 @@ export default function AdminSettings() {
                                                             }
                                                         } catch (e) {
                                                             showToast('Failed to delete plan', 'error');
+                                                        }
+                                                    }
+                                                }}
+                                                className="text-zinc-400 hover:text-rose-500 transition-colors p-1"
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* PT Pricing Tab */}
+            {activeTab === 'ptPricing' && (
+                <div className={cardStyle}>
+                    <div className="flex justify-between items-center mb-4">
+                        <div>
+                            <h2 className="text-lg font-bold text-zinc-900 dark:text-white">Personal Training Pricing Matrix</h2>
+                            <p className="text-sm text-zinc-500">Set prices for each PT plan type. Add custom plans (e.g., 1-on-1, Group, Batch).</p>
+                        </div>
+                        <button
+                            onClick={() => setIsAddPtPlanModalOpen(true)}
+                            className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-lg text-primary bg-primary/10 hover:bg-primary/20 transition-colors"
+                        >
+                            <Plus size={14} />
+                            Add PT Plan
+                        </button>
+                    </div>
+
+                    <div className="flex items-center gap-3 mb-6 p-4 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
+                        <input
+                            type="checkbox"
+                            id="enablePersonalTraining"
+                            name="enablePersonalTraining"
+                            checked={settings.enablePersonalTraining}
+                            onChange={handleChange}
+                            className="w-5 h-5 text-primary rounded focus:ring-primary"
+                        />
+                        <div>
+                            <label htmlFor="enablePersonalTraining" className="text-sm font-medium text-zinc-900 dark:text-white">
+                                Enable Personal Training
+                            </label>
+                            <p className="text-xs text-zinc-500">When enabled, billing forms will show an option to add personal training</p>
+                        </div>
+                    </div>
+
+                    <AddPlanModal
+                        isOpen={isAddPtPlanModalOpen}
+                        onClose={() => setIsAddPtPlanModalOpen(false)}
+                        onAdd={handleAddPtPlan}
+                    />
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full border-collapse">
+                            <thead>
+                                <tr className="bg-zinc-50 dark:bg-zinc-800">
+                                    <th className="px-4 py-3 text-left text-xs font-bold text-zinc-500 uppercase">PT Plan / Period</th>
+                                    {periods.map(p => (
+                                        <th key={p} className="px-4 py-3 text-center text-xs font-bold text-zinc-500 uppercase">{p}</th>
+                                    ))}
+                                    <th className="px-4 py-3 text-center text-xs font-bold text-zinc-500 uppercase">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {Object.keys(ptPricingMatrix).length === 0 && (
+                                    <tr>
+                                        <td colSpan={periods.length + 2} className="px-4 py-8 text-center text-zinc-500 text-sm">
+                                            No PT plans configured. Click "Add PT Plan" to start.
+                                        </td>
+                                    </tr>
+                                )}
+                                {Object.keys(ptPricingMatrix).map(plan => (
+                                    <tr key={plan} className="border-b border-zinc-100 dark:border-zinc-800">
+                                        <td className="px-4 py-3 font-medium text-zinc-900 dark:text-white flex items-center gap-2">
+                                            <Dumbbell size={16} className="text-primary" />
+                                            {plan}
+                                        </td>
+                                        {periods.map(period => (
+                                            <td key={period} className="px-4 py-3">
+                                                <input
+                                                    type="number"
+                                                    value={ptPricingMatrix[plan]?.[period]?.price || ''}
+                                                    onChange={(e) => handlePtPricingChange(plan, period, e.target.value)}
+                                                    placeholder="₹"
+                                                    className="w-24 text-center bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-primary outline-none"
+                                                />
+                                            </td>
+                                        ))}
+                                        <td className="px-4 py-3 text-center">
+                                            <button
+                                                onClick={async () => {
+                                                    if (confirm(`Delete PT plan "${plan}"?`)) {
+                                                        try {
+                                                            const res = await fetch(`/api/settings/pricing/pt-matrix/${encodeURIComponent(plan)}`, {
+                                                                method: 'DELETE',
+                                                                headers: getAuthHeaders()
+                                                            });
+                                                            if (res.ok) {
+                                                                setPtPricingMatrix(prev => {
+                                                                    const next = { ...prev };
+                                                                    delete next[plan];
+                                                                    setInitialPtPricingMatrix(next);
+                                                                    return next;
+                                                                });
+                                                                showToast('PT plan deleted', 'success');
+                                                            } else {
+                                                                throw new Error();
+                                                            }
+                                                        } catch (e) {
+                                                            showToast('Failed to delete PT plan', 'error');
                                                         }
                                                     }
                                                 }}

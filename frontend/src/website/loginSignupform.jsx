@@ -327,7 +327,7 @@ export function ForgotPassword() {
 
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-8 shadow-soft">
             {showOtpInput ? (
-              <form className="flex flex-col gap-5" onSubmit={handleVerifyOtp}>
+              <form autoComplete="off" className="flex flex-col gap-5" onSubmit={handleVerifyOtp}>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Enter OTP</label>
                   <input
@@ -340,7 +340,7 @@ export function ForgotPassword() {
                 <button className="w-full py-3.5 rounded-lg border-none bg-primary text-white font-bold cursor-pointer hover:bg-teal-700 transition-all" type="submit">Check OTP</button>
               </form>
             ) : showPasswordInputs ? (
-              <form className="flex flex-col gap-5" onSubmit={handleResetPassword}>
+              <form autoComplete="off" className="flex flex-col gap-5" onSubmit={handleResetPassword}>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">New Password</label>
                   <input
@@ -362,7 +362,7 @@ export function ForgotPassword() {
                 <button className="w-full py-3.5 rounded-lg border-none bg-primary text-white font-bold cursor-pointer hover:bg-teal-700 transition-all" type="submit">Reset Password</button>
               </form>
             ) : (
-              <form className="flex flex-col gap-5" onSubmit={handleRequestOtp}>
+              <form autoComplete="off" autoComplete="off" className="flex flex-col gap-5" onSubmit={handleRequestOtp}>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Enter Email</label>
                   <input

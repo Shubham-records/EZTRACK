@@ -273,3 +273,87 @@ def update_protein_pricing_bulk(
     
     db.commit()
     return {"message": "Protein pricing defaults updated successfully"}
+
+
+# ============ PERSONAL TRAINING PRICING MATRIX ============
+
+@router.get("/pricing/pt-matrix")
+def get_pt_pricing_matrix(
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    """Get personal training pricing as a matrix (plan × period)."""
+    configs = db.query(PricingConfig).filter(
+        PricingConfig.gymId == current_gym.id,
+        PricingConfig.configType == "pt",
+        PricingConfig.isActive == True
+    ).all()
+    
+    # Build matrix
+    matrix = {}
+    for config in configs:
+        if config.planType not in matrix:
+            matrix[config.planType] = {}
+        matrix[config.planType][config.periodType] = {
+            "id": config.id,
+            "price": config.basePrice,
+            "offerDiscount": config.offerDiscount
+        }
+    
+    return matrix
+
+
+@router.post("/pricing/pt-matrix/bulk")
+def update_pt_pricing_bulk(
+    data: dict,  # { "1-on-1": { "Monthly": 3000 }, ... }
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    """Bulk update personal training pricing matrix."""
+    for plan_type, periods in data.items():
+        for period_type, price in periods.items():
+            existing = db.query(PricingConfig).filter(
+                PricingConfig.gymId == current_gym.id,
+                PricingConfig.configType == "pt",
+                PricingConfig.planType == plan_type,
+                PricingConfig.periodType == period_type
+            ).first()
+            
+            if existing:
+                existing.basePrice = float(price)
+            else:
+                new_config = PricingConfig(
+                    gymId=current_gym.id,
+                    configType="pt",
+                    planType=plan_type,
+                    periodType=period_type,
+                    basePrice=float(price)
+                )
+                db.add(new_config)
+    
+    db.commit()
+    return {"message": "PT pricing updated successfully"}
+
+
+@router.delete("/pricing/pt-matrix/{plan_type}")
+def delete_pt_plan(
+    plan_type: str,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    """Soft delete all PT pricing configs for a specific plan type."""
+    configs = db.query(PricingConfig).filter(
+        PricingConfig.gymId == current_gym.id,
+        PricingConfig.configType == "pt",
+        PricingConfig.planType == plan_type,
+        PricingConfig.isActive == True
+    ).all()
+    
+    if not configs:
+        raise HTTPException(status_code=404, detail="PT plan not found")
+    
+    for config in configs:
+        config.isActive = False
+    
+    db.commit()
+    return {"message": f"PT plan '{plan_type}' deleted successfully"}

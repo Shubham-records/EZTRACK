@@ -42,6 +42,7 @@ def run_startup_migrations():
         'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "expiryRange" INTEGER DEFAULT 30',
         'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "postExpiryGraceDays" INTEGER DEFAULT 30',
         'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "reminderDaysBefore" INTEGER DEFAULT 3',
+        'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "enablePersonalTraining" BOOLEAN DEFAULT FALSE',
     ]
     
     try:

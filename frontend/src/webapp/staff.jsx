@@ -136,7 +136,7 @@ export default function StaffComponent() {
             {/* Add Modal */}
             {showAddModal && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm">
-                    <form onSubmit={handleAddStaff} className="w-full max-w-md p-6 rounded-xl shadow-2xl relative bg-white">
+                    <form autoComplete="off" onSubmit={handleAddStaff} className="w-full max-w-md p-6 rounded-xl shadow-2xl relative bg-white">
                         <h2 className="text-xl font-bold mb-4">Add New Staff</h2>
 
                         <div className="space-y-4">

@@ -290,7 +290,7 @@ export default function PendingBalances() {
                                 <X size={20} />
                             </button>
                         </div>
-                        <form onSubmit={handleAddBalance} className="space-y-4">
+                        <form autoComplete="off" onSubmit={handleAddBalance} className="space-y-4">
                             <div>
                                 <label className={labelStyle}>Type</label>
                                 <select
@@ -371,7 +371,7 @@ export default function PendingBalances() {
                             <p className="font-bold text-zinc-900 dark:text-white">{showPayModal.entityName}</p>
                             <p className="text-sm text-zinc-500">Outstanding: ₹{(showPayModal.amount - (showPayModal.paidAmount || 0)).toLocaleString()}</p>
                         </div>
-                        <form onSubmit={handlePayment} className="space-y-4">
+                        <form autoComplete="off" onSubmit={handlePayment} className="space-y-4">
                             <div>
                                 <label className={labelStyle}>Payment Amount (₹)</label>
                                 <input
