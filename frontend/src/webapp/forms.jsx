@@ -4,6 +4,76 @@ import { addMonths, addYears, addDays, subDays, format, parse, parseISO } from '
 import { useRouter } from 'next/navigation';
 import { useToast } from "@/context/ToastContext";
 
+// Billing helper functions inlined (moved from billingHelpers.js)
+async function fetchJson(url, token, dbName) {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName } });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function loadPricingAndSettings() {
+  try {
+    const token = localStorage.getItem('eztracker_jwt_access_control_token');
+    const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+    if (!token || !dbName) return {};
+
+    const [pricingData, settingsData, ptData] = await Promise.all([
+      fetchJson('/api/settings/pricing/member-matrix', token, dbName),
+      fetchJson('/api/settings', token, dbName),
+      fetchJson('/api/settings/pricing/pt-matrix', token, dbName)
+    ]);
+
+    const pricingMatrix = pricingData || {};
+    const ptPricingMatrix = ptData || {};
+
+    const settings = settingsData || {};
+    if (settings.dateFormat) settings.dateFormat = settings.dateFormat.replace(/D/g, 'd').replace(/Y/g, 'y');
+
+    return {
+      pricingMatrix,
+      plans: Object.keys(pricingMatrix),
+      ptPricingMatrix,
+      ptPlans: Object.keys(ptPricingMatrix),
+      settings
+    };
+  } catch (err) {
+    console.error('Failed to load pricing/settings', err);
+    return {};
+  }
+}
+
+function computeBasePrice(formData, pricingMatrix) {
+  if (!formData || !formData.PlanType || !formData.PlanPeriod || !pricingMatrix) return 0;
+  const cfg = pricingMatrix[formData.PlanType]?.[formData.PlanPeriod];
+  return cfg && cfg.price ? parseFloat(cfg.price) || 0 : 0;
+}
+
+function computePtAmount(formData, ptPricingMatrix) {
+  if (!formData || !formData.ptPlanType || !formData.PlanPeriod || !ptPricingMatrix) return 0;
+  const cfg = ptPricingMatrix[formData.ptPlanType]?.[formData.PlanPeriod];
+  return cfg && cfg.price ? parseFloat(cfg.price) || 0 : 0;
+}
+
+function computeExtraAmount(basePrice, planPeriod, extraDays) {
+  const days = parseInt(extraDays) || 0;
+  if (days <= 0) return 0;
+  let duration = 30;
+  if (planPeriod === 'Monthly') duration = 30;
+  else if (planPeriod === 'Quaterly') duration = 90;
+  else if (planPeriod === 'HalfYearly') duration = 180;
+  else if (planPeriod === 'Yearly') duration = 365;
+  return Math.round((basePrice / duration) * days);
+}
+
+function computeTotal(formData, pricingMatrix, ptPricingMatrix, options = {}) {
+  const base = computeBasePrice(formData, pricingMatrix);
+  const admission = options.applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
+  const extra = parseFloat(formData.extraAmount) || 0;
+  const pt = formData.ptPlanType ? (parseFloat(formData.ptAmount) || computePtAmount(formData, ptPricingMatrix)) : 0;
+  const total = base + admission + extra + pt;
+  return { base, admission, extra, pt, total };
+}
+
 // Clean unified input style for all form components
 const inputStyle = "w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all placeholder-zinc-400";
 const labelStyle = "block text-xs font-bold text-zinc-500 uppercase tracking-wider mb-1";
@@ -115,124 +185,38 @@ export function NewAdmission() {
   const [enablePersonalTraining, setEnablePersonalTraining] = useState(false);
 
   useEffect(() => {
-    const fetchPlans = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings/pricing/member-matrix', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setPricingMatrix(data);
-          setPlans(Object.keys(data));
-        }
-      } catch (e) {
-        console.error("Failed to fetch plans", e);
+    const init = async () => {
+      const { pricingMatrix, plans: pList, ptPricingMatrix, ptPlans: ptList, settings } = await loadPricingAndSettings();
+      if (pricingMatrix) setPricingMatrix(pricingMatrix);
+      if (pList) setPlans(pList);
+      if (ptPricingMatrix) setPtPricingMatrix(ptPricingMatrix);
+      if (ptList) setPtPlans(ptList);
+      if (settings) {
+        if (settings.admissionFee) setFormData(prev => ({ ...prev, admissionPrice: settings.admissionFee }));
+        if (settings.enablePersonalTraining) setEnablePersonalTraining(true);
       }
     };
-
-    const fetchSettings = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.admissionFee) {
-            setFormData(prev => ({ ...prev, admissionPrice: data.admissionFee }));
-          }
-          if (data.enablePersonalTraining) {
-            setEnablePersonalTraining(true);
-          }
-        }
-      } catch (e) {
-        console.error("Failed to fetch settings", e);
-      }
-    };
-
-    const fetchPtPlans = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings/pricing/pt-matrix', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setPtPricingMatrix(data);
-          setPtPlans(Object.keys(data));
-        }
-      } catch (e) {
-        console.error("Failed to fetch PT plans", e);
-      }
-    };
-    fetchPlans();
-    fetchSettings();
-    fetchPtPlans();
+    init();
   }, []);
 
   // Auto-fill amount based on PlanType and PlanPeriod
   useEffect(() => {
-    let basePrice = 0;
-    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
-      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
-      if (priceConfig && priceConfig.price) {
-        basePrice = parseFloat(priceConfig.price) || 0;
-      }
-    }
-    const admission = applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
-    const extra = parseFloat(formData.extraAmount) || 0;
-    const pt = formData.ptPlanType ? (parseFloat(formData.ptAmount) || 0) : 0;
-    const total = basePrice + admission + extra + pt;
-
-    setFormData(prev => ({
-      ...prev,
-      LastPaymentAmount: total,
-      paidAmount: total
-    }));
-  }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee, formData.ptPlanType, formData.ptAmount, pricingMatrix]);
+    const { total } = computeTotal(formData, pricingMatrix, ptPricingMatrix, { applyAdmissionFee });
+    setFormData(prev => ({ ...prev, LastPaymentAmount: total, paidAmount: total }));
+  }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee, formData.ptPlanType, formData.ptAmount, pricingMatrix, ptPricingMatrix]);
 
   // Auto-fill PT amount based on PT plan + gym PlanPeriod
   useEffect(() => {
-    if (formData.ptPlanType && formData.PlanPeriod && ptPricingMatrix[formData.ptPlanType]) {
-      const ptConfig = ptPricingMatrix[formData.ptPlanType][formData.PlanPeriod];
-      if (ptConfig && ptConfig.price) {
-        setFormData(prev => ({ ...prev, ptAmount: parseFloat(ptConfig.price) || 0 }));
-      }
-    } else if (!formData.ptPlanType) {
-      setFormData(prev => ({ ...prev, ptAmount: 0 }));
-    }
+    // keep ptAmount sync using helper
+    const pt = computePtAmount(formData, ptPricingMatrix);
+    setFormData(prev => ({ ...prev, ptAmount: pt }));
   }, [formData.ptPlanType, formData.PlanPeriod, ptPricingMatrix]);
 
   // Calculate extra amount based on extra days
   useEffect(() => {
-    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
-      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
-      if (priceConfig && priceConfig.price) {
-        const basePrice = parseFloat(priceConfig.price) || 0;
-        const extraDays = parseInt(formData.extraDays) || 0;
-
-        if (extraDays >= 0) {
-          let duration = 30;
-          if (formData.PlanPeriod === 'Monthly') duration = 30;
-          else if (formData.PlanPeriod === 'Quaterly') duration = 90;
-          else if (formData.PlanPeriod === 'HalfYearly') duration = 180;
-          else if (formData.PlanPeriod === 'Yearly') duration = 365;
-
-          const calculatedExtra = Math.round((basePrice / duration) * extraDays);
-          setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
-        }
-      }
-    }
+    const base = computeBasePrice(formData, pricingMatrix);
+    const calculatedExtra = computeExtraAmount(base, formData.PlanPeriod, formData.extraDays);
+    setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
   }, [formData.extraDays, formData.PlanType, formData.PlanPeriod, pricingMatrix]);
 
   useEffect(() => {
@@ -633,130 +617,44 @@ export function ReAdmission() {
   const [enablePersonalTraining, setEnablePersonalTraining] = useState(false);
 
   useEffect(() => {
-    const fetchPlans = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings/pricing/member-matrix', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setPricingMatrix(data);
-          setPlans(Object.keys(data));
-        }
-      } catch (e) {
-        console.error("Failed to fetch plans", e);
+    const init = async () => {
+      const { pricingMatrix: pm, plans: pList, ptPricingMatrix: ptpm, ptPlans: ptList, settings } = await loadPricingAndSettings();
+      if (pm) setPricingMatrix(pm);
+      if (pList) setPlans(pList);
+      if (ptpm) setPtPricingMatrix(ptpm);
+      if (ptList) setPtPlans(ptList);
+      if (settings) {
+        const s = {
+          admissionFee: parseFloat(settings.admissionFee) || 0,
+          reAdmissionFee: parseFloat(settings.reAdmissionFee) || 0,
+          readmissionDiscount: parseFloat(settings.readmissionDiscount) || 50,
+          admissionExpiryDays: parseInt(settings.admissionExpiryDays) || 365
+        };
+        setGymSettings(s);
+        setFormData(prev => ({ ...prev, admissionPrice: s.reAdmissionFee }));
+        if (settings.enablePersonalTraining) setEnablePersonalTraining(true);
       }
     };
-
-    const fetchSettings = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const settings = {
-            admissionFee: parseFloat(data.admissionFee) || 0,
-            reAdmissionFee: parseFloat(data.reAdmissionFee) || 0,
-            readmissionDiscount: parseFloat(data.readmissionDiscount) || 50,
-            admissionExpiryDays: parseInt(data.admissionExpiryDays) || 365
-          };
-          setGymSettings(settings);
-          // Default to flat reAdmissionFee until member data is loaded
-          setFormData(prev => ({ ...prev, admissionPrice: settings.reAdmissionFee }));
-          if (data.enablePersonalTraining) {
-            setEnablePersonalTraining(true);
-          }
-        }
-      } catch (e) {
-        console.error("Failed to fetch settings", e);
-      }
-    };
-
-    const fetchPtPlans = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings/pricing/pt-matrix', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setPtPricingMatrix(data);
-          setPtPlans(Object.keys(data));
-        }
-      } catch (e) {
-        console.error("Failed to fetch PT plans", e);
-      }
-    };
-    fetchPlans();
-    fetchSettings();
-    fetchPtPlans();
+    init();
   }, []);
 
   // Auto-fill amount based on PlanType and PlanPeriod
   useEffect(() => {
-    let basePrice = 0;
-    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
-      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
-      if (priceConfig && priceConfig.price) {
-        basePrice = parseFloat(priceConfig.price) || 0;
-      }
-    }
-    const admission = applyAdmissionFee ? (parseFloat(formData.admissionPrice) || 0) : 0;
-    const extra = parseFloat(formData.extraAmount) || 0;
-    const pt = formData.ptPlanType ? (parseFloat(formData.ptAmount) || 0) : 0;
-    const total = basePrice + admission + extra + pt;
-
-    setFormData(prev => ({
-      ...prev,
-      LastPaymentAmount: total,
-      paidAmount: total
-    }));
+    const { total } = computeTotal(formData, pricingMatrix, ptPricingMatrix, { applyAdmissionFee });
+    setFormData(prev => ({ ...prev, LastPaymentAmount: total, paidAmount: total }));
   }, [formData.PlanType, formData.PlanPeriod, formData.admissionPrice, formData.extraAmount, applyAdmissionFee, formData.ptPlanType, formData.ptAmount, pricingMatrix]);
 
   // Auto-fill PT amount based on PT plan + gym PlanPeriod
   useEffect(() => {
-    if (formData.ptPlanType && formData.PlanPeriod && ptPricingMatrix[formData.ptPlanType]) {
-      const ptConfig = ptPricingMatrix[formData.ptPlanType][formData.PlanPeriod];
-      if (ptConfig && ptConfig.price) {
-        setFormData(prev => ({ ...prev, ptAmount: parseFloat(ptConfig.price) || 0 }));
-      }
-    } else if (!formData.ptPlanType) {
-      setFormData(prev => ({ ...prev, ptAmount: 0 }));
-    }
+    const pt = computePtAmount(formData, ptPricingMatrix);
+    setFormData(prev => ({ ...prev, ptAmount: pt }));
   }, [formData.ptPlanType, formData.PlanPeriod, ptPricingMatrix]);
 
   // Calculate extra amount based on extra days
   useEffect(() => {
-    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
-      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
-      if (priceConfig && priceConfig.price) {
-        const basePrice = parseFloat(priceConfig.price) || 0;
-        const extraDays = parseInt(formData.extraDays) || 0;
-
-        if (extraDays >= 0) {
-          let duration = 30;
-          if (formData.PlanPeriod === 'Monthly') duration = 30;
-          else if (formData.PlanPeriod === 'Quaterly') duration = 90;
-          else if (formData.PlanPeriod === 'HalfYearly') duration = 180;
-          else if (formData.PlanPeriod === 'Yearly') duration = 365;
-
-          const calculatedExtra = Math.round((basePrice / duration) * extraDays);
-          setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
-        }
-      }
-    }
+    const base = computeBasePrice(formData, pricingMatrix);
+    const calculatedExtra = computeExtraAmount(base, formData.PlanPeriod, formData.extraDays);
+    setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
   }, [formData.extraDays, formData.PlanType, formData.PlanPeriod, pricingMatrix]);
 
   const handleInputChange = (e) => {
@@ -1095,124 +993,37 @@ export function Renewal() {
   const [dateFormat, setDateFormat] = useState('dd/MM/yyyy');
 
   useEffect(() => {
-    const fetchPlans = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings/pricing/member-matrix', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setPricingMatrix(data);
-          setPlans(Object.keys(data));
-        }
-      } catch (e) {
-        console.error("Failed to fetch plans", e);
+    const init = async () => {
+      const { pricingMatrix: pm, plans: pList, ptPricingMatrix: ptpm, ptPlans: ptList, settings } = await loadPricingAndSettings();
+      if (pm) setPricingMatrix(pm);
+      if (pList) setPlans(pList);
+      if (ptpm) setPtPricingMatrix(ptpm);
+      if (ptList) setPtPlans(ptList);
+      if (settings) {
+        if (settings.enablePersonalTraining) setEnablePersonalTraining(true);
+        if (settings.dateFormat) setDateFormat(settings.dateFormat);
       }
     };
-
-    const fetchSettings = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.enablePersonalTraining) {
-            setEnablePersonalTraining(true);
-          }
-          if (data.dateFormat) {
-            // Map DD/MM/YYYY to dd/MM/yyyy for date-fns
-            setDateFormat(data.dateFormat.replace(/D/g, 'd').replace(/Y/g, 'y'));
-          }
-        }
-      } catch (e) {
-        console.error("Failed to fetch settings", e);
-      }
-    };
-
-    const fetchPtPlans = async () => {
-      try {
-        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-        if (!token || !dbName) return;
-
-        const res = await fetch('/api/settings/pricing/pt-matrix', {
-          headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setPtPricingMatrix(data);
-          setPtPlans(Object.keys(data));
-        }
-      } catch (e) {
-        console.error("Failed to fetch PT plans", e);
-      }
-    };
-    fetchPlans();
-    fetchSettings();
-    fetchPtPlans();
+    init();
   }, []);
 
   // Auto-fill amount based on PlanType and PlanPeriod
   useEffect(() => {
-    let basePrice = 0;
-    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
-      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
-      if (priceConfig && priceConfig.price) {
-        basePrice = parseFloat(priceConfig.price) || 0;
-      }
-    }
-    const extra = parseFloat(formData.extraAmount) || 0;
-    const pt = formData.ptPlanType ? (parseFloat(formData.ptAmount) || 0) : 0;
-    const total = basePrice + extra + pt;
-
-    setFormData(prev => ({
-      ...prev,
-      LastPaymentAmount: total,
-      paidAmount: total
-    }));
-  }, [formData.PlanType, formData.PlanPeriod, formData.extraAmount, formData.ptPlanType, formData.ptAmount, pricingMatrix]);
+    const { total } = computeTotal(formData, pricingMatrix, ptPricingMatrix, { applyAdmissionFee: false });
+    setFormData(prev => ({ ...prev, LastPaymentAmount: total, paidAmount: total }));
+  }, [formData.PlanType, formData.PlanPeriod, formData.extraAmount, formData.ptPlanType, formData.ptAmount, pricingMatrix, ptPricingMatrix]);
 
   // Calculate extra amount based on extra days
   useEffect(() => {
-    if (formData.PlanType && formData.PlanPeriod && pricingMatrix[formData.PlanType]) {
-      const priceConfig = pricingMatrix[formData.PlanType][formData.PlanPeriod];
-      if (priceConfig && priceConfig.price) {
-        const basePrice = parseFloat(priceConfig.price) || 0;
-        const extraDays = parseInt(formData.extraDays) || 0;
-
-        if (extraDays >= 0) {
-          let duration = 30;
-          if (formData.PlanPeriod === 'Monthly') duration = 30;
-          else if (formData.PlanPeriod === 'Quaterly') duration = 90;
-          else if (formData.PlanPeriod === 'HalfYearly') duration = 180;
-          else if (formData.PlanPeriod === 'Yearly') duration = 365;
-
-          const calculatedExtra = Math.round((basePrice / duration) * extraDays);
-          setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
-        }
-      }
-    }
+    const base = computeBasePrice(formData, pricingMatrix);
+    const calculatedExtra = computeExtraAmount(base, formData.PlanPeriod, formData.extraDays);
+    setFormData(prev => ({ ...prev, extraAmount: calculatedExtra }));
   }, [formData.extraDays, formData.PlanType, formData.PlanPeriod, pricingMatrix]);
 
   // PT Amount effect remains separate as it depends on its own matrix
   useEffect(() => {
-    if (formData.ptPlanType && formData.PlanPeriod && ptPricingMatrix[formData.ptPlanType]) {
-      const ptConfig = ptPricingMatrix[formData.ptPlanType][formData.PlanPeriod];
-      if (ptConfig && ptConfig.price) {
-        setFormData(prev => ({ ...prev, ptAmount: parseFloat(ptConfig.price) || 0 }));
-      }
-    } else if (!formData.ptPlanType) {
-      setFormData(prev => ({ ...prev, ptAmount: 0 }));
-    }
+    const pt = computePtAmount(formData, ptPricingMatrix);
+    setFormData(prev => ({ ...prev, ptAmount: pt }));
   }, [formData.ptPlanType, formData.PlanPeriod, ptPricingMatrix]);
 
   const handleInputChange = (e) => {
@@ -1264,24 +1075,12 @@ export function Renewal() {
 
       // Compute total payable immediately from returned client data (fallback)
       try {
-        let basePrice = 0;
-        if (data.PlanType && data.PlanPeriod && pricingMatrix[data.PlanType]) {
-          const priceConfig = pricingMatrix[data.PlanType][data.PlanPeriod];
-          if (priceConfig && priceConfig.price) basePrice = parseFloat(priceConfig.price) || 0;
-        }
-
+        const basePrice = computeBasePrice(data, pricingMatrix);
         const extra = 0; // we reset extraAmount to 0 on load
-
-        let pt = 0;
-        if (data.ptPlanType && ptPricingMatrix[data.ptPlanType]) {
-          const ptConfig = ptPricingMatrix[data.ptPlanType][data.PlanPeriod];
-          if (ptConfig && ptConfig.price) pt = parseFloat(ptConfig.price) || 0;
-        }
-
+        const pt = computePtAmount(data, ptPricingMatrix);
         const total = basePrice + extra + pt;
         setFormData(prev => ({ ...prev, LastPaymentAmount: total, paidAmount: total }));
       } catch (err) {
-        // silently ignore calculation errors - auto-fill effect will try again
         console.debug('Could not compute total from client data yet', err);
       }
     } catch (error) {
