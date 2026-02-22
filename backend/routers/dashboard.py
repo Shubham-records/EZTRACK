@@ -6,7 +6,7 @@ from typing import Dict, Any
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Member, Invoice, ProteinStock, Expense, GymSettings, PendingBalance
+from models.all_models import Gym, Member, Invoice, ProteinStock, Expense, GymSettings
 
 router = APIRouter()
 
@@ -50,9 +50,9 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
     ).scalar() or 0.0
     
     # 6. Pending Balance
-    pending_balance = db.query(func.sum(PendingBalance.amount)).filter(
-        PendingBalance.gymId == current_gym.id,
-        PendingBalance.status.in_(['pending', 'partial'])
+    pending_balance = db.query(func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0))).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.status.in_(['PENDING', 'PARTIAL'])
     ).scalar() or 0.0
     
     # 7. Low Stock Count
@@ -193,17 +193,18 @@ def get_dashboard_alerts(current_gym: Gym = Depends(get_current_gym), db: Sessio
             pass
     
     # 3. Pending balances overdue (External Contacts / Other Pending)
-    pending = db.query(PendingBalance).filter(
-        PendingBalance.gymId == current_gym.id,
-        PendingBalance.status.in_(['pending', 'partial']),
-        PendingBalance.dueDate < today.strftime('%Y-%m-%d')
+    pending = db.query(Invoice).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.status.in_(['PENDING', 'PARTIAL']),
+        Invoice.dueDate < today.strftime('%Y-%m-%d')
     ).all()
     
     for pb in pending:
+        balance = pb.total - (pb.paidAmount or 0)
         alerts.append({
             "type": "overdue_balance",
             "severity": "high",
-            "title": f"Overdue payment of ₹{pb.amount}",
+            "title": f"Overdue payment of ₹{balance:.0f} ({pb.customerName or 'Customer'})",
             "entityId": pb.id,
             "entityType": "pending_balance"
         })

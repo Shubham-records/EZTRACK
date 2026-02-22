@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
+import { Chart } from "react-google-charts";
 import { Calendar } from 'lucide-react';
 import ExpriesOverdue from './expriesOverdue';
 
@@ -155,23 +155,54 @@ export default function Dashboard() {
       return d >= start && d <= end;
     });
 
-    // 2. Income Sources (by Payment Mode)
+    // 2. Sankey Diagram Links:
+    // We want to show flow from [Income Sources] -> [Total Income] -> [Expense Categories]
+    // If Total Expenses > Total Income, the flow is a bit weird, but we'll stick to a simple model:
+    // (Income Mode) -> "Total Revenue" -> (Expense Category)
+    // Plus "Profit" sink if Revenue > Expenses
+
+    let sankeyData = [
+      ["From", "To", "Amount"] // Header row required by Google Charts
+    ];
+    let totalRevenue = 0;
+
+    // Process Invoices
     const incomeSourcesMap = {};
     filteredInvoices.forEach(inv => {
-      const mode = inv.paymentMode || 'Unknown';
-      incomeSourcesMap[mode] = (incomeSourcesMap[mode] || 0) + (inv.total || 0);
-    });
-    const incomeSources = Object.entries(incomeSourcesMap).map(([name, value]) => ({ name, value }));
+      let type = inv.invoiceType || inv.Billtype || 'Other';
+      type = String(type).charAt(0).toUpperCase() + String(type).slice(1).toLowerCase();
 
-    // 3. Expense Sources (by Category)
+      incomeSourcesMap[type] = (incomeSourcesMap[type] || 0) + (inv.total || 0);
+      totalRevenue += (inv.total || 0);
+    });
+
+    Object.entries(incomeSourcesMap).forEach(([type, val]) => {
+      if (val > 0) sankeyData.push([type, "Total Revenue", val]);
+    });
+
+    // Process Expenses
     const expenseSourcesMap = {};
+    let totalExpense = 0;
     filteredExpenses.forEach(exp => {
       const cat = exp.category || 'Other';
       expenseSourcesMap[cat] = (expenseSourcesMap[cat] || 0) + (exp.amount || 0);
+      totalExpense += (exp.amount || 0);
     });
-    const expenseSources = Object.entries(expenseSourcesMap).map(([name, value]) => ({ name, value }));
 
-    return { revenueGrowth, incomeSources, expenseSources };
+    Object.entries(expenseSourcesMap).forEach(([cat, val]) => {
+      if (val > 0) sankeyData.push(["Total Revenue", cat, val]);
+    });
+
+    if (totalRevenue > totalExpense) {
+      sankeyData.push(["Total Revenue", "Net Profit", totalRevenue - totalExpense]);
+    }
+
+    // fallback empty state
+    if (sankeyData.length === 1) {
+      sankeyData = null; // nullifies the data to trigger empty state graphic
+    }
+
+    return { revenueGrowth, sankeyData };
   }, [invoices, expenses, dateRange]);
 
   if (loading) {
@@ -256,74 +287,35 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto pr-2 space-y-6">
-            {/* Income Breakdown */}
-            <div>
-              <h4 className="text-xs font-bold text-emerald-600 uppercase mb-2 flex justify-between">
-                <span>Income Sources</span>
-                <span>₹{chartData.incomeSources.reduce((a, b) => a + b.value, 0).toLocaleString()}</span>
-              </h4>
-              <div className="h-40">
-                {chartData.incomeSources.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={chartData.incomeSources}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={40}
-                        outerRadius={60}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {chartData.incomeSources.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => `₹${value.toLocaleString()}`} />
-                      <Legend verticalAlign="middle" align="right" layout="vertical" iconSize={8} wrapperStyle={{ fontSize: '10px' }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-xs text-zinc-400">No data for selected period</div>
-                )}
+          <div className="flex-1 w-full flex items-center justify-center">
+            {chartData.sankeyData ? (
+              <Chart
+                chartType="Sankey"
+                width="100%"
+                height="250px"
+                data={chartData.sankeyData}
+                options={{
+                  sankey: {
+                    node: {
+                      colors: ['#047857', '#059669', '#34d399', '#f43f5e', '#fbbf24', '#f87171'],
+                      nodePadding: 16,
+                      width: 10,
+                      labelPadding: 16,
+                      label: { color: localStorage.getItem('theme') === 'dark' ? '#fff' : '#18181b' }
+                    },
+                    link: {
+                      colorMode: 'gradient',
+                      fillOpacity: 0.3
+                    }
+                  }
+                }}
+              />
+            ) : (
+              <div className="text-sm font-medium text-zinc-400 flex flex-col items-center">
+                <span className="material-symbols-outlined text-4xl mb-2 opacity-50">data_alert</span>
+                No income/expense flow to display
               </div>
-            </div>
-
-            <div className="border-t border-dashed border-zinc-200 dark:border-zinc-800"></div>
-
-            {/* Expense Breakdown */}
-            <div>
-              <h4 className="text-xs font-bold text-rose-500 uppercase mb-2 flex justify-between">
-                <span>Expense Breakdown</span>
-                <span>₹{chartData.expenseSources.reduce((a, b) => a + b.value, 0).toLocaleString()}</span>
-              </h4>
-              <div className="h-40">
-                {chartData.expenseSources.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={chartData.expenseSources}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={40}
-                        outerRadius={60}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {chartData.expenseSources.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[(index + 2) % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => `₹${value.toLocaleString()}`} />
-                      <Legend verticalAlign="middle" align="right" layout="vertical" iconSize={8} wrapperStyle={{ fontSize: '10px' }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-xs text-zinc-400">No data for selected period</div>
-                )}
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>

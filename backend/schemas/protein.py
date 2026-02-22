@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
+from typing import List
 
 
 class ProteinBase(BaseModel):
@@ -57,6 +58,7 @@ class ProteinResponse(ProteinBase):
     
     # Computed field for low stock indicator
     isLowStock: Optional[bool] = None
+    lots: Optional[List[dict]] = []
 
     class Config:
         from_attributes = True

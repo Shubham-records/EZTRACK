@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useContext } from 'react'
+import React, { useState, useMemo, useEffect, useRef, useContext } from 'react'
 import { useReactTable, getCoreRowModel, getFilteredRowModel, getSortedRowModel, getPaginationRowModel, flexRender, createColumnHelper, } from '@tanstack/react-table';
 import { rankItem } from '@tanstack/match-sorter-utils'
 import { ChevronDown, ChevronUp, Edit2, Save, X, Trash2, Search, CheckSquare, Square, MinusSquare, Plus, Filter, RefreshCcw, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
@@ -7,6 +7,7 @@ import { useToast } from "@/context/ToastContext";
 import ImportMembersModal from './components/ImportMembersModal';
 import AddMemberModal from './components/AddMemberModal';
 import AddProteinModal from './components/AddProteinModal';
+import ConfirmModal from './components/ConfirmModal';
 
 function IndeterminateCheckbox({
   indeterminate,
@@ -31,7 +32,7 @@ function IndeterminateCheckbox({
   )
 }
 
-export default function TableComponent({ gymmemberdata, allColumns, onUpdateData, dataType, onNavigate, initialFilter = '' }) {
+export default function TableComponent({ gymmemberdata, allColumns, onUpdateData, dataType, onNavigate, initialFilter = '', highlightId = '' }) {
   const { showToast } = useToast();
 
   const [data, setData] = useState(gymmemberdata)
@@ -45,9 +46,27 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
   const [isFilterOpen, setIsFilterOpen] = useState(false)
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false)
   const [isAddProteinModalOpen, setIsAddProteinModalOpen] = useState(false)
+  const [confirmModal, setConfirmModal] = useState({ isOpen: false, action: null, title: '', message: '' })
 
   const [editingId, setEditingId] = useState(null)
   const [editedMember, setEditedMember] = useState(null)
+  const [blinkingId, setBlinkingId] = useState('')
+  const blinkRowRef = useRef(null)
+
+  // Trigger blink when highlightId changes (UUID = exact single row)
+  useEffect(() => {
+    if (!highlightId) return;
+    setBlinkingId(highlightId);
+    // Auto scroll after a short delay to let the table render
+    const scrollTimer = setTimeout(() => {
+      if (blinkRowRef.current) {
+        blinkRowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 80);
+    // Clear blink after 3 cycles × 600ms = 1800ms
+    const clearTimer = setTimeout(() => setBlinkingId(''), 1900);
+    return () => { clearTimeout(scrollTimer); clearTimeout(clearTimer); };
+  }, [highlightId]);
 
   const columnHelper = createColumnHelper()
   const columns = useMemo(() => [
@@ -241,73 +260,79 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
 
     if (selectedIds.length === 0) return;
 
-    if (!confirm(`Are you sure you want to delete ${selectedIds.length} items? This action cannot be undone.`)) {
-      return;
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Bulk Delete Data',
+      message: `Are you sure you want to delete ${selectedIds.length} items? This action cannot be undone.`,
+      action: async () => {
+        try {
+          const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+          const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+          const url = dataType === 'member'
+            ? `/api/members/bulk-delete`
+            : `/api/proteins/bulk-delete`;
 
-    try {
-      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      const url = dataType === 'member'
-        ? `/api/members/bulk-delete`
-        : `/api/proteins/bulk-delete`;
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${jwtToken}`,
+              'X-Database-Name': eztracker_jwt_databaseName_control_token,
+            },
+            body: JSON.stringify({ ids: selectedIds })
+          });
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token,
-        },
-        body: JSON.stringify({ ids: selectedIds })
-      });
+          if (!response.ok) throw new Error("Failed to delete items");
 
-      if (!response.ok) throw new Error("Failed to delete items");
+          const result = await response.json();
+          showToast(`Successfully deleted ${result.count} items`, 'success');
 
-      const result = await response.json();
-      showToast(`Successfully deleted ${result.count} items`, 'success');
+          const remainingData = data.filter(item => !selectedIds.includes(item._id));
+          setData(remainingData);
+          onUpdateData(remainingData);
+          setRowSelection({});
 
-      // Refresh data or remove locally
-      const remainingData = data.filter(item => !selectedIds.includes(item._id));
-      setData(remainingData);
-      onUpdateData(remainingData);
-      setRowSelection({});
-
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      }
+    });
   }
 
   async function handleDelete(_id) {
-    // ... existing implementation ...
-    try {
-      const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token')
-      const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token')
-      const url = dataType === 'member'
-        ? `/api/members/${_id}`
-        : `/api/proteins/${_id}`
+    setConfirmModal({
+      isOpen: true,
+      title: `Delete ${dataType === 'member' ? 'Member' : 'Item'}`,
+      message: 'Are you sure you want to delete this row? This action is permanent.',
+      action: async () => {
+        try {
+          const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token')
+          const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token')
+          const url = dataType === 'member'
+            ? `/api/members/${_id}`
+            : `/api/proteins/${_id}`
 
-      // ... rest of delete logic
+          const response = await fetch(url, {
+            method: 'DELETE',
+            headers: {
+              Authorization: `Bearer ${jwtToken}`,
+              'X-Database-Name': eztracker_jwt_databaseName_control_token,
+            },
+          })
 
-      const response = await fetch(url, {
-        method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${jwtToken}`,
-          'X-Database-Name': eztracker_jwt_databaseName_control_token,
-        },
-      })
+          if (!response.ok) {
+            throw new Error('Failed to delete data')
+          }
 
-      if (!response.ok) {
-        throw new Error('Failed to delete data')
+          const newData = data.filter(member => member._id !== _id)
+          setData(newData)
+          onUpdateData(newData)
+          showToast(`${dataType} deleted successfully`, 'success');
+        } catch (err) {
+          showToast(err.message, 'error')
+        }
       }
-
-      const newData = data.filter(member => member._id !== _id)
-      setData(newData)
-      onUpdateData(newData)
-      showToast(`${dataType} deleted successfully`, 'success');
-    } catch (err) {
-      showToast(err.message, 'error')
-    }
+    });
   }
 
   function clearAllFilters() {
@@ -317,6 +342,17 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
 
   return (
     <div className="p-6 rounded-lg bg-surface-light dark:bg-surface-dark w-full shadow-soft border border-zinc-200 dark:border-zinc-800">
+      {/* Blink keyframe injected inline */}
+      <style>{`
+        @keyframes rowBlink {
+          0%   { background-color: transparent; box-shadow: none; }
+          40%  { background-color: rgba(20,184,166,0.18); box-shadow: inset 0 0 0 2px rgba(20,184,166,0.45); }
+          100% { background-color: transparent; box-shadow: none; }
+        }
+        .row-blink {
+          animation: rowBlink 0.6s ease-in-out 3;
+        }
+      `}</style>
       <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-zinc-50 dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800">
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
           {/* Columns Selector */}
@@ -328,14 +364,17 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
               <ChevronDown size={14} className={`transition-transform duration-200 ${isColumnSelectorOpen ? 'rotate-180' : ''}`} />
             </button>
             {isColumnSelectorOpen && (
-              <div className="absolute left-0 mt-2 p-3 min-w-[280px] grid grid-cols-2 gap-2 rounded-xl shadow-2xl z-50 border bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700">
-                <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer col-span-2 border-b border-zinc-100 dark:border-zinc-800 pb-2 mb-1">
+              <div
+                className="absolute left-0 mt-2 p-4 w-max max-h-[80vh] overflow-y-auto grid gap-x-8 gap-y-1 rounded-xl shadow-2xl z-50 border bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700"
+                style={{ gridTemplateColumns: 'repeat(3, auto)' }}
+              >
+                <label className="flex items-center gap-2 px-3 py-2 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer col-span-3 border-b border-zinc-100 dark:border-zinc-800 pb-2 mb-1">
                   <input
                     type="checkbox"
                     checked={visibleColumns.length === allColumns.length}
                     onChange={() => setVisibleColumns(visibleColumns.length === allColumns.length ? [] : [...allColumns])}
-                    className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4" />
-                  <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Select All</span>
+                    className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4 flex-shrink-0" />
+                  <span className="text-sm font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">Select All</span>
                 </label>
                 {allColumns.map(column => (
                   <label key={column} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer">
@@ -343,8 +382,8 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
                       type="checkbox"
                       checked={visibleColumns.includes(column)}
                       onChange={() => toggleColumnVisibility(column)}
-                      className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4" />
-                    <span className="text-sm truncate text-zinc-700 dark:text-zinc-300" title={column}>{column}</span>
+                      className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-nowrap">{column}</span>
                   </label>
                 ))}
               </div>
@@ -466,6 +505,16 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
         onSuccess={fetchDATA}
       />
 
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        onClose={() => setConfirmModal({ isOpen: false, action: null, title: '', message: '' })}
+        onConfirm={confirmModal.action}
+        confirmText="Delete"
+        isDestructive={true}
+      />
+
       <div className="overflow-x-auto stitch-scrollbar" style={{ height: "75vh" }}>
         <table className="w-full border-collapse">
           <thead className="bg-zinc-50 dark:bg-zinc-900 sticky top-0 z-10 shadow-sm">
@@ -530,8 +579,15 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
           )}
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
             {table.getRowModel().rows.map(row => {
+              // Match by UUID (_id / id) — guaranteed unique, no false positives on duplicate names
+              const rowId = row.original._id || row.original.id;
+              const isHighlighted = blinkingId && rowId === blinkingId;
               return (
-                <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors">
+                <tr
+                  key={row.id}
+                  ref={isHighlighted ? blinkRowRef : null}
+                  className={`hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors ${isHighlighted ? 'row-blink' : ''}`}
+                >
                   {row.getVisibleCells().map(cell => {
                     return (
                       <td key={cell.id} className="px-4 py-3 text-sm text-zinc-700 dark:text-zinc-300 whitespace-nowrap">

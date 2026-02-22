@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useToast } from "@/context/ToastContext";
 import { Save, Settings, DollarSign, Bell, Package, FileText, Plus, Trash2, Dumbbell } from 'lucide-react';
 import AddPlanModal from './components/AddPlanModal';
+import ConfirmModal from './components/ConfirmModal';
 
 const inputStyle = "w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all";
 const labelStyle = "block text-xs font-bold text-zinc-500 uppercase tracking-wider mb-1";
@@ -12,6 +13,7 @@ export default function AdminSettings() {
     const [activeTab, setActiveTab] = useState('general');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [confirmModal, setConfirmModal] = useState({ isOpen: false, action: null, title: '', message: '' });
     const [isAddPlanModalOpen, setIsAddPlanModalOpen] = useState(false);
     const [isAddPtPlanModalOpen, setIsAddPtPlanModalOpen] = useState(false);
 
@@ -56,8 +58,7 @@ export default function AdminSettings() {
     const [initialSettings, setInitialSettings] = useState(null);
     const [pricingMatrix, setPricingMatrix] = useState({});
     const [initialPricingMatrix, setInitialPricingMatrix] = useState({});
-    const [proteinDefaults, setProteinDefaults] = useState({});
-    const [initialProteinDefaults, setInitialProteinDefaults] = useState({});
+
     const [ptPricingMatrix, setPtPricingMatrix] = useState({});
     const [initialPtPricingMatrix, setInitialPtPricingMatrix] = useState({});
 
@@ -66,7 +67,7 @@ export default function AdminSettings() {
         { id: 'gst', label: 'GST & Tax', icon: FileText },
         { id: 'pricing', label: 'Member Pricing', icon: DollarSign },
         { id: 'ptPricing', label: 'PT Pricing', icon: Dumbbell },
-        { id: 'protein', label: 'Protein Pricing', icon: Package },
+        // Removed Protein Pricing tab as pricing will be managed per-supplement
         { id: 'billing', label: 'Billing', icon: FileText },
         { id: 'stock', label: 'Stock Settings', icon: Package },
         { id: 'notifications', label: 'Notifications', icon: Bell },
@@ -76,7 +77,6 @@ export default function AdminSettings() {
         fetchSettings();
         fetchPricingMatrix();
         fetchPtPricingMatrix();
-        fetchProteinDefaults();
     }, []);
 
     const getAuthHeaders = () => {
@@ -134,16 +134,7 @@ export default function AdminSettings() {
     };
 
     const fetchProteinDefaults = async () => {
-        try {
-            const res = await fetch('/api/settings/pricing/protein-defaults', { headers: getAuthHeaders() });
-            if (res.ok) {
-                const data = await res.json();
-                setProteinDefaults(data);
-                setInitialProteinDefaults(data);
-            }
-        } catch (e) {
-            console.error('Failed to load protein defaults', e);
-        }
+        // deprecated: protein defaults managed per-supplement now
     };
 
     const handleChange = (e) => {
@@ -220,20 +211,7 @@ export default function AdminSettings() {
                 }
             }
 
-            // Save Protein Defaults
-            if (JSON.stringify(proteinDefaults) !== JSON.stringify(initialProteinDefaults)) {
-                const res = await fetch('/api/settings/pricing/protein-defaults/bulk', {
-                    method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: JSON.stringify(proteinDefaults)
-                });
-                if (res.ok) {
-                    setInitialProteinDefaults(proteinDefaults);
-                } else {
-                    success = false;
-                    showToast('Failed to save protein defaults', 'error');
-                }
-            }
+            // Protein defaults removed - pricing is handled per-supplement
 
             if (success) {
                 showToast('All changes saved successfully', 'success');
@@ -287,15 +265,7 @@ export default function AdminSettings() {
 
     // Removed individual save handlers as we now have a global save
 
-    const handleProteinDefaultChange = (brand, field, value) => {
-        setProteinDefaults(prev => ({
-            ...prev,
-            [brand]: {
-                ...(prev[brand] || {}),
-                [field]: field === 'marginType' ? value : (parseFloat(value) || 0)
-            }
-        }));
-    };
+    // Protein defaults removed
 
     // Removed individual save handlers as we now have a global save
 
@@ -314,9 +284,8 @@ export default function AdminSettings() {
         const settingsChanged = JSON.stringify(settings) !== JSON.stringify(initialSettings);
         const pricingChanged = JSON.stringify(pricingMatrix) !== JSON.stringify(initialPricingMatrix);
         const ptPricingChanged = JSON.stringify(ptPricingMatrix) !== JSON.stringify(initialPtPricingMatrix);
-        const proteinChanged = JSON.stringify(proteinDefaults) !== JSON.stringify(initialProteinDefaults);
 
-        return settingsChanged || pricingChanged || ptPricingChanged || proteinChanged;
+        return settingsChanged || pricingChanged || ptPricingChanged;
     };
 
     const showSaveButton = hasChanges();
@@ -551,28 +520,33 @@ export default function AdminSettings() {
                                         ))}
                                         <td className="px-4 py-3 text-center">
                                             <button
-                                                onClick={async () => {
-                                                    if (confirm(`Delete plan "${plan}"? This will hide it from future selections.`)) {
-                                                        try {
-                                                            const res = await fetch(`/api/settings/pricing/member-matrix/${encodeURIComponent(plan)}`, {
-                                                                method: 'DELETE',
-                                                                headers: getAuthHeaders()
-                                                            });
-                                                            if (res.ok) {
-                                                                setPricingMatrix(prev => {
-                                                                    const next = { ...prev };
-                                                                    delete next[plan];
-                                                                    setInitialPricingMatrix(next); // Sync initial state
-                                                                    return next;
+                                                onClick={() => {
+                                                    setConfirmModal({
+                                                        isOpen: true,
+                                                        title: 'Delete Plan',
+                                                        message: `Delete plan "${plan}"? This will hide it from future selections.`,
+                                                        action: async () => {
+                                                            try {
+                                                                const res = await fetch(`/api/settings/pricing/member-matrix/${encodeURIComponent(plan)}`, {
+                                                                    method: 'DELETE',
+                                                                    headers: getAuthHeaders()
                                                                 });
-                                                                showToast('Plan deleted', 'success');
-                                                            } else {
-                                                                throw new Error();
+                                                                if (res.ok) {
+                                                                    setPricingMatrix(prev => {
+                                                                        const next = { ...prev };
+                                                                        delete next[plan];
+                                                                        setInitialPricingMatrix(next); // Sync initial state
+                                                                        return next;
+                                                                    });
+                                                                    showToast('Plan deleted', 'success');
+                                                                } else {
+                                                                    throw new Error();
+                                                                }
+                                                            } catch (e) {
+                                                                showToast('Failed to delete plan', 'error');
                                                             }
-                                                        } catch (e) {
-                                                            showToast('Failed to delete plan', 'error');
                                                         }
-                                                    }
+                                                    });
                                                 }}
                                                 className="text-zinc-400 hover:text-rose-500 transition-colors p-1"
                                             >
@@ -665,28 +639,33 @@ export default function AdminSettings() {
                                         ))}
                                         <td className="px-4 py-3 text-center">
                                             <button
-                                                onClick={async () => {
-                                                    if (confirm(`Delete PT plan "${plan}"?`)) {
-                                                        try {
-                                                            const res = await fetch(`/api/settings/pricing/pt-matrix/${encodeURIComponent(plan)}`, {
-                                                                method: 'DELETE',
-                                                                headers: getAuthHeaders()
-                                                            });
-                                                            if (res.ok) {
-                                                                setPtPricingMatrix(prev => {
-                                                                    const next = { ...prev };
-                                                                    delete next[plan];
-                                                                    setInitialPtPricingMatrix(next);
-                                                                    return next;
+                                                onClick={() => {
+                                                    setConfirmModal({
+                                                        isOpen: true,
+                                                        title: 'Delete PT Plan',
+                                                        message: `Delete PT plan "${plan}"?`,
+                                                        action: async () => {
+                                                            try {
+                                                                const res = await fetch(`/api/settings/pricing/pt-matrix/${encodeURIComponent(plan)}`, {
+                                                                    method: 'DELETE',
+                                                                    headers: getAuthHeaders()
                                                                 });
-                                                                showToast('PT plan deleted', 'success');
-                                                            } else {
-                                                                throw new Error();
+                                                                if (res.ok) {
+                                                                    setPtPricingMatrix(prev => {
+                                                                        const next = { ...prev };
+                                                                        delete next[plan];
+                                                                        setInitialPtPricingMatrix(next);
+                                                                        return next;
+                                                                    });
+                                                                    showToast('PT plan deleted', 'success');
+                                                                } else {
+                                                                    throw new Error();
+                                                                }
+                                                            } catch (e) {
+                                                                showToast('Failed to delete PT plan', 'error');
                                                             }
-                                                        } catch (e) {
-                                                            showToast('Failed to delete PT plan', 'error');
                                                         }
-                                                    }
+                                                    });
                                                 }}
                                                 className="text-zinc-400 hover:text-rose-500 transition-colors p-1"
                                             >
@@ -891,6 +870,16 @@ export default function AdminSettings() {
                     </div>
                 </div>
             )}
+
+            <ConfirmModal
+                isOpen={confirmModal.isOpen}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                onClose={() => setConfirmModal({ isOpen: false, action: null, title: '', message: '' })}
+                onConfirm={confirmModal.action}
+                confirmText="Delete"
+                isDestructive={true}
+            />
         </div>
     );
 }

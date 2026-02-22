@@ -6,6 +6,7 @@ import {
     ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 import ImportDataModal from './components/ImportDataModal';
+import ConfirmModal from './components/ConfirmModal';
 
 const cardStyle = "bg-surface-light dark:bg-surface-dark p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm";
 
@@ -23,6 +24,7 @@ export default function Expenses({ initialFilter = '' }) {
         dateFrom: '',
         dateTo: ''
     });
+    const [confirmModal, setConfirmModal] = useState({ isOpen: false, action: null, title: '', message: '' });
 
     // Pagination
     const [currentPage, setCurrentPage] = useState(1);
@@ -108,42 +110,53 @@ export default function Expenses({ initialFilter = '' }) {
     };
 
     const handleDelete = async (id) => {
-        if (!confirm('Are you sure you want to delete this expense?')) return;
-        try {
-            const res = await fetch(`/api/expenses/${id}`, {
-                method: 'DELETE',
-                headers: getAuthHeaders()
-            });
-            if (res.ok) {
-                setExpenses(prev => prev.filter(e => e.id !== id));
-                showToast('Expense deleted', 'success');
+        setConfirmModal({
+            isOpen: true,
+            title: 'Delete Expense',
+            message: 'Are you sure you want to delete this expense? This action cannot be undone.',
+            action: async () => {
+                try {
+                    const res = await fetch(`/api/expenses/${id}`, {
+                        method: 'DELETE',
+                        headers: getAuthHeaders()
+                    });
+                    if (res.ok) {
+                        setExpenses(prev => prev.filter(e => e.id !== id));
+                        showToast('Expense deleted', 'success');
+                    }
+                } catch (error) {
+                    showToast('Failed to delete expense', 'error');
+                }
             }
-        } catch (error) {
-            showToast('Failed to delete expense', 'error');
-        }
+        });
     };
 
     const handleBulkDelete = async () => {
         if (selectedIds.length === 0) return;
-        if (!confirm(`Are you sure you want to delete ${selectedIds.length} expenses?`)) return;
-
-        try {
-            const res = await fetch('/api/expenses/bulk-delete', {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: JSON.stringify({ ids: selectedIds })
-            });
-            const data = await res.json();
-            if (res.ok) {
-                setExpenses(prev => prev.filter(e => !selectedIds.includes(e.id)));
-                setSelectedIds([]);
-                showToast(`Deleted ${data.count} expenses`, 'success');
-            } else {
-                showToast(data.detail || 'Failed to bulk delete', 'error');
+        setConfirmModal({
+            isOpen: true,
+            title: 'Bulk Delete Expenses',
+            message: `Are you sure you want to delete ${selectedIds.length} expenses?`,
+            action: async () => {
+                try {
+                    const res = await fetch('/api/expenses/bulk-delete', {
+                        method: 'POST',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify({ ids: selectedIds })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        setExpenses(prev => prev.filter(e => !selectedIds.includes(e.id)));
+                        setSelectedIds([]);
+                        showToast(`Deleted ${data.count} expenses`, 'success');
+                    } else {
+                        showToast(data.detail || 'Failed to bulk delete', 'error');
+                    }
+                } catch (error) {
+                    showToast('Failed to bulk delete', 'error');
+                }
             }
-        } catch (error) {
-            showToast('Failed to bulk delete', 'error');
-        }
+        });
     };
 
     const toggleSelectAll = (e) => {
@@ -430,6 +443,16 @@ export default function Expenses({ initialFilter = '' }) {
                 onClose={() => setShowImportModal(false)}
                 onSuccess={fetchExpenses}
                 dataType="expense"
+            />
+
+            <ConfirmModal
+                isOpen={confirmModal.isOpen}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                onClose={() => setConfirmModal({ isOpen: false, action: null, title: '', message: '' })}
+                onConfirm={confirmModal.action}
+                confirmText="Delete"
+                isDestructive={true}
             />
         </div>
     );

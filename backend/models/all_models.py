@@ -59,9 +59,11 @@ class Invoice(Base):
     tax = Column(Float, default=0)
     discount = Column(Float, default=0)
     total = Column(Float, nullable=False)
+    paidAmount = Column(Float, default=0)
 
     status = Column(String, default="PENDING")
     paymentMode = Column(String, nullable=True)
+    paymentLogs = Column(JSON, nullable=True) # To track partial payments over time
 
     lastEditedBy = Column(String, nullable=True)
     editReason = Column(String, nullable=True)
@@ -162,6 +164,7 @@ class ProteinStock(Base):
 
     gym = relationship("Gym", back_populates="proteinStocks")
     branch = relationship("Branch", back_populates="proteinStocks")
+    lots = relationship("ProteinLot", back_populates="protein", cascade="all, delete-orphan")
 
 
 class Branch(Base):
@@ -320,6 +323,30 @@ class PricingConfig(Base):
     gym = relationship("Gym", backref="pricingConfigs")
 
 
+class ProteinLot(Base):
+    """Individual lots/batches for a protein product."""
+    __tablename__ = "ProteinLot"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
+    proteinId = Column(String, ForeignKey("ProteinStock.id"), nullable=False)
+
+    lotNumber = Column(String, nullable=True)
+    quantity = Column(Integer, default=0)
+    purchasePrice = Column(Float, nullable=True)
+    sellingPrice = Column(Float, nullable=True)
+    marginType = Column(String, nullable=True)  # percentage or fixed
+    marginValue = Column(Float, nullable=True)
+    offerPrice = Column(Float, nullable=True)
+    expiryDate = Column(String, nullable=True)  # YYYY-MM-DD
+
+    createdAt = Column(DateTime, default=func.now())
+    updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    protein = relationship("ProteinStock", back_populates="lots")
+    gym = relationship("Gym", backref="proteinLots")
+
+
 class PendingBalance(Base):
     """Track pending balances for members and external contacts"""
     __tablename__ = "PendingBalance"
@@ -334,6 +361,7 @@ class PendingBalance(Base):
     
     # Optional references
     memberId = Column(String, ForeignKey("Member.id"), nullable=True)
+    invoiceId = Column(String, ForeignKey("Invoice.id"), nullable=True)
     externalContactId = Column(String, ForeignKey("ExternalContact.id"), nullable=True)
     
     # Balance details

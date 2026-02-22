@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, ProteinStock, GymSettings
+from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
 from schemas.protein import ProteinCreate, ProteinUpdate, ProteinResponse
 
 router = APIRouter()
@@ -33,6 +33,21 @@ def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
         p_dict['isLowStock'] = qty < threshold
     except (ValueError, TypeError):
         p_dict['isLowStock'] = False
+    # Attach lots summary
+    try:
+        p_dict['lots'] = []
+        for lot in getattr(p, 'lots', []) or []:
+            lot_obj = {
+                'id': lot.id,
+                'lotNumber': lot.lotNumber,
+                'quantity': lot.quantity,
+                'purchasePrice': lot.purchasePrice,
+                'sellingPrice': lot.sellingPrice,
+                'expiryDate': lot.expiryDate,
+            }
+            p_dict['lots'].append(lot_obj)
+    except Exception:
+        p_dict['lots'] = []
     
     return p_dict
 
@@ -192,7 +207,32 @@ def create_protein(
     db.add(protein)
     db.commit()
     db.refresh(protein)
-    
+
+    # If incoming data has lot information, create lots
+    lots = protein_data.get('lots') or []
+    for lot in lots:
+        try:
+            pl = ProteinLot(
+                gymId=current_gym.id,
+                proteinId=protein.id,
+                lotNumber=lot.get('lotNumber'),
+                quantity=int(lot.get('quantity') or 0),
+                purchasePrice=float(lot.get('purchasePrice')) if lot.get('purchasePrice') else None,
+                sellingPrice=float(lot.get('sellingPrice')) if lot.get('sellingPrice') else None,
+                marginType=lot.get('marginType'),
+                marginValue=float(lot.get('marginValue')) if lot.get('marginValue') else None,
+                offerPrice=float(lot.get('offerPrice')) if lot.get('offerPrice') else None,
+                expiryDate=lot.get('expiryDate')
+            )
+            db.add(pl)
+            # update protein available stock
+            protein.AvailableStock = (protein.AvailableStock or 0) + (pl.quantity or 0)
+        except Exception:
+            continue
+
+    db.commit()
+    db.refresh(protein)
+
     return map_protein_response(protein)
 
 
@@ -463,3 +503,134 @@ def adjust_protein_stock(
         "newQuantity": new_qty,
         "reason": reason
     }
+
+
+@router.get("/{protein_id}/lots")
+def get_protein_lots(
+    protein_id: str,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    protein = db.query(ProteinStock).filter(
+        ProteinStock.id == protein_id,
+        ProteinStock.gymId == current_gym.id
+    ).first()
+    if not protein:
+        raise HTTPException(status_code=404, detail="Protein not found")
+
+    lots = db.query(ProteinLot).filter(ProteinLot.proteinId == protein_id, ProteinLot.gymId == current_gym.id).all()
+    return [{
+        'id': l.id,
+        'lotNumber': l.lotNumber,
+        'quantity': l.quantity,
+        'purchasePrice': l.purchasePrice,
+        'sellingPrice': l.sellingPrice,
+        'expiryDate': l.expiryDate
+    } for l in lots]
+
+
+@router.post("/{protein_id}/lots")
+def create_protein_lot(
+    protein_id: str,
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    protein = db.query(ProteinStock).filter(ProteinStock.id == protein_id, ProteinStock.gymId == current_gym.id).first()
+    if not protein:
+        raise HTTPException(status_code=404, detail="Protein not found")
+
+    try:
+        quantity = int(data.get('quantity') or 0)
+    except (ValueError, TypeError):
+        quantity = 0
+
+    lot = ProteinLot(
+        gymId=current_gym.id,
+        proteinId=protein_id,
+        lotNumber=data.get('lotNumber'),
+        quantity=quantity,
+        purchasePrice=float(data.get('purchasePrice')) if data.get('purchasePrice') else None,
+        sellingPrice=float(data.get('sellingPrice')) if data.get('sellingPrice') else None,
+        marginType=data.get('marginType'),
+        marginValue=float(data.get('marginValue')) if data.get('marginValue') else None,
+        offerPrice=float(data.get('offerPrice')) if data.get('offerPrice') else None,
+        expiryDate=data.get('expiryDate')
+    )
+    db.add(lot)
+    protein.AvailableStock = (protein.AvailableStock or 0) + (lot.quantity or 0)
+    db.commit()
+    db.refresh(lot)
+    db.refresh(protein)
+
+    return {
+        'id': lot.id,
+        'lotNumber': lot.lotNumber,
+        'quantity': lot.quantity,
+        'purchasePrice': lot.purchasePrice,
+        'sellingPrice': lot.sellingPrice,
+        'expiryDate': lot.expiryDate
+    }
+
+
+@router.put("/lots/{lot_id}")
+def update_protein_lot(
+    lot_id: str,
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    lot = db.query(ProteinLot).filter(ProteinLot.id == lot_id, ProteinLot.gymId == current_gym.id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+
+    protein = db.query(ProteinStock).filter(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id).first()
+
+    prev_qty = lot.quantity or 0
+    try:
+        new_qty = int(data.get('quantity')) if data.get('quantity') is not None else prev_qty
+    except (ValueError, TypeError):
+        new_qty = prev_qty
+
+    # update fields
+    for key in ['lotNumber', 'purchasePrice', 'sellingPrice', 'marginType', 'marginValue', 'offerPrice', 'expiryDate']:
+        if key in data:
+            setattr(lot, key, data.get(key))
+    lot.quantity = new_qty
+
+    # adjust product available stock
+    if protein:
+        protein.AvailableStock = (protein.AvailableStock or 0) - prev_qty + (lot.quantity or 0)
+
+    db.commit()
+    db.refresh(lot)
+    if protein:
+        db.refresh(protein)
+
+    return {
+        'id': lot.id,
+        'lotNumber': lot.lotNumber,
+        'quantity': lot.quantity,
+        'purchasePrice': lot.purchasePrice,
+        'sellingPrice': lot.sellingPrice,
+        'expiryDate': lot.expiryDate
+    }
+
+
+@router.delete("/lots/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_protein_lot(
+    lot_id: str,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    lot = db.query(ProteinLot).filter(ProteinLot.id == lot_id, ProteinLot.gymId == current_gym.id).first()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+
+    protein = db.query(ProteinStock).filter(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id).first()
+    qty = lot.quantity or 0
+    db.delete(lot)
+    if protein:
+        protein.AvailableStock = max(0, (protein.AvailableStock or 0) - qty)
+    db.commit()
+    return None

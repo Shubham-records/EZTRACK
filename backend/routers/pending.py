@@ -2,21 +2,37 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
+import urllib.parse
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, PendingBalance
-from schemas.pending import PendingBalanceCreate, PendingBalanceUpdate, PendingBalanceResponse, PaymentRecord
+from models.all_models import Gym, Invoice
+from schemas.pending import PaymentRecord
 
 router = APIRouter()
 
+def map_invoice_to_pending(invoice: Invoice):
+    paid_amt = getattr(invoice, "paidAmount", 0) or 0
+    if invoice.status == "PAID":
+        paid_amt = invoice.total
+        
+    phone = None
+    if invoice.member and hasattr(invoice.member, 'Mobile'):
+        phone = str(invoice.member.Mobile)
 
-def map_pending_response(p: PendingBalance):
-    p_dict = p.__dict__.copy()
-    p_dict['_id'] = p.id
-    p_dict.pop('_sa_instance_state', None)
-    return p_dict
-
+    return {
+        "_id": invoice.id,
+        "id": invoice.id,
+        "gymId": invoice.gymId,
+        "entityType": "member" if invoice.memberId else "external",
+        "entityName": invoice.customerName or "Unknown",
+        "phone": phone,
+        "amount": invoice.total or 0,
+        "paidAmount": paid_amt,
+        "dueDate": invoice.dueDate.strftime('%Y-%m-%d') if invoice.dueDate else None,
+        "status": invoice.status.lower() if invoice.status else "pending",
+        "notes": invoice.editReason
+    }
 
 @router.get("")
 @router.get("/")
@@ -26,170 +42,144 @@ def get_pending_balances(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get all pending balances."""
-    query = db.query(PendingBalance).filter(PendingBalance.gymId == current_gym.id)
+    """Get all pending balances from invoices."""
+    query = db.query(Invoice).filter(Invoice.gymId == current_gym.id)
     
     if status_filter:
-        query = query.filter(PendingBalance.status == status_filter)
-    if entity_type:
-        query = query.filter(PendingBalance.entityType == entity_type)
+        query = query.filter(Invoice.status == status_filter.upper())
+    else:
+        query = query.filter(Invoice.status.in_(['PENDING', 'PARTIAL']))
+        
+    if entity_type == 'member':
+        query = query.filter(Invoice.memberId != None)
+    elif entity_type == 'external':
+        query = query.filter(Invoice.memberId == None)
     
-    # Default: show pending and partial only
-    if not status_filter:
-        query = query.filter(PendingBalance.status.in_(['pending', 'partial']))
-    
-    balances = query.order_by(PendingBalance.dueDate).all()
-    return [map_pending_response(p) for p in balances]
-
+    invoices = query.order_by(Invoice.dueDate).all()
+    return [map_invoice_to_pending(inv) for inv in invoices]
 
 @router.get("/summary")
 def get_pending_summary(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get pending balance summary."""
-    balances = db.query(PendingBalance).filter(
-        PendingBalance.gymId == current_gym.id,
-        PendingBalance.status.in_(['pending', 'partial'])
+    """Get pending balance summary from invoices."""
+    invoices = db.query(Invoice).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.status.in_(['PENDING', 'PARTIAL'])
     ).all()
     
-    total_pending = sum(b.amount - (b.paidAmount or 0) for b in balances)
-    by_type = {}
-    for b in balances:
-        remaining = b.amount - (b.paidAmount or 0)
-        if b.entityType not in by_type:
-            by_type[b.entityType] = 0
-        by_type[b.entityType] += remaining
+    total_pending = 0
+    by_type = {"member": 0, "external": 0}
+    overdue_count = 0
+    today = datetime.now().date()
     
-    # Count overdue
-    today = datetime.now().strftime('%Y-%m-%d')
-    overdue_count = sum(1 for b in balances if b.dueDate and b.dueDate < today)
-    
+    for inv in invoices:
+        paid_amt = getattr(inv, "paidAmount", 0)  or 0
+        remaining = (inv.total or 0) - paid_amt
+        total_pending += remaining
+        
+        ent_type = "member" if inv.memberId else "external"
+        by_type[ent_type] += remaining
+        
+        if inv.dueDate and inv.dueDate.date() < today:
+            overdue_count += 1
+            
     return {
         "totalPending": round(total_pending, 2),
         "byType": by_type,
-        "totalCount": len(balances),
+        "totalCount": len(invoices),
         "overdueCount": overdue_count
     }
-
 
 @router.get("/overdue")
 def get_overdue_balances(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get overdue pending balances."""
-    today = datetime.now().strftime('%Y-%m-%d')
+    """Get overdue pending balances from invoices."""
+    today = datetime.now()
     
-    balances = db.query(PendingBalance).filter(
-        PendingBalance.gymId == current_gym.id,
-        PendingBalance.status.in_(['pending', 'partial']),
-        PendingBalance.dueDate < today
-    ).order_by(PendingBalance.dueDate).all()
+    invoices = db.query(Invoice).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.status.in_(['PENDING', 'PARTIAL']),
+        Invoice.dueDate < today
+    ).order_by(Invoice.dueDate).all()
     
-    return [map_pending_response(p) for p in balances]
+    return [map_invoice_to_pending(inv) for inv in invoices]
 
-
-@router.get("/{pending_id}", response_model=PendingBalanceResponse)
+@router.get("/{pending_id}")
 def get_pending_balance(
     pending_id: str,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get single pending balance."""
-    pending = db.query(PendingBalance).filter(
-        PendingBalance.id == pending_id,
-        PendingBalance.gymId == current_gym.id
+    """Get single pending balance from invoice."""
+    invoice = db.query(Invoice).filter(
+        Invoice.id == pending_id,
+        Invoice.gymId == current_gym.id
     ).first()
     
-    if not pending:
+    if not invoice:
         raise HTTPException(status_code=404, detail="Pending balance not found")
     
-    return map_pending_response(pending)
+    return map_invoice_to_pending(invoice)
 
-
-@router.post("", response_model=PendingBalanceResponse, status_code=status.HTTP_201_CREATED)
-@router.post("/", response_model=PendingBalanceResponse, status_code=status.HTTP_201_CREATED)
-def create_pending_balance(
-    data: PendingBalanceCreate,
-    current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
-):
-    """Create a new pending balance record."""
-    pending = PendingBalance(gymId=current_gym.id, **data.model_dump())
-    db.add(pending)
-    db.commit()
-    db.refresh(pending)
-    return map_pending_response(pending)
-
-
-@router.put("/{pending_id}", response_model=PendingBalanceResponse)
-def update_pending_balance(
-    pending_id: str,
-    data: PendingBalanceUpdate,
-    current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
-):
-    """Update a pending balance."""
-    pending = db.query(PendingBalance).filter(
-        PendingBalance.id == pending_id,
-        PendingBalance.gymId == current_gym.id
-    ).first()
-    
-    if not pending:
-        raise HTTPException(status_code=404, detail="Pending balance not found")
-    
-    update_data = data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(pending, key, value)
-    
-    db.commit()
-    db.refresh(pending)
-    return map_pending_response(pending)
-
-
-@router.post("/{pending_id}/pay", response_model=PendingBalanceResponse)
+@router.post("/{pending_id}/pay")
 def record_payment(
     pending_id: str,
     payment: PaymentRecord,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Record a payment against pending balance."""
-    pending = db.query(PendingBalance).filter(
-        PendingBalance.id == pending_id,
-        PendingBalance.gymId == current_gym.id
+    """Record a payment against pending balance (invoice)."""
+    invoice = db.query(Invoice).filter(
+        Invoice.id == pending_id,
+        Invoice.gymId == current_gym.id
     ).first()
     
-    if not pending:
+    if not invoice:
         raise HTTPException(status_code=404, detail="Pending balance not found")
     
-    # Update paid amount
-    current_paid = pending.paidAmount or 0
+    # Process payment
+    current_paid = getattr(invoice, "paidAmount", 0) or 0
     new_paid = current_paid + payment.amount
-    pending.paidAmount = new_paid
     
-    # Update status
-    remaining = pending.amount - new_paid
-    if remaining <= 0:
-        pending.status = "paid"
-    elif new_paid > 0:
-        pending.status = "partial"
+    # Store payment logs
+    logs = invoice.paymentLogs or []
+    logs_copy = list(logs)
+    logs_copy.append({
+        "date": datetime.now().isoformat(),
+        "amount": payment.amount,
+        "paymentMode": payment.paymentMode,
+        "note": payment.notes or ""
+    })
     
-    # Add payment note
-    payment_note = f"[{payment.date or datetime.now().strftime('%Y-%m-%d')}] ₹{payment.amount} via {payment.paymentMode}"
-    if payment.notes:
-        payment_note += f" - {payment.notes}"
+    from sqlalchemy.orm.attributes import flag_modified
+    invoice.paymentLogs = logs_copy
+    flag_modified(invoice, "paymentLogs")
     
-    if pending.notes:
-        pending.notes += f"\n{payment_note}"
+    if new_paid >= invoice.total:
+        invoice.status = "PAID"
+        new_balance = 0
     else:
-        pending.notes = payment_note
+        invoice.status = "PARTIAL"
+        new_balance = invoice.total - new_paid
+        
+    invoice.paidAmount = new_paid
     
+    base_reason = invoice.editReason or "Invoice"
+    if " | Paid:" in base_reason:
+        base_reason = base_reason.split(" | Paid:")[0]
+        
+    if invoice.status == "PAID":
+        invoice.editReason = base_reason
+    else:
+        invoice.editReason = f"{base_reason} | Paid: ₹{new_paid:.0f} | Balance: ₹{new_balance:.0f}"
+        
     db.commit()
-    db.refresh(pending)
-    return map_pending_response(pending)
-
+    db.refresh(invoice)
+    return map_invoice_to_pending(invoice)
 
 @router.get("/{pending_id}/whatsapp-link")
 def get_whatsapp_reminder_link(
@@ -198,28 +188,32 @@ def get_whatsapp_reminder_link(
     db: Session = Depends(get_db)
 ):
     """Generate WhatsApp reminder link."""
-    pending = db.query(PendingBalance).filter(
-        PendingBalance.id == pending_id,
-        PendingBalance.gymId == current_gym.id
+    invoice = db.query(Invoice).filter(
+        Invoice.id == pending_id,
+        Invoice.gymId == current_gym.id
     ).first()
     
-    if not pending:
+    if not invoice:
         raise HTTPException(status_code=404, detail="Pending balance not found")
     
-    if not pending.phone:
+    phone = None
+    if invoice.member and hasattr(invoice.member, 'Mobile') and invoice.member.Mobile:
+        phone = str(invoice.member.Mobile).replace("+", "").replace(" ", "")
+        
+    if not phone:
         raise HTTPException(status_code=400, detail="No phone number available")
     
-    phone = pending.phone.replace("+", "").replace(" ", "")
     if not phone.startswith("91"):
         phone = "91" + phone
     
-    remaining = pending.amount - (pending.paidAmount or 0)
-    message = f"Hi {pending.entityName}, this is a friendly reminder about your pending balance of ₹{remaining:.2f} at our gym."
-    if pending.dueDate:
-        message += f" Due date: {pending.dueDate}."
+    remaining = invoice.total - getattr(invoice, "paidAmount", 0)
+    customer_name = invoice.customerName or "Customer"
+    
+    message = f"Hi {customer_name}, this is a friendly reminder about your pending balance of ₹{remaining:.2f} at our gym."
+    if invoice.dueDate:
+        message += f" Due date: {invoice.dueDate.strftime('%Y-%m-%d')}."
     message += " Please clear at your earliest convenience. Thank you!"
     
-    import urllib.parse
     encoded_message = urllib.parse.quote(message)
     
     return {
@@ -227,23 +221,3 @@ def get_whatsapp_reminder_link(
         "message": message,
         "phone": phone
     }
-
-
-@router.delete("/{pending_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_pending_balance(
-    pending_id: str,
-    current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
-):
-    """Delete a pending balance."""
-    pending = db.query(PendingBalance).filter(
-        PendingBalance.id == pending_id,
-        PendingBalance.gymId == current_gym.id
-    ).first()
-    
-    if not pending:
-        raise HTTPException(status_code=404, detail="Pending balance not found")
-    
-    db.delete(pending)
-    db.commit()
-    return None

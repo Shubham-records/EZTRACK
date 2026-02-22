@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Save } from 'lucide-react';
+import { X, Save, Plus, Trash2 } from 'lucide-react';
 import { useToast } from "@/context/ToastContext";
 
 export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
@@ -16,11 +16,28 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
         "MRP Price(1 pcs)": '',
         "Landing price(1 pcs)": '',
         "Total price": '',
-        Remark: ''
+        Remark: '',
+        lots: [
+            { lotNumber: '', quantity: '', purchasePrice: '', sellingPrice: '', expiryDate: '' }
+        ]
     });
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
+    };
+
+    const handleLotChange = (index, key, value) => {
+        const next = { ...formData };
+        next.lots = next.lots.map((l, i) => i === index ? { ...l, [key]: value } : l);
+        setFormData(next);
+    };
+
+    const addLot = () => {
+        setFormData(prev => ({ ...prev, lots: [...prev.lots, { lotNumber: '', quantity: '', purchasePrice: '', sellingPrice: '', expiryDate: '' }] }));
+    };
+
+    const removeLot = (index) => {
+        setFormData(prev => ({ ...prev, lots: prev.lots.filter((_, i) => i !== index) }));
     };
 
     const handleSubmit = async (e) => {
@@ -36,6 +53,28 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                 finalData["Total price"] = (parseFloat(finalData.Quantity) * parseFloat(finalData["Landing price(1 pcs)"])).toString();
             }
 
+            // Map frontend field names to backend expected keys
+            const payload = {
+                Year: finalData.Year,
+                Month: finalData.Month,
+                Brand: finalData.Brand,
+                ProductName: finalData["Product Name"],
+                Flavour: finalData.Flavour,
+                Weight: finalData.Weight,
+                Quantity: finalData.Quantity,
+                MRPPrice: finalData["MRP Price(1 pcs)"],
+                LandingPrice: finalData["Landing price(1 pcs)"],
+                TotalPrice: finalData["Total price"],
+                Remark: finalData.Remark,
+                lots: finalData.lots.map(l => ({
+                    lotNumber: l.lotNumber,
+                    quantity: l.quantity,
+                    purchasePrice: l.purchasePrice,
+                    sellingPrice: l.sellingPrice,
+                    expiryDate: l.expiryDate
+                }))
+            };
+
             const response = await fetch('/api/proteins', {
                 method: 'POST',
                 headers: {
@@ -43,7 +82,7 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                     'Authorization': `Bearer ${jwtToken}`,
                     'X-Database-Name': dbName
                 },
-                body: JSON.stringify(finalData)
+                body: JSON.stringify(payload)
             });
 
             if (!response.ok) throw new Error('Failed to add supplement');
@@ -63,7 +102,8 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                 "MRP Price(1 pcs)": '',
                 "Landing price(1 pcs)": '',
                 "Total price": '',
-                Remark: ''
+                Remark: '',
+                lots: [ { lotNumber: '', quantity: '', purchasePrice: '', sellingPrice: '', expiryDate: '' } ]
             });
         } catch (error) {
             showToast(error.message, 'error');
@@ -132,6 +172,46 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                     <div className="col-span-full space-y-1">
                         <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Remark</label>
                         <textarea name="Remark" value={formData.Remark} onChange={handleChange} rows={2} className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800" />
+                    </div>
+
+                    <div className="col-span-full">
+                        <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-sm font-semibold text-zinc-800 dark:text-white">Lots / Batches</h3>
+                            <button type="button" onClick={addLot} className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-md border border-green-100">
+                                <Plus size={14} /> Add Lot
+                            </button>
+                        </div>
+                        <div className="space-y-3">
+                            {formData.lots.map((lot, idx) => (
+                                <div key={idx} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
+                                    <div className="md:col-span-1">
+                                        <label className="text-xs text-zinc-500">Lot No.</label>
+                                        <input value={lot.lotNumber} onChange={(e) => handleLotChange(idx, 'lotNumber', e.target.value)} className="w-full px-2 py-1 rounded border border-zinc-200 bg-zinc-50" />
+                                    </div>
+                                    <div className="md:col-span-1">
+                                        <label className="text-xs text-zinc-500">Qty</label>
+                                        <input type="number" value={lot.quantity} onChange={(e) => handleLotChange(idx, 'quantity', e.target.value)} className="w-full px-2 py-1 rounded border border-zinc-200 bg-zinc-50" />
+                                    </div>
+                                    <div className="md:col-span-1">
+                                        <label className="text-xs text-zinc-500">Purchase</label>
+                                        <input type="number" value={lot.purchasePrice} onChange={(e) => handleLotChange(idx, 'purchasePrice', e.target.value)} className="w-full px-2 py-1 rounded border border-zinc-200 bg-zinc-50" />
+                                    </div>
+                                    <div className="md:col-span-1">
+                                        <label className="text-xs text-zinc-500">Selling</label>
+                                        <input type="number" value={lot.sellingPrice} onChange={(e) => handleLotChange(idx, 'sellingPrice', e.target.value)} className="w-full px-2 py-1 rounded border border-zinc-200 bg-zinc-50" />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                        <label className="text-xs text-zinc-500">Expiry</label>
+                                        <div className="flex gap-2">
+                                            <input type="date" value={lot.expiryDate} onChange={(e) => handleLotChange(idx, 'expiryDate', e.target.value)} className="w-full px-2 py-1 rounded border border-zinc-200 bg-zinc-50" />
+                                            <button type="button" onClick={() => removeLot(idx)} className="inline-flex items-center gap-2 px-2 py-1 rounded border border-zinc-200 bg-red-50 text-red-700">
+                                                <Trash2 size={14} /> Remove
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                     </div>
 
                     <div className="col-span-full mt-6 sticky bottom-0 bg-white dark:bg-zinc-900 pt-4 border-t border-zinc-200 dark:border-zinc-800 flex justify-end gap-3">

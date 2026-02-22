@@ -15,6 +15,55 @@ def map_invoice_response(invoice: Invoice):
     i_dict = invoice.__dict__.copy()
     i_dict['_id'] = invoice.id
     i_dict.pop('_sa_instance_state', None)
+    
+    invoice_type = "Other"
+    
+    if invoice.editReason and invoice.editReason.lower() == "protein":
+        invoice_type = "Protein"
+    elif invoice.items and len(invoice.items) > 0:
+        desc = invoice.items[0].get("description", "").lower()
+        if "re-admission" in desc:
+            invoice_type = "Re-Admission"
+        elif "admission" in desc:
+            invoice_type = "Admission"
+        elif "renewal" in desc:
+            invoice_type = "Renewal"
+        else:
+            invoice_type = "Other"
+    else:
+        invoice_type = "Other"
+            
+    # Handle backward compatibility since protein was sometimes not explicitly marked in editReason
+    if invoice_type == "Other" and invoice.items:
+        # Check if first item looks like a protein product "Brand - Name" where not admission etc
+        desc = invoice.items[0].get("description", "")
+        if " - " in desc and not any(k in desc.lower() for k in ["admission", "renewal"]):
+             # We might not be 100% sure but could be protein if it matches format
+             pass
+    
+    i_dict["invoiceType"] = invoice.editReason if (invoice.editReason in ['Admission', 'Renewal', 'Re-Admission', 'Protein']) else invoice_type
+    
+    paid_amount = getattr(invoice, "paidAmount", 0) or 0
+    balance = (invoice.total or 0) - paid_amount
+    
+    if invoice.status == "PAID":
+        paid_amount = invoice.total
+        balance = 0
+    elif invoice.status == "PARTIAL":
+        # Extract from editReason if available for backward compatibility
+        if paid_amount == 0 and invoice.editReason and "Paid: ₹" in invoice.editReason:
+            import re
+            match = re.search(r"Paid: ₹(\d+(\.\d+)?)", invoice.editReason)
+            if match:
+                paid_amount = float(match.group(1))
+        balance = (invoice.total or 0) - paid_amount
+    else:
+        paid_amount = 0
+        balance = invoice.total or 0
+        
+    i_dict["paidAmount"] = paid_amount
+    i_dict["balance"] = balance
+    
     return i_dict
 
 
@@ -36,6 +85,12 @@ def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_g
     discount = data.discount or 0
     total = sub_total + tax - discount
     
+    paid = data.paidAmount if data.paidAmount is not None else total
+    if data.status == "PENDING":
+        paid = 0
+    elif data.status == "PAID":
+        paid = total
+    
     new_invoice = Invoice(
         gymId=current_gym.id,
         memberId=data.memberId,
@@ -49,8 +104,9 @@ def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_g
         paymentMode=data.paymentMode,
         invoiceDate=data.invoiceDate or datetime.now(),
         dueDate=data.dueDate,
+        paidAmount=paid,
         lastEditedBy=current_gym.username, # simplified
-        editReason='New Invoice'
+        editReason=data.invoiceType if hasattr(data, 'invoiceType') and data.invoiceType else 'New Invoice'
     )
     
     db.add(new_invoice)
@@ -99,6 +155,7 @@ def bulk_create_invoices(data: dict, current_gym: Gym = Depends(get_current_gym)
                 paymentMode=(invoice_data.get("PaymentMode") or invoice_data.get("paymentMode") or "CASH").upper(),
                 invoiceDate=date_str or datetime.now(),
                 dueDate=invoice_data.get("DueDate") or invoice_data.get("dueDate"),
+                paidAmount=total_amount if (invoice_data.get("Status") or invoice_data.get("status") or "PAID").upper() == "PAID" else 0,
                 lastEditedBy=current_gym.username,
                 editReason='Bulk Import'
             )
@@ -173,3 +230,62 @@ def delete_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym),
     db.delete(invoice)
     db.commit()
     return None
+
+
+from models.all_models import PendingBalance
+
+@router.post("/{invoice_id}/pay")
+def pay_invoice(invoice_id: str, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.gymId == current_gym.id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+        
+    amount = float(data.get("amount", 0))
+    mode = data.get("paymentMode", "CASH")
+    
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Invalid amount")
+        
+    from datetime import datetime
+    
+    # Store in JSON logs
+    logs = invoice.paymentLogs or []
+    new_log = {
+        "date": datetime.now().isoformat(),
+        "amount": amount,
+        "paymentMode": mode,
+        "note": data.get("notes", "")
+    }
+    
+    logs_copy = list(logs)
+    logs_copy.append(new_log)
+    
+    from sqlalchemy.orm.attributes import flag_modified
+    invoice.paymentLogs = logs_copy
+    flag_modified(invoice, "paymentLogs")
+    
+    # Recalculate invoice status
+    mapped = map_invoice_response(invoice)
+    current_paid = mapped.get("paidAmount", 0)
+    new_paid = current_paid + amount
+    
+    if new_paid >= invoice.total:
+        invoice.status = "PAID"
+        new_balance = 0
+    else:
+        invoice.status = "PARTIAL"
+        new_balance = invoice.total - new_paid
+        
+    invoice.paidAmount = new_paid
+        
+    base_reason = invoice.editReason or "Invoice"
+    if " | Paid:" in base_reason:
+        base_reason = base_reason.split(" | Paid:")[0]
+        
+    if invoice.status == "PAID":
+        invoice.editReason = base_reason
+    else:
+        invoice.editReason = f"{base_reason} | Paid: ₹{new_paid:.0f} | Balance: ₹{new_balance:.0f}"
+        
+    db.commit()
+    return map_invoice_response(invoice)

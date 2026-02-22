@@ -29,8 +29,11 @@ def run_startup_migrations():
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "branchId" VARCHAR(255)',
         # Invoice table columns
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "branchId" VARCHAR(255)',
+        'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "paymentLogs" JSON',
+        'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "paidAmount" FLOAT DEFAULT 0',
         # PendingBalance table columns
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "entityType" VARCHAR(50)',
+        'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "invoiceId" VARCHAR(255)',
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "entityName" VARCHAR(255)',
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "phone" VARCHAR(50)',
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "paidAmount" FLOAT DEFAULT 0',

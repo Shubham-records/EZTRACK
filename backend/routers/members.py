@@ -268,6 +268,19 @@ def bulk_delete_members(data: dict, current_gym: Gym = Depends(get_current_gym),
     # Check if all members belong to current gym
     # We can delete in one query for efficiency
     try:
+        from models.all_models import Invoice, PendingBalance
+        
+        # Unlink invoices and pending balances first to avoid foreign key violations
+        db.query(Invoice).filter(
+            Invoice.memberId.in_(ids),
+            Invoice.gymId == current_gym.id
+        ).update({Invoice.memberId: None}, synchronize_session=False)
+
+        db.query(PendingBalance).filter(
+            PendingBalance.memberId.in_(ids),
+            PendingBalance.gymId == current_gym.id
+        ).update({PendingBalance.memberId: None}, synchronize_session=False)
+
         stmt = Member.__table__.delete().where(
             Member.id.in_(ids),
             Member.gymId == current_gym.id
@@ -429,26 +442,11 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
             paymentMode=data.paymentMode, 
             tax=0.0,
             discount=0.0,
+            paidAmount=paid_amount,
             lastEditedBy=current_gym.username,
-            editReason="Re-Admission Invoice"
+            editReason=f"Re-Admission Invoice | Paid: ₹{paid_amount:.0f} | Balance: ₹{balance:.0f}" if payment_status != 'PAID' else "Re-Admission Invoice"
         )
         db.add(new_invoice)
-
-        # Create Pending Balance if needed
-        if balance > 0:
-            pending_entry = PendingBalance(
-                gymId=current_gym.id,
-                entityType="member",
-                entityName=member.Name,
-                phone=str(member.Mobile) if member.Mobile else None,
-                memberId=member.id,
-                amount=total_amount,
-                paidAmount=paid_amount,
-                dueDate=data.NextDuedate, 
-                status="partial" if paid_amount > 0 else "pending",
-                notes=f"Balance from Re-Admission. Invoice amount: {total_amount}, Paid: {paid_amount}"
-            )
-            db.add(pending_entry)
         db.commit()
 
     db.refresh(member)
@@ -544,25 +542,13 @@ def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
             paymentMode=data.paymentMode,
             tax=0.0,
             discount=0.0,
+            paidAmount=paid_amount,
             lastEditedBy=current_gym.username,
             editReason="Renewal Invoice"
         )
+        if payment_status != 'PAID':
+            new_invoice.editReason = f"Renewal Invoice | Paid: ₹{paid_amount:.0f} | Balance: ₹{balance:.0f}"
         db.add(new_invoice)
-        
-        if balance > 0:
-            pending_entry = PendingBalance(
-                gymId=current_gym.id,
-                entityType="member",
-                entityName=member.Name,
-                phone=str(member.Mobile) if member.Mobile else None,
-                memberId=member.id,
-                amount=total_amount,
-                paidAmount=paid_amount,
-                dueDate=data.NextDuedate,
-                status="partial" if paid_amount > 0 else "pending",
-                notes=f"Balance from Renewal. Invoice amount: {total_amount}, Paid: {paid_amount}"
-            )
-            db.add(pending_entry)
         db.commit()
     
     db.refresh(member)
@@ -688,25 +674,11 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
             paymentMode=data.paymentMode, 
             tax=0.0,
             discount=0.0,
-            lastEditedBy=current_gym.username
+            paidAmount=paid_amount,
+            lastEditedBy=current_gym.username,
+            editReason=f"New Admission | Paid: ₹{paid_amount:.0f} | Balance: ₹{balance:.0f}" if payment_status != 'PAID' else "New Admission"
         )
         db.add(new_invoice)
-
-        # Create Pending Balance if needed
-        if balance > 0:
-            pending_entry = PendingBalance(
-                gymId=current_gym.id,
-                entityType="member",
-                entityName=new_member.Name,
-                phone=str(new_member.Mobile) if new_member.Mobile else None,
-                memberId=new_member.id,
-                amount=total_amount,
-                paidAmount=paid_amount,
-                dueDate=data.NextDuedate, # Use NextDueDate as likely payment due date for balance
-                status="partial" if paid_amount > 0 else "pending",
-                notes=f"Balance from New Admission. Invoice amount: {total_amount}, Paid: {paid_amount}"
-            )
-            db.add(pending_entry)
     
     db.commit()
     db.refresh(new_member)
@@ -809,3 +781,21 @@ def get_member_by_client_number(client_number: int, current_gym: Gym = Depends(g
     admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
         
     return map_member_response(member, admission_expiry_days)
+
+
+@router.get("/{member_id}", response_model=MemberResponse)
+def get_member_by_id(member_id: str, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    """Get a single member by their UUID (used by invoice detail view)"""
+    member = db.query(Member).filter(
+        Member.id == member_id,
+        Member.gymId == current_gym.id
+    ).first()
+
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
+
+    return map_member_response(member, admission_expiry_days)
+

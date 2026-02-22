@@ -27,6 +27,7 @@ class InvoiceCreate(BaseModel):
     # We will accept structure similar to Next.js
     memberId: Optional[str] = None
     customerName: Optional[str] = None
+    invoiceType: Optional[str] = None
     items: List[InvoiceItem] = []
     tax: Optional[float] = 0
     discount: Optional[float] = 0
@@ -34,6 +35,7 @@ class InvoiceCreate(BaseModel):
     paymentMode: Optional[str] = "CASH"
     invoiceDate: Optional[datetime] = None
     dueDate: Optional[datetime] = None
+    paidAmount: Optional[float] = None
 
 class InvoiceResponse(InvoiceBase):
     id: str

@@ -329,7 +329,7 @@ export function NewAdmission() {
       const response = await fetch('/api/members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({ ...formData, Billtype: 'Admission', LastPaymentDate: formData.DateOfJoining })
       });
 
       const responseData = await response.json();
@@ -773,7 +773,7 @@ export function ReAdmission() {
       const response = await fetch('/api/members/re-admission', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({ ...formData, Billtype: 'Re-Admission', LastPaymentDate: formData.DateOfReJoin })
       });
 
       const responseData = await response.json();
@@ -801,6 +801,26 @@ export function ReAdmission() {
           <div className="col-span-1 md:col-span-2">
             <label className={labelStyle}>Search Client</label>
             <input type="text" value={clientNumber} onChange={(e) => setClientNumber(e.target.value)} onBlur={fetchClientData} placeholder="Enter Client ID to search" className={inputStyle} />
+          </div>
+
+          {/* Age / Height / Weight / Receipt — pre-filled from member data, editable */}
+          <div className="col-span-1 md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <label className={labelStyle}>Age</label>
+              <input type="number" name="Age" value={formData.Age || ''} onChange={handleInputChange} placeholder="Years" className={inputStyle} />
+            </div>
+            <div>
+              <label className={labelStyle}>Height (ft)</label>
+              <input type="number" name="height" value={formData.height || ''} onChange={handleInputChange} placeholder="e.g. 5.7" step="0.1" className={inputStyle} />
+            </div>
+            <div>
+              <label className={labelStyle}>Weight (kg)</label>
+              <input type="number" name="weight" value={formData.weight || ''} onChange={handleInputChange} placeholder="e.g. 65" className={inputStyle} />
+            </div>
+            <div>
+              <label className={labelStyle}>Receipt No.</label>
+              <input type="number" name="RenewalReceiptNumber" value={formData.RenewalReceiptNumber || ''} onChange={handleInputChange} placeholder="Ref#" className={inputStyle} />
+            </div>
           </div>
 
           <div>
@@ -1128,14 +1148,28 @@ export function Renewal() {
       const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
       if (!jwtToken || !dbName) throw new Error('No token found.');
 
+      if (!formData.MembershipReceiptnumber) throw new Error('Please search for a client first.');
+      if (!formData.DateOfRenewal) throw new Error('Renewal Date is required.');
+      if (!formData.PlanType) throw new Error('Plan is required.');
+      if (!formData.PlanPeriod) throw new Error('Duration is required.');
+
+      // Map DateOfRenewal → LastPaymentDate so backend sets it correctly
+      const payload = {
+        ...formData,
+        Billtype: 'Renewal',
+        LastPaymentDate: formData.DateOfRenewal,
+        DateOfReJoin: formData.DateOfRenewal,
+        RenewalReceiptNumber: formData.RenewalReceiptNumber
+      };
+
       const response = await fetch('/api/members/renewal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(payload)
       });
 
       const responseData = await response.json();
-      if (!response.ok) throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
+      if (!response.ok) throw new Error(responseData.detail || responseData.error || `HTTP error! status: ${response.status}`);
 
       showToast('Renewal successful!', 'success');
       router.push("/webapp");
@@ -1210,6 +1244,10 @@ export function Renewal() {
             <div>
               <label className={labelStyle}>Extra Days</label>
               <input type="number" name="extraDays" value={formData.extraDays || ''} onChange={handleInputChange} className={inputStyle} />
+            </div>
+            <div>
+              <label className={labelStyle}>Receipt No.</label>
+              <input type="number" name="RenewalReceiptNumber" value={formData.RenewalReceiptNumber || ''} onChange={handleInputChange} placeholder="Renewal Ref#" className={inputStyle} />
             </div>
           </div>
 

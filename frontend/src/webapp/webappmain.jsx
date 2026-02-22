@@ -20,6 +20,7 @@ import SearchResultsPage from './SearchResults';
 
 export default function WebappMain() {
   const [selectedPage, setSelectedPage] = useState("Dashboard");
+  const [highlightId, setHighlightId] = useState('');
   const [gymmemberdata, Setgymmemberdata] = useState([]);
   const [proteinsdata, Setproteinsdata] = useState([]);
 
@@ -45,6 +46,7 @@ export default function WebappMain() {
   function handlenavbarClick(page) {
     setSelectedPage(page);
     setPageSearchFilter(''); // Clear filter on nav change
+    setHighlightId('');       // Clear any blink highlight on manual nav
   }
 
   const getAuthHeaders = () => {
@@ -257,8 +259,8 @@ export default function WebappMain() {
     'MembershipReceiptnumber',
     'Gender',
     'Age',
-    'height(ft)',
-    'weight(kg)',
+    'height',
+    'weight',
     'DateOfJoining',
     'DateOfReJoin',
     'Billtype',
@@ -381,10 +383,18 @@ export default function WebappMain() {
 
           {selectedPage === "Billing" && <Billing />}
           {selectedPage === "Bmi" && <BmiCalculator />}
-          {selectedPage === "Invoices" && <Invoices initialFilter={pageSearchFilter} />}
+          {selectedPage === "Invoices" && <Invoices
+            initialFilter={pageSearchFilter}
+            onNavigate={(page, filterVal, memberId) => {
+              setPageSearchFilter(filterVal);
+              setHighlightId(memberId || '');  // UUID for exact row blink
+              setSelectedPage(page);
+            }}
+          />}
           {selectedPage === "Expenses" && <Expenses initialFilter={pageSearchFilter} />}
-          {selectedPage === "AllMember" && <TableComponent initialFilter={pageSearchFilter} gymmemberdata={gymmemberdata} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
-          {selectedPage === "Protein" && <TableComponent initialFilter={pageSearchFilter} gymmemberdata={proteinsdata} allColumns={proteins} dataType="protein" onUpdateData={handleproteinsData} />}
+          {selectedPage === "AllMember" && <TableComponent initialFilter={pageSearchFilter} highlightId={highlightId} gymmemberdata={gymmemberdata} allColumns={memberscol} onUpdateData={handleUpdateData} dataType="member" onNavigate={handlenavbarClick} />}
+
+          {selectedPage === "Protein" && <TableComponent initialFilter={pageSearchFilter} highlightId={highlightId} gymmemberdata={proteinsdata} allColumns={proteins} dataType="protein" onUpdateData={handleproteinsData} />}
           {selectedPage === "AllStaff" && <StaffComponent />}
           {selectedPage === "AddStaff" && <StaffComponent />}
           {selectedPage === "Settings" && <AdminSettings />}

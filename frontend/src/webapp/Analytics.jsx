@@ -463,6 +463,68 @@ export default function Analytics() {
         }
     };
 
+    const proteinLeaderboard = React.useMemo(() => {
+        if (activeTab !== 'protein') return [];
+        const filterByDate = (date) => {
+            if (!date) return false;
+            const d = new Date(date);
+            const { dateRange, month, year } = filters;
+            const now = new Date();
+
+            if (dateRange === 'all') {
+                if (month !== '' && d.getMonth() !== parseInt(month)) return false;
+                if (year && d.getFullYear() !== year) return false;
+                return true;
+            }
+            if (dateRange === 'thisMonth') {
+                return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+            }
+            if (dateRange === 'previousMonth') {
+                const prevMonthDate = new Date();
+                prevMonthDate.setMonth(now.getMonth() - 1);
+                return d.getMonth() === prevMonthDate.getMonth() && d.getFullYear() === prevMonthDate.getFullYear();
+            }
+            if (dateRange === 'thisQuarter') {
+                const currentQuarter = Math.floor(now.getMonth() / 3);
+                const dateQuarter = Math.floor(d.getMonth() / 3);
+                return currentQuarter === dateQuarter && d.getFullYear() === now.getFullYear();
+            }
+            if (dateRange === 'halfYearly') {
+                const isFirstHalfNow = now.getMonth() < 6;
+                const isFirstHalfDate = d.getMonth() < 6;
+                return isFirstHalfNow === isFirstHalfDate && d.getFullYear() === now.getFullYear();
+            }
+            if (dateRange === 'thisYear') {
+                return d.getFullYear() === now.getFullYear();
+            }
+            return true;
+        };
+
+        const proteinSales = {};
+        rawData.invoices.forEach(inv => {
+            const type = (inv.invoiceType || '').toLowerCase();
+            // Invoices specifically marked as protein
+            if (type === 'protein') {
+                const invDate = inv.invoiceDate || inv.date || inv.createdAt;
+                if (filterByDate(invDate)) {
+                    (inv.items || []).forEach(item => {
+                        const name = item.description || 'Unknown Product';
+                        // Apply brand filter if active
+                        if (filters.brand !== 'all') {
+                            const isBrandMatch = name.toLowerCase().includes(filters.brand.toLowerCase());
+                            if (!isBrandMatch) return;
+                        }
+                        if (!proteinSales[name]) proteinSales[name] = { name, quantity: 0, revenue: 0 };
+                        proteinSales[name].quantity += parseInt(item.quantity || 1);
+                        proteinSales[name].revenue += parseFloat(item.amount || (item.price * item.quantity) || item.rate * item.quantity || 0);
+                    });
+                }
+            }
+        });
+
+        return Object.values(proteinSales).sort((a, b) => b.quantity - a.quantity).slice(0, 10);
+    }, [rawData.invoices, filters, activeTab]);
+
     const StatCard = ({ title, value, subtitle, trend, trendUp, icon: Icon, color }) => (
         <div className={cardStyle}>
             <div className="flex items-start justify-between">
@@ -512,7 +574,9 @@ export default function Analytics() {
             >
                 <option value="all">All Time</option>
                 <option value="thisMonth">This Month</option>
+                <option value="previousMonth">Previous Month</option>
                 <option value="thisQuarter">This Quarter</option>
+                <option value="halfYearly">Half Yearly</option>
                 <option value="thisYear">This Year</option>
             </select>
 
@@ -660,41 +724,6 @@ export default function Analytics() {
                         <StatCard title="Inactive/Expired" value={data.members.inactive + data.members.expired} icon={Users} color="text-rose-500" />
                     </div>
 
-                    {/* Expiring Soon Alert */}
-                    {(data.members.expiringIn7Days?.length > 0 || data.members.expiringIn30Days?.length > 0) && (
-                        <div className={`${cardStyle} !bg-amber-50 dark:!bg-amber-900/20 !border-amber-200 dark:!border-amber-800`}>
-                            <div className="flex items-center gap-2 mb-3">
-                                <AlertTriangle size={18} className="text-amber-500" />
-                                <h3 className="font-bold text-amber-700 dark:text-amber-400">Upcoming Renewals</h3>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <p className="text-sm font-medium text-amber-600 dark:text-amber-500 mb-2">Next 7 Days ({data.members.expiringIn7Days?.length || 0})</p>
-                                    <div className="space-y-1 max-h-32 overflow-y-auto">
-                                        {data.members.expiringIn7Days?.slice(0, 5).map((m, i) => (
-                                            <div key={i} className="flex justify-between text-sm">
-                                                <span className="text-zinc-700 dark:text-zinc-300">{m.Name}</span>
-                                                <span className="text-amber-600 font-medium">{m.daysUntil}d</span>
-                                            </div>
-                                        ))}
-                                        {(data.members.expiringIn7Days?.length || 0) === 0 && <p className="text-sm text-zinc-500">None</p>}
-                                    </div>
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-amber-600 dark:text-amber-500 mb-2">8-30 Days ({data.members.expiringIn30Days?.length || 0})</p>
-                                    <div className="space-y-1 max-h-32 overflow-y-auto">
-                                        {data.members.expiringIn30Days?.slice(0, 5).map((m, i) => (
-                                            <div key={i} className="flex justify-between text-sm">
-                                                <span className="text-zinc-700 dark:text-zinc-300">{m.Name}</span>
-                                                <span className="text-zinc-500">{m.daysUntil}d</span>
-                                            </div>
-                                        ))}
-                                        {(data.members.expiringIn30Days?.length || 0) === 0 && <p className="text-sm text-zinc-500">None</p>}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div className={cardStyle}>
@@ -908,18 +937,69 @@ export default function Analytics() {
                         </div>
                     )}
 
-                    <div className={cardStyle}>
-                        <h3 className="font-bold text-zinc-900 dark:text-white mb-4">Products by Brand</h3>
-                        <div className="h-64">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={data.protein.brandData} layout="vertical">
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
-                                    <XAxis type="number" stroke="#71717a" />
-                                    <YAxis dataKey="name" type="category" stroke="#71717a" width={100} />
-                                    <Tooltip />
-                                    <Bar dataKey="value" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
-                                </BarChart>
-                            </ResponsiveContainer>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className={cardStyle}>
+                            <h3 className="font-bold text-zinc-900 dark:text-white mb-4">Products by Brand</h3>
+                            <div className="h-64">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={data.protein.brandData} layout="vertical">
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
+                                        <XAxis type="number" stroke="#71717a" />
+                                        <YAxis dataKey="name" type="category" stroke="#71717a" width={100} />
+                                        <Tooltip />
+                                        <Bar dataKey="value" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+
+                        <div className={`${cardStyle} flex flex-col`}>
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+                                    <Target size={18} className="text-primary" />
+                                    Top Selling Products
+                                </h3>
+                                <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/30 px-2 py-1 rounded">
+                                    Leaderboard
+                                </div>
+                            </div>
+                            {proteinLeaderboard.length > 0 ? (
+                                <div className="flex-1 overflow-x-auto">
+                                    <table className="w-full text-sm text-left">
+                                        <thead>
+                                            <tr className="text-zinc-500 border-b border-zinc-200 dark:border-zinc-700">
+                                                <th className="pb-2 font-medium">Rank</th>
+                                                <th className="pb-2 font-medium">Product Name</th>
+                                                <th className="pb-2 font-medium text-right">Sold Qty</th>
+                                                <th className="pb-2 font-medium text-right">Revenue</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                                            {proteinLeaderboard.map((item, i) => (
+                                                <tr key={i} className="group hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                                                    <td className="py-2.5 font-bold">
+                                                        <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs
+                                                            ${i === 0 ? 'bg-amber-100 text-amber-700' :
+                                                                i === 1 ? 'bg-zinc-200 text-zinc-700' :
+                                                                    i === 2 ? 'bg-orange-100 text-orange-700' :
+                                                                        'bg-zinc-100 dark:bg-zinc-800 text-zinc-500'}`}>
+                                                            {i + 1}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-2.5 font-medium text-zinc-900 dark:text-white">{item.name}</td>
+                                                    <td className="py-2.5 text-right font-bold text-primary">{item.quantity}</td>
+                                                    <td className="py-2.5 text-right font-medium text-zinc-600 dark:text-zinc-400">₹{item.revenue.toLocaleString()}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            ) : (
+                                <div className="flex-1 flex flex-col justify-center items-center text-zinc-500 py-8">
+                                    <Package size={32} className="text-zinc-300 dark:text-zinc-600 mb-2" />
+                                    <p>No sales data for selected period</p>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
