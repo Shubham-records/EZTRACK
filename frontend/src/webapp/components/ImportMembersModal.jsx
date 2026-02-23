@@ -31,23 +31,26 @@ export default function ImportMembersModal({ isOpen, onClose, onImportSuccess, d
 
         if (dataType === 'member') {
             headers = [
-                "Name", "MembershipReceiptnumber", "Gender", "Age", "AccessStatus", "height", "weight",
-                "DateOfJoining", "DateOfReJoin", "Billtype", "Address", "Whatsapp", "PlanPeriod",
-                "PlanType", "MembershipStatus", "MembershipExpiryDate", "LastPaymentDate", "NextDuedate",
-                "LastPaymentAmount", "RenewalReceiptNumber", "Aadhaar", "Remark", "Mobile", "extraDays", "agreeTerms"
+                "Name", "MembershipReceiptnumber", "Gender", "Age", "height", "weight",
+                "DateOfJoining", "DateOfReJoin", "Billtype", "Address", "Mobile", "Whatsapp",
+                "PlanPeriod", "PlanType", "MembershipExpiryDate", "LastPaymentDate", "NextDuedate",
+                "LastPaymentAmount", "RenewalReceiptNumber", "Aadhaar", "Remark", "extraDays"
             ];
-            // Empty sample row as requested, or minimal example
-            sampleRow = ["John Doe", "1001", "Male", "25", "yes", "175", "70",
-                "2024-01-01", "", "Cash", "123 Main St", "9876543210", "Monthly",
-                "Strength", "Active", "2024-02-01", "2024-01-01", "2024-02-01",
-                "1500", "", "123456789012", "New member", "9876543210", "0", "true"];
+            sampleRow = [
+                "John Doe", "1001", "Male", "25", "5.8", "70",
+                "2024-01-01", "", "Admission", "123 Main St", "9876543210", "9876543210",
+                "Monthly", "Strength", "2024-02-01", "2024-01-01", "2024-02-01",
+                "1500", "", "123456789012", "New member", "0"
+            ];
         } else if (dataType === 'protein') {
             headers = [
                 "Year", "Month", "Brand", "ProductName", "Flavour", "Weight",
-                "Quantity", "MRPPrice", "LandingPrice", "TotalPrice", "Remark"
+                "Quantity", "MRPPrice", "LandingPrice", "SellingPrice", "ExpiryDate", "Remark"
             ];
-            sampleRow = ["2024", "January", "Optimum Nutrition", "Gold Standard Whey", "Double Rich Chocolate", "2lbs",
-                "10", "3500", "3000", "30000", "Stock refill"];
+            sampleRow = [
+                "2024", "January", "Optimum Nutrition", "Gold Standard Whey", "Double Rich Chocolate", "2lbs",
+                "10", "3500", "3000", "3200", "2025-06-30", "Stock refill"
+            ];
         }
 
         const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow]);

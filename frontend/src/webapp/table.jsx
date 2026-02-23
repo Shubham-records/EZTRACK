@@ -546,34 +546,34 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
           {dataType !== "member" && (
             <thead className="bg-zinc-100 dark:bg-zinc-800 sticky top-[45px] z-9 font-semibold text-zinc-700 dark:text-zinc-300">
               <tr>
-                <th className="px-4 py-2"></th>
-                <th className="px-4 py-2"></th>
-                <th className="px-4 py-2"></th>
-                <th className="px-4 py-2"></th>
-                <th className="px-4 py-2"></th>
-                <th className="px-4 py-2"></th>
-                <th className="px-4 py-2">
-                  {table
-                    .getRowModel()
-                    .rows.reduce((sum, row) => sum + parseInt(row.original.Quantity || 0), 0)}
+                <th className="px-4 py-2 text-left"></th>{/* checkbox */}
+                <th className="px-4 py-2 text-left"></th>{/* Year */}
+                <th className="px-4 py-2 text-left"></th>{/* Month */}
+                <th className="px-4 py-2 text-left"></th>{/* Brand */}
+                <th className="px-4 py-2 text-left"></th>{/* ProductName */}
+                <th className="px-4 py-2 text-left"></th>{/* Flavour */}
+                <th className="px-4 py-2 text-left"></th>{/* Weight */}
+                <th className="px-4 py-2 text-left">
+                  {table.getRowModel().rows.reduce((sum, row) => sum + parseInt(row.original.Quantity || 0), 0)}
                 </th>
-                <th className="px-4 py-2">
-                  {table
-                    .getRowModel()
-                    .rows.reduce((sum, row) => sum + parseInt(row.original["MRP Price(1 pcs)"] || 0), 0)}
+                <th className="px-4 py-2 text-left">
+                  {table.getRowModel().rows.reduce((sum, row) => sum + parseFloat(row.original.MRPPrice || 0), 0).toFixed(0)}
                 </th>
-                <th className="px-4 py-2">
-                  {table
-                    .getRowModel()
-                    .rows.reduce((sum, row) => sum + parseInt(row.original["Landing price(1 pcs)"] || 0), 0)}
+                <th className="px-4 py-2 text-left">
+                  {table.getRowModel().rows.reduce((sum, row) => sum + parseFloat(row.original.LandingPrice || 0), 0).toFixed(0)}
                 </th>
-                <th className="px-4 py-2">
-                  {table
-                    .getRowModel()
-                    .rows.reduce((sum, row) => sum + parseInt(row.original["Total price"] || 0), 0)}
+                <th className="px-4 py-2 text-left">
+                  {table.getRowModel().rows.reduce((sum, row) => sum + parseFloat(row.original.SellingPrice || 0), 0).toFixed(0)}
                 </th>
-                <th className="px-4 py-2"></th>
-                <th className="px-4 py-2"></th>
+                <th className="px-4 py-2 text-left">
+                  {table.getRowModel().rows.reduce((sum, row) => sum + parseFloat(row.original.TotalPrice || 0), 0).toFixed(0)}
+                </th>
+                <th className="px-4 py-2 text-left">
+                  {table.getRowModel().rows.reduce((sum, row) => sum + parseFloat(row.original.ProfitAmount || 0), 0).toFixed(0)}
+                </th>
+                <th className="px-4 py-2 text-left"></th>{/* ExpiryDate */}
+                <th className="px-4 py-2 text-left"></th>{/* Remark */}
+                <th className="px-4 py-2 text-left"></th>{/* Actions */}
               </tr>
             </thead>
           )}

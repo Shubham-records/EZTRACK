@@ -217,7 +217,7 @@ export default function Expenses({ initialFilter = '' }) {
     }
 
     return (
-        <div className="max-w-6xl mx-auto space-y-6">
+        <div className=" mx-auto space-y-6">
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Expenses</h1>

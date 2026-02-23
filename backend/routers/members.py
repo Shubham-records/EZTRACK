@@ -84,6 +84,40 @@ def map_member_response(member: Member, admission_expiry_days: int = 365):
         m_dict['Whatsapp'] = str(m_dict['Whatsapp'])
     if m_dict.get('Aadhaar') is not None:
         m_dict['Aadhaar'] = str(m_dict['Aadhaar'])
+    
+    # Remove AccessStatus from response (deprecated field)
+    m_dict.pop('AccessStatus', None)
+    
+    # Dynamically compute MembershipStatus based on dates
+    today = datetime.now().date()
+    computed_membership_status = 'Inactive'  # default
+    
+    try:
+        # Check NextDuedate first
+        if member.NextDuedate:
+            try:
+                due_date = datetime.strptime(member.NextDuedate, "%d/%m/%Y").date()
+            except ValueError:
+                due_date = datetime.strptime(member.NextDuedate, "%Y-%m-%d").date()
+            
+            if today <= due_date:
+                computed_membership_status = 'Active'
+            else:
+                computed_membership_status = 'Inactive'
+        
+        # Check MembershipExpiryDate - if exceeded, mark as Expired
+        if member.MembershipExpiryDate:
+            try:
+                expiry_date = datetime.strptime(member.MembershipExpiryDate, "%d/%m/%Y").date()
+            except ValueError:
+                expiry_date = datetime.strptime(member.MembershipExpiryDate, "%Y-%m-%d").date()
+            
+            if today > expiry_date:
+                computed_membership_status = 'Expired'
+    except (ValueError, TypeError):
+        pass  # Keep default if date parsing fails
+    
+    m_dict['MembershipStatus'] = computed_membership_status
         
     # Calculate Dynamic Status
     status_info = calculate_member_status(member, admission_expiry_days)
@@ -224,7 +258,7 @@ def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym),
                 MembershipReceiptnumber=member_data.get("MembershipReceiptnumber"),
                 Gender=member_data.get("Gender"),
                 Age=int(member_data.get("Age")) if member_data.get("Age") else None,
-                AccessStatus=member_data.get("AccessStatus", "no"),
+                AccessStatus=member_data.get("AccessStatus", "no"),  # legacy field, kept for DB compat
                 height=float(member_data.get("height")) if member_data.get("height") else None,
                 weight=int(member_data.get("weight")) if member_data.get("weight") else None,
                 DateOfJoining=member_data.get("DateOfJoining"),
@@ -234,7 +268,7 @@ def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym),
                 Whatsapp=int(member_data.get("Whatsapp")) if member_data.get("Whatsapp") else None,
                 PlanPeriod=member_data.get("PlanPeriod"),
                 PlanType=member_data.get("PlanType"),
-                MembershipStatus=member_data.get("MembershipStatus", "Active"),
+                MembershipStatus=member_data.get("MembershipStatus", ""),
                 MembershipExpiryDate=member_data.get("MembershipExpiryDate"),
                 LastPaymentDate=member_data.get("LastPaymentDate"),
                 NextDuedate=member_data.get("NextDuedate"),
@@ -348,7 +382,7 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     member.Name = data.Name
     member.Gender = data.Gender
     member.Age = data.Age
-    member.AccessStatus = data.AccessStatus
+    # member.AccessStatus = data.AccessStatus  # Removed: deprecated field
     member.height = data.height
     member.weight = data.weight
     member.DateOfReJoin = data.DateOfReJoin
@@ -357,7 +391,7 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     member.Whatsapp = data.Whatsapp
     member.PlanPeriod = data.PlanPeriod
     member.PlanType = data.PlanType
-    member.MembershipStatus = "Active"
+    # MembershipStatus is computed dynamically from dates — no need to set it here
     member.MembershipExpiryDate = data.MembershipExpiryDate
     member.LastPaymentDate = data.LastPaymentDate # Usually DateOfReJoin
     member.NextDuedate = data.NextDuedate
@@ -474,7 +508,7 @@ def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     # Update member plan details
     member.PlanPeriod = data.PlanPeriod
     member.PlanType = data.PlanType
-    member.MembershipStatus = "Active"
+    # MembershipStatus is computed dynamically from dates — no need to set it here
     member.MembershipExpiryDate = data.MembershipExpiryDate
     member.LastPaymentDate = data.LastPaymentDate or data.DateOfReJoin
     member.NextDuedate = data.NextDuedate
@@ -579,7 +613,7 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
         MembershipReceiptnumber=data.MembershipReceiptnumber,
         Gender=data.Gender,
         Age=data.Age,
-        AccessStatus=data.AccessStatus,
+        # AccessStatus is deprecated, no longer set from data
         height=data.height,
         weight=data.weight,
         DateOfJoining=data.DateOfJoining,

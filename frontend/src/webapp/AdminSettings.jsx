@@ -40,7 +40,6 @@ export default function AdminSettings() {
         invoiceTermsText: '',
         // Stock
         lowStockThreshold: 5,
-        reorderPoint: 10,
         expiryWarningDays: 30,
         // Notifications
         enableWhatsAppReminders: true,
@@ -291,7 +290,7 @@ export default function AdminSettings() {
     const showSaveButton = hasChanges();
 
     return (
-        <div className="max-w-6xl mx-auto space-y-6">
+        <div className=" mx-auto space-y-6">
             {/* Header */}
             <div className="flex justify-between items-center">
                 <div>
@@ -818,16 +817,11 @@ export default function AdminSettings() {
             {activeTab === 'stock' && (
                 <div className={cardStyle}>
                     <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">Stock Management Settings</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label className={labelStyle}>Low Stock Threshold</label>
                             <input type="number" name="lowStockThreshold" value={settings.lowStockThreshold} onChange={handleChange} className={inputStyle} />
                             <p className="text-xs text-zinc-500 mt-1">Alert when quantity falls below this</p>
-                        </div>
-                        <div>
-                            <label className={labelStyle}>Reorder Point</label>
-                            <input type="number" name="reorderPoint" value={settings.reorderPoint} onChange={handleChange} className={inputStyle} />
-                            <p className="text-xs text-zinc-500 mt-1">Suggest reorder at this level</p>
                         </div>
                         <div>
                             <label className={labelStyle}>Expiry Warning (Days)</label>

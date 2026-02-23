@@ -3,66 +3,40 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { Chart } from "react-google-charts";
-import { Calendar } from 'lucide-react';
-import ExpriesOverdue from './expriesOverdue';
+import { Calendar, Package, AlertTriangle } from 'lucide-react';
+import ActionRequired from './ActionRequired';
 
-const StatCard = ({ title, value, subtext, trend, trendValue, type = "primary", icon = "trending_up" }) => {
-  // Styles based on type
-  const typeStyles = {
-    primary: {
-      text: "text-emerald-600",
-      bg: "bg-emerald-100 dark:bg-emerald-900/30",
-      chartColor: "text-primary"
-    },
-    success: {
-      text: "text-emerald-600",
-      bg: "bg-emerald-100 dark:bg-emerald-900/30",
-      chartColor: "text-[#20b2aa]"
-    },
-    danger: {
-      text: "text-rose-500",
-      bg: "bg-rose-100 dark:bg-rose-900/30",
-      chartColor: "text-rose-500"
-    },
-    info: {
-      text: "text-zinc-500",
-      bg: "bg-zinc-100 dark:bg-zinc-800",
-      chartColor: "bg-teal-300" // For bar chart
-    }
-  };
+const StatItem = ({ title, value, subtext, trendValue, type = "primary", icon = "group", isLast }) => {
+  const isDanger = type === "danger";
+  let valueColor = "text-slate-600 dark:text-slate-300";
+  if (type === "success") valueColor = "text-emerald-500 dark:text-emerald-400";
+  if (type === "danger") valueColor = "text-rose-500 dark:text-rose-400";
+  if (type === "primary") valueColor = "text-slate-600 dark:text-slate-300";
 
-  const style = typeStyles[type] || typeStyles.primary;
+  const trendColor = isDanger ? "text-rose-500 dark:text-rose-400" : "text-emerald-500 dark:text-emerald-400";
+
+  // Decide if we should show a trend arrow
+  const hasArrow = /^[0-9]+%?$/.test(trendValue) || ['Up', 'Down', 'Profit', 'Loss'].includes(trendValue);
+  const trendIcon = isDanger ? "▼" : "▲";
 
   return (
-    <div className="col-span-12 sm:col-span-6 xl:col-span-3 bg-surface-light dark:bg-surface-dark p-6 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 hover:border-primary/50 dark:hover:border-primary/50 transition-colors">
-      <div className="flex justify-between items-start mb-4">
-        <div>
-          <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{title}</p>
-          <h3 className="text-2xl font-bold text-zinc-900 dark:text-white mt-1">{value}</h3>
-        </div>
+    <div className="flex flex-col py-5 px-6 min-w-[200px] flex-1 bg-surface-light dark:bg-surface-dark">
+      <div className="flex items-center text-zinc-400 dark:text-zinc-500 mb-2">
+        <span className="material-symbols-outlined text-[16px] mr-2">{icon}</span>
+        <span className="text-xs font-bold uppercase tracking-wider">{title}</span>
+      </div>
+      <h3 className={`text-4xl font-extrabold ${valueColor} mb-2 tracking-tight`}>{value}</h3>
+      <div className="flex items-center text-xs font-medium text-zinc-400 whitespace-nowrap mt-1">
         {trendValue && (
-          <span className={`flex items-center text-xs font-bold ${style.text} ${style.bg} px-2 py-1 rounded`}>
-            <span className="material-symbols-outlined text-[14px] mr-1">{icon}</span>
+          <span className={`${trendColor} mr-2 flex items-center font-bold`}>
+            {hasArrow && <span className="mr-1">{trendIcon}</span>}
             {trendValue}
           </span>
         )}
-      </div>
-
-      {/* Visual / Chart Area */}
-      <div className="h-10 w-full">
-        {type === 'info' ? (
-          <div className="h-10 w-full flex items-end space-x-1">
-            <div className="w-1/6 bg-teal-100 dark:bg-teal-900/30 h-1/2 rounded-t-sm"></div>
-            <div className="w-1/6 bg-teal-200 dark:bg-teal-800/30 h-2/3 rounded-t-sm"></div>
-            <div className="w-1/6 bg-teal-300 dark:bg-teal-700/30 h-3/4 rounded-t-sm"></div>
-            <div className="w-1/6 bg-primary h-full rounded-t-sm"></div>
-            <div className="w-1/6 bg-teal-300 dark:bg-teal-700/30 h-4/5 rounded-t-sm"></div>
-            <div className="w-1/6 bg-teal-100 dark:bg-teal-900/30 h-1/2 rounded-t-sm"></div>
-          </div>
-        ) : (
-          <svg className={`w-full h-full ${style.chartColor}`} preserveAspectRatio="none" viewBox="0 0 100 20">
-            <path d={type === 'danger' ? "M0 5 Q 25 5, 50 5 T 75 8 T 100 12" : "M0 15 Q 10 18, 20 12 T 40 10 T 60 14 T 80 5 T 100 8"} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke"></path>
-          </svg>
+        {subtext && (
+          <span className="text-zinc-400 text-[10px] uppercase tracking-wide">
+            {subtext}
+          </span>
         )}
       </div>
     </div>
@@ -138,7 +112,10 @@ export default function Dashboard() {
       if (months[key]) months[key].expenses += (exp.amount || 0);
     });
 
-    const revenueGrowth = Object.values(months);
+    const revenueGrowth = Object.values(months).map(m => ({
+      ...m,
+      profit: m.revenue - m.expenses
+    }));
 
     // Filter by Date Range for Detail Charts
     const start = new Date(dateRange.start);
@@ -214,76 +191,51 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      {/* Stats Grid - Row 1 */}
+    <div className=" mx-auto space-y-6">
+      {/* Top Section: Stats (Left 8 cols) & Income vs Expense (Right 4 cols) */}
       <div className="grid grid-cols-12 gap-6">
-        <StatCard title="Active Members" value={stats.activeMembers} trendValue="Members" type="primary" icon="group" />
-        <StatCard title="Week Collection" value={`₹${stats.weekCollection.toLocaleString()}`} trendValue="Revenue" type="success" />
-        <StatCard title="Today Expiry" value={stats.todayExpiry} trendValue={stats.todayExpiry > 0 ? "Action Needed" : "None"} type={stats.todayExpiry > 0 ? "danger" : "primary"} icon="warning" />
-        <StatCard title="Low Stock Items" value={stats.lowStockItems} trendValue={stats.lowStockItems > 0 ? "Restock" : "OK"} type={stats.lowStockItems > 0 ? "danger" : "success"} icon="inventory" />
-
-        {/* Second Row */}
-        <StatCard title="Today Collection" value={`₹${stats.todayCollection.toLocaleString()}`} trendValue="Daily" type="success" />
-        <StatCard title="Month Collection" value={`₹${stats.monthCollection.toLocaleString()}`} trendValue="Monthly" type="primary" />
-        <StatCard title="Pending Balance" value={`₹${stats.pendingBalance.toLocaleString()}`} trendValue={stats.pendingBalance > 0 ? "Overdue" : "Clear"} type={stats.pendingBalance > 0 ? "danger" : "success"} icon="trending_down" />
-        <StatCard title="Month Profit" value={`₹${stats.netProfit.toLocaleString()}`} trendValue={stats.netProfit >= 0 ? "Profit" : "Loss"} type={stats.netProfit >= 0 ? "success" : "danger"} />
-      </div>
-
-      <div className="grid grid-cols-12 gap-6">
-        {/* Revenue & Growth Chart */}
-        <div className="col-span-12 lg:col-span-8 bg-surface-light dark:bg-surface-dark p-6 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 flex flex-col h-[400px]">
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Revenue & Growth</h3>
-              <p className="text-sm text-zinc-500">Income vs Expenses (Last 6 Months)</p>
-            </div>
-          </div>
-          <div className="flex-1 w-full min-h-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData.revenueGrowth} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="name" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `₹${value}`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
-                />
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                <Area type="monotone" dataKey="revenue" stroke="#10b981" fillOpacity={1} fill="url(#colorRev)" name="Revenue" />
-                <Area type="monotone" dataKey="expenses" stroke="#f43f5e" fillOpacity={1} fill="url(#colorExp)" name="Expenses" />
-              </AreaChart>
-            </ResponsiveContainer>
+        {/* Left Side: Stats as 3 column cards */}
+        <div className="col-span-12 lg:col-span-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-[1px] bg-zinc-200 dark:bg-zinc-800 rounded-lg overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-sm">
+            <StatItem title="Active Members" value={stats.activeMembers} trendValue="Active" subtext="Current Users" type="primary" icon="group" />
+            <StatItem title="Week Collection" value={`₹${stats.weekCollection.toLocaleString()}`} trendValue="Revenue" subtext="This Week" type="success" icon="payments" />
+            <StatItem title="Today Expiry" value={stats.todayExpiry} trendValue={stats.todayExpiry.toString()} subtext="Action Needed" type={stats.todayExpiry > 0 ? "danger" : "primary"} icon="warning" />
+            <StatItem title="Low Stock" value={stats.lowStockItems} trendValue={stats.lowStockItems.toString()} subtext={stats.lowStockItems > 0 ? "Restock" : "OK"} type={stats.lowStockItems > 0 ? "danger" : "success"} icon="inventory" />
+            <StatItem title="Today Collection" value={`₹${stats.todayCollection.toLocaleString()}`} trendValue="Daily" subtext="Today's Revenue" type="success" icon="account_balance_wallet" />
+            <StatItem title="Month Collection" value={`₹${stats.monthCollection.toLocaleString()}`} trendValue="Monthly" subtext="This Month" type="primary" icon="account_balance" />
+            <StatItem title="Pending Balance" value={`₹${stats.pendingBalance.toLocaleString()}`} trendValue={stats.pendingBalance > 0 ? "Overdue" : "Clear"} subtext="Total Pending" type={stats.pendingBalance > 0 ? "danger" : "success"} icon="pending_actions" />
+            <StatItem title="Net Profit" value={`₹${stats.netProfit.toLocaleString()}`} trendValue={stats.netProfit >= 0 ? "Profit" : "Loss"} subtext="This Month" type={stats.netProfit >= 0 ? "success" : "danger"} icon="query_stats" />
+            <div className="bg-surface-light dark:bg-surface-dark flex-1"></div> {/* Empty space filler to make it a perfect grid if needed, or just let it wrap */}
           </div>
         </div>
 
-        {/* Income & Expense Analysis Breakdown */}
-        <div className="col-span-12 lg:col-span-4 bg-surface-light dark:bg-surface-dark p-6 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 flex flex-col h-[400px]">
-          <div className="mb-4">
-            <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Income vs Expense</h3>
-            <div className="flex items-center gap-2 mt-2 bg-zinc-100 dark:bg-zinc-800 p-2 rounded-lg">
-              <Calendar size={14} className="text-zinc-500" />
-              <input
-                type="date"
-                value={dateRange.start}
-                onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-                className="bg-transparent text-xs font-medium border-none focus:ring-0 p-0 text-zinc-600 dark:text-zinc-300 w-24"
-              />
-              <span className="text-zinc-400">-</span>
-              <input
-                type="date"
-                value={dateRange.end}
-                onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-                className="bg-transparent text-xs font-medium border-none focus:ring-0 p-0 text-zinc-600 dark:text-zinc-300 w-24"
-              />
+        {/* Right Side: Income vs Expense Breakdown */}
+        <div className="col-span-12 lg:col-span-7 bg-surface-light dark:bg-surface-dark p-6 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 flex flex-col h-full min-h-[400px]">
+          <div className="mb-4 flex justify-between items-start">
+            <div>
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-2">Income vs Expense</h3>
+              <div className="flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800 p-2 rounded-lg w-fit">
+                <Calendar size={14} className="text-zinc-500" />
+                <input
+                  type="date"
+                  value={dateRange.start}
+                  onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                  className="bg-transparent text-xs font-medium border-none focus:ring-0 p-0 text-zinc-600 dark:text-zinc-300 w-24"
+                />
+                <span className="text-zinc-400">-</span>
+                <input
+                  type="date"
+                  value={dateRange.end}
+                  onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                  className="bg-transparent text-xs font-medium border-none focus:ring-0 p-0 text-zinc-600 dark:text-zinc-300 w-24"
+                />
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-zinc-500 font-bold uppercase tracking-wider mb-1">Surplus</p>
+              <h3 className={`text-3xl font-extrabold tracking-tight ${stats.netProfit >= 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400'}`}>
+                ₹{stats.netProfit.toLocaleString()}
+              </h3>
             </div>
           </div>
 
@@ -320,13 +272,55 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="col-span-12">
-        <div className="bg-surface-light dark:bg-surface-dark rounded shadow-soft border border-zinc-200 dark:border-zinc-800 overflow-hidden p-4">
-          <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-2 px-2">Action Required</h3>
-          <ExpriesOverdue />
+      {/* Revenue & Growth Chart Section */}
+      <div className="grid grid-cols-12 gap-6">
+        <div className="col-span-12 bg-surface-light dark:bg-surface-dark p-6 rounded shadow-soft border border-zinc-200 dark:border-zinc-800 flex flex-col h-[400px]">
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Revenue & Growth</h3>
+              <p className="text-sm text-zinc-500">Income vs Expenses (Last 6 Months)</p>
+            </div>
+          </div>
+          <div className="flex-1 w-full min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData.revenueGrowth} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="name" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
+                <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `₹${value}`} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                <Area type="monotone" dataKey="revenue" stroke="#10b981" fillOpacity={1} fill="url(#colorRev)" name="Revenue" />
+                <Area type="monotone" dataKey="expenses" stroke="#f43f5e" fillOpacity={1} fill="url(#colorExp)" name="Expenses" />
+                <Area type="monotone" dataKey="profit" stroke="#3b82f6" fillOpacity={1} fill="url(#colorProfit)" name="Profit" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
+
       </div>
 
+      {/* Combined Action Required */}
+      <div className="col-span-12">
+        <div className="bg-surface-light dark:bg-surface-dark rounded shadow-soft border border-zinc-200 dark:border-zinc-800 overflow-hidden p-4">
+          <ActionRequired />
+        </div>
+      </div>
 
     </div>
   )

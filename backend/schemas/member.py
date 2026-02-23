@@ -7,7 +7,7 @@ class MemberBase(BaseModel):
     MembershipReceiptnumber: Optional[int] = None
     Gender: Optional[str] = None
     Age: Optional[int] = None
-    AccessStatus: Optional[str] = "no"
+    # AccessStatus: removed (deprecated - computed dynamically now)
     height: Optional[float] = None
     weight: Optional[int] = None
     DateOfJoining: Optional[str] = None
@@ -17,7 +17,7 @@ class MemberBase(BaseModel):
     Whatsapp: Optional[int] = None # ORM is BigInt, Pydantic handles int
     PlanPeriod: Optional[str] = None
     PlanType: Optional[str] = None
-    MembershipStatus: Optional[str] = "Inactive"
+    MembershipStatus: Optional[str] = ""
     MembershipExpiryDate: Optional[str] = None
     LastPaymentDate: Optional[str] = None
     NextDuedate: Optional[str] = None

@@ -20,11 +20,43 @@ def calculate_selling_price(landing_price: str, margin: float, offer: float) -> 
         return 0
 
 
+def calculate_profit_amount(selling_price, landing_price: str) -> float:
+    """Calculate profit amount per pcs: Selling - Landing"""
+    try:
+        selling = float(selling_price) if selling_price else 0
+        landing = float(landing_price) if landing_price else 0
+        return round(selling - landing, 2)
+    except (ValueError, TypeError):
+        return 0
+
+
+def recalculate_computed_fields(protein):
+    """Always recalculate TotalPrice, ProfitAmount after any edit."""
+    try:
+        qty = float(protein.Quantity) if protein.Quantity else 0
+        landing = float(protein.LandingPrice) if protein.LandingPrice else 0
+        selling = float(protein.SellingPrice) if protein.SellingPrice else 0
+        protein.TotalPrice = str(round(qty * landing, 2))
+        protein.ProfitAmount = round(selling - landing, 2)
+    except (ValueError, TypeError):
+        pass
+
+
 def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
     p_dict = p.__dict__.copy()
     p_dict['_id'] = p.id
     p_dict.pop('_sa_instance_state', None)
     p_dict.pop('imageData', None)  # Don't send binary in list
+    
+    # Always recompute TotalPrice and ProfitAmount dynamically
+    try:
+        qty = float(p.Quantity) if p.Quantity else 0
+        landing = float(p.LandingPrice) if p.LandingPrice else 0
+        selling = float(p.SellingPrice) if p.SellingPrice else 0
+        p_dict['TotalPrice'] = str(round(qty * landing, 2))
+        p_dict['ProfitAmount'] = round(selling - landing, 2)
+    except (ValueError, TypeError):
+        pass
     
     # Calculate low stock indicator
     try:
@@ -203,33 +235,14 @@ def create_protein(
             protein_data.get('OfferPrice', 0)
         )
     
+    # Auto-calculate profit amount
+    selling = protein_data.get('SellingPrice')
+    landing = protein_data.get('LandingPrice')
+    if selling and landing:
+        protein_data['ProfitAmount'] = calculate_profit_amount(selling, landing)
+    
     protein = ProteinStock(gymId=current_gym.id, **protein_data)
     db.add(protein)
-    db.commit()
-    db.refresh(protein)
-
-    # If incoming data has lot information, create lots
-    lots = protein_data.get('lots') or []
-    for lot in lots:
-        try:
-            pl = ProteinLot(
-                gymId=current_gym.id,
-                proteinId=protein.id,
-                lotNumber=lot.get('lotNumber'),
-                quantity=int(lot.get('quantity') or 0),
-                purchasePrice=float(lot.get('purchasePrice')) if lot.get('purchasePrice') else None,
-                sellingPrice=float(lot.get('sellingPrice')) if lot.get('sellingPrice') else None,
-                marginType=lot.get('marginType'),
-                marginValue=float(lot.get('marginValue')) if lot.get('marginValue') else None,
-                offerPrice=float(lot.get('offerPrice')) if lot.get('offerPrice') else None,
-                expiryDate=lot.get('expiryDate')
-            )
-            db.add(pl)
-            # update protein available stock
-            protein.AvailableStock = (protein.AvailableStock or 0) + (pl.quantity or 0)
-        except Exception:
-            continue
-
     db.commit()
     db.refresh(protein)
 
@@ -244,11 +257,17 @@ def bulk_create_proteins(data: dict, current_gym: Gym = Depends(get_current_gym)
     
     for stock_data in stocks_list:
         try:
-            # Calculate selling price
             landing = float(stock_data.get("LandingPrice", 0)) if stock_data.get("LandingPrice") else 0
             margin = float(stock_data.get("MarginPrice", 0)) if stock_data.get("MarginPrice") else 0
             offer = float(stock_data.get("OfferPrice", 0)) if stock_data.get("OfferPrice") else 0
-            selling = landing + margin - offer
+            
+            # Use explicit SellingPrice from import if provided, otherwise calculate
+            if stock_data.get("SellingPrice"):
+                selling = float(stock_data["SellingPrice"])
+            elif margin or offer:
+                selling = landing + margin - offer
+            else:
+                selling = 0
             
             protein = ProteinStock(
                 gymId=current_gym.id,
@@ -266,9 +285,14 @@ def bulk_create_proteins(data: dict, current_gym: Gym = Depends(get_current_gym)
                 MarginPrice=margin,
                 OfferPrice=offer,
                 SellingPrice=selling,
+                ExpiryDate=stock_data.get("ExpiryDate"),
                 AvailableStock=int(stock_data.get("AvailableStock", stock_data.get("Quantity", 0))) if stock_data.get("AvailableStock") or stock_data.get("Quantity") else 0,
                 StockThreshold=int(stock_data.get("StockThreshold", 5)) if stock_data.get("StockThreshold") else 5
             )
+            
+            # Recalculate computed fields
+            recalculate_computed_fields(protein)
+            
             db.add(protein)
             created_count += 1
         except Exception as e:
@@ -321,13 +345,18 @@ def update_protein(
     for key, value in update_data.items():
         setattr(protein, key, value)
     
-    # Recalculate selling price if pricing fields changed
-    if any(k in update_data for k in ['LandingPrice', 'MarginPrice', 'OfferPrice']):
+    # Only recalculate selling price if margin/offer pricing fields changed
+    # AND the user did NOT explicitly set SellingPrice in this request
+    if any(k in update_data for k in ['LandingPrice', 'MarginPrice', 'OfferPrice']) and 'SellingPrice' not in update_data:
         protein.SellingPrice = calculate_selling_price(
             protein.LandingPrice,
             protein.MarginPrice,
             protein.OfferPrice
         )
+    
+    # Recalculate computed fields only if relevant fields changed
+    if any(k in update_data for k in ['Quantity', 'LandingPrice', 'SellingPrice', 'MarginPrice', 'OfferPrice']):
+        recalculate_computed_fields(protein)
     
     db.commit()
     db.refresh(protein)
@@ -354,21 +383,27 @@ def update_protein_body(
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
     
-    # Remove metadata
+    # Remove metadata and computed fields that should not be overwritten directly
     updatable_data = data.copy()
-    for key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'isLowStock']:
+    for key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'isLowStock', 'lots', 'TotalPrice', 'ProfitAmount']:
         updatable_data.pop(key, None)
     
     for key, value in updatable_data.items():
         if hasattr(protein, key):
             setattr(protein, key, value)
     
-    # Recalculate selling price
-    protein.SellingPrice = calculate_selling_price(
-        protein.LandingPrice,
-        protein.MarginPrice,
-        protein.OfferPrice
-    )
+    # Only recalculate selling price if margin/offer pricing fields changed
+    # AND the user did NOT explicitly set SellingPrice in this request
+    if any(k in updatable_data for k in ['LandingPrice', 'MarginPrice', 'OfferPrice']) and 'SellingPrice' not in updatable_data:
+        protein.SellingPrice = calculate_selling_price(
+            protein.LandingPrice,
+            protein.MarginPrice,
+            protein.OfferPrice
+        )
+    
+    # Recalculate computed fields only if relevant fields changed
+    if any(k in updatable_data for k in ['Quantity', 'LandingPrice', 'SellingPrice', 'MarginPrice', 'OfferPrice']):
+        recalculate_computed_fields(protein)
     
     db.commit()
     db.refresh(protein)

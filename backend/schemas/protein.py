@@ -16,13 +16,15 @@ class ProteinBase(BaseModel):
     LandingPrice: Optional[str] = None
     TotalPrice: Optional[str] = None
     Remark: Optional[str] = None
-    
-    # New pricing fields
+    SellingPrice: Optional[float] = None
+    ProfitAmount: Optional[float] = None
+    ExpiryDate: Optional[str] = None
+
+    # Pricing fields kept for compatibility
     MarginPrice: Optional[float] = None
     OfferPrice: Optional[float] = None
-    SellingPrice: Optional[float] = None
     StockThreshold: Optional[int] = 5
-    
+
     # Multi-branch
     branchId: Optional[str] = None
 
@@ -43,9 +45,11 @@ class ProteinUpdate(BaseModel):
     LandingPrice: Optional[str] = None
     TotalPrice: Optional[str] = None
     Remark: Optional[str] = None
+    SellingPrice: Optional[float] = None
+    ProfitAmount: Optional[float] = None
+    ExpiryDate: Optional[str] = None
     MarginPrice: Optional[float] = None
     OfferPrice: Optional[float] = None
-    SellingPrice: Optional[float] = None
     StockThreshold: Optional[int] = None
 
 
@@ -55,7 +59,7 @@ class ProteinResponse(ProteinBase):
     gymId: str
     createdAt: datetime
     updatedAt: datetime
-    
+
     # Computed field for low stock indicator
     isLowStock: Optional[bool] = None
     lots: Optional[List[dict]] = []

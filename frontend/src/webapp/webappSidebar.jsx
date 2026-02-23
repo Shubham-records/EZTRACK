@@ -20,7 +20,9 @@ import {
   Settings,
   Wallet,
   BarChart2,
-  History
+  History,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 
 export default function WebappSidebar({ clickedBUTTON }) {
@@ -29,6 +31,7 @@ export default function WebappSidebar({ clickedBUTTON }) {
   const [selectedItem, setSelectedItem] = useState('Dashboard');
   const [openDropdown, setOpenDropdown] = useState(null);
   const [userRole, setUserRole] = useState(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -157,47 +160,66 @@ export default function WebappSidebar({ clickedBUTTON }) {
   };
 
   return (
-    <aside className="w-64 flex-shrink-0 bg-surface-light dark:bg-surface-dark border-r border-zinc-200 dark:border-zinc-800 flex flex-col z-20 h-screen">
+    <aside className={`flex-shrink-0 bg-surface-light dark:bg-surface-dark border-r border-zinc-200 dark:border-zinc-800 flex flex-col z-20 h-screen transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}>
       {/* Header */}
-      <div className="h-16 flex items-center px-6 border-b border-zinc-100 dark:border-zinc-800">
-        <div className="w-8 h-8 rounded bg-primary flex items-center justify-center text-white mr-3 overflow-hidden">
-          {/* Use uploaded logo or fallback icon */}
-          <Image src={logo} alt="FlexFlow" width={32} height={32} className="object-cover" />
-        </div>
-        <div>
-          <h1 className="font-bold text-lg tracking-tight text-zinc-900 dark:text-white">Rmg</h1>
-          <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold flex items-center gap-1">
-            Enterprise
-          </p>
-        </div>
+      <div className={`h-16 flex items-center ${isCollapsed ? 'justify-center' : 'justify-between px-4'} border-b border-zinc-100 dark:border-zinc-800`}>
+        {!isCollapsed && (
+          <div className="flex items-center overflow-hidden">
+            <div className="w-8 h-8 rounded bg-primary flex items-center justify-center text-white mr-3 overflow-hidden shrink-0">
+              {/* Use uploaded logo or fallback icon */}
+              <Image src={logo} alt="FlexFlow" width={32} height={32} className="object-cover relative" />
+            </div>
+            <div className="overflow-hidden">
+              <h1 className="font-bold text-lg tracking-tight text-zinc-900 dark:text-white truncate">Rmg</h1>
+              <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold flex items-center gap-1 truncate">
+                Enterprise
+              </p>
+            </div>
+          </div>
+        )}
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className={`p-1.5 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors focus:outline-none ${!isCollapsed && 'ml-2 shrink-0'}`}
+          title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+        >
+          {isCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+        </button>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-6 px-3 space-y-1">
+      <nav className={`flex-1 overflow-y-auto py-6 ${isCollapsed ? 'px-2' : 'px-3'} space-y-1`}>
         {sidebarItems.map((item) => {
           const isActive = selectedItem === item.name || (item.dropdownItems.length > 0 && String(selectedItem).startsWith(item.name));
           const Icon = item.icon || Activity;
 
           return (
-            <div key={item.name}>
+            <div key={item.name} title={isCollapsed ? item.name : undefined}>
               <button
-                className={`w-full group flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-md transition-colors ${isActive
+                className={`w-full group flex items-center ${isCollapsed ? 'justify-center py-3' : 'justify-between px-3 py-2.5'} text-sm font-medium rounded-md transition-colors ${isActive
                   ? 'bg-primary/10 text-primary'
                   : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-white'
                   }`}
-                onClick={() => handleItemClick(item.name)}
+                onClick={() => {
+                  if (isCollapsed && item.dropdownItems.length > 0) {
+                    setIsCollapsed(false);
+                    setOpenDropdown(item.name);
+                    setSelectedItem(item.name);
+                  } else {
+                    handleItemClick(item.name);
+                  }
+                }}
               >
-                <div className="flex items-center">
-                  <Icon className={`mr-3 h-5 w-5 ${isActive ? 'text-primary' : 'text-zinc-400 group-hover:text-primary transition-colors'}`} />
-                  {item.name}
+                <div className="flex items-center overflow-hidden">
+                  <Icon className={`${isCollapsed ? '' : 'mr-3'} h-5 w-5 shrink-0 ${isActive ? 'text-primary' : 'text-zinc-400 group-hover:text-primary transition-colors'}`} />
+                  {!isCollapsed && <span className="truncate">{item.name}</span>}
                 </div>
-                {item.dropdownItems.length > 0 && (
-                  openDropdown === item.name ? <ChevronDown size={16} /> : <ChevronRight size={16} />
+                {!isCollapsed && item.dropdownItems.length > 0 && (
+                  openDropdown === item.name ? <ChevronDown size={16} className="shrink-0" /> : <ChevronRight size={16} className="shrink-0" />
                 )}
               </button>
 
               {/* Dropdown Items */}
-              {openDropdown === item.name && item.dropdownItems.length > 0 && (
+              {!isCollapsed && openDropdown === item.name && item.dropdownItems.length > 0 && (
                 <div className="mt-1 ml-4 space-y-1 border-l-2 border-zinc-100 dark:border-zinc-800 pl-2">
                   {item.dropdownItems.map((dropdownItem) => {
                     const isDropdownActive = selectedItem === `${item.name} - ${dropdownItem}`;
@@ -225,13 +247,14 @@ export default function WebappSidebar({ clickedBUTTON }) {
       </nav>
 
       {/* Footer / User / Logout */}
-      <div className="border-t border-zinc-200 dark:border-zinc-800 p-4">
+      <div className={`border-t border-zinc-200 dark:border-zinc-800 ${isCollapsed ? 'p-2' : 'p-4'}`}>
         <button
           onClick={handleLogout}
-          className="w-full group flex items-center px-3 py-2.5 text-sm font-medium rounded-md text-zinc-600 dark:text-zinc-400 hover:bg-red-50 dark:hover:bg-red-900/10 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+          title={isCollapsed ? "Log Out" : undefined}
+          className={`w-full group flex items-center ${isCollapsed ? 'justify-center py-3' : 'px-3 py-2.5'} text-sm font-medium rounded-md text-zinc-600 dark:text-zinc-400 hover:bg-red-50 dark:hover:bg-red-900/10 hover:text-red-600 dark:hover:text-red-400 transition-colors`}
         >
-          <LogOut className="mr-3 h-5 w-5 text-zinc-400 group-hover:text-red-500 transition-colors" />
-          Log Out
+          <LogOut className={`${isCollapsed ? '' : 'mr-3'} h-5 w-5 text-zinc-400 group-hover:text-red-500 transition-colors`} />
+          {!isCollapsed && <span>Log Out</span>}
         </button>
       </div>
     </aside>

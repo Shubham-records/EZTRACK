@@ -145,7 +145,6 @@ export function NewAdmission() {
     MembershipReceiptnumber: null,
     Gender: '',
     Age: null,
-    AccessStatus: 'no',
     height: null,
     weight: null,
     DateOfJoining: format(new Date(), 'yyyy-MM-dd'),
@@ -155,7 +154,7 @@ export function NewAdmission() {
     Whatsapp: null,
     PlanPeriod: '',
     PlanType: '',
-    MembershipStatus: 'Inactive',
+    MembershipStatus: '',
     MembershipExpiryDate: '',
     LastPaymentDate: '',
     NextDuedate: '',
@@ -592,9 +591,9 @@ export function ReAdmission() {
   const { showToast } = useToast();
   const [clientNumber, setClientNumber] = useState('');
   const [formData, setFormData] = useState({
-    Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', AccessStatus: 'no', height: '', weight: '',
+    Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', height: '', weight: '',
     DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
-    PlanPeriod: '', PlanType: '', MembershipStatus: 'Active', MembershipExpiryDate: '', LastPaymentDate: '',
+    PlanPeriod: '', PlanType: '', MembershipStatus: '', MembershipExpiryDate: '', LastPaymentDate: '',
     NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
     extraDays: '0', agreeTerms: false,
     admissionPrice: 0, extraAmount: 0,
@@ -675,9 +674,9 @@ export function ReAdmission() {
       if (!response.ok) {
         if (response.status === 404) {
           setFormData({
-            Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', AccessStatus: 'no', height: '', weight: '',
+            Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', height: '', weight: '',
             DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
-            PlanPeriod: '', PlanType: '', MembershipStatus: 'Active', MembershipExpiryDate: '', LastPaymentDate: '',
+            PlanPeriod: '', PlanType: '', MembershipStatus: '', MembershipExpiryDate: '', LastPaymentDate: '',
             NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
             extraDays: '0', agreeTerms: false,
             admissionPrice: gymSettings?.reAdmissionFee || 0, extraAmount: 0,
@@ -746,9 +745,9 @@ export function ReAdmission() {
       fetchClientData();
     } else {
       setFormData({
-        Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', AccessStatus: 'no', height: '', weight: '',
+        Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', height: '', weight: '',
         DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
-        PlanPeriod: '', PlanType: '', MembershipStatus: 'Active', MembershipExpiryDate: '', LastPaymentDate: '',
+        PlanPeriod: '', PlanType: '', MembershipStatus: '', MembershipExpiryDate: '', LastPaymentDate: '',
         NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
         extraDays: '0', agreeTerms: false,
         admissionPrice: gymSettings?.reAdmissionFee || 0, extraAmount: 0,
@@ -1360,10 +1359,16 @@ export function ProteinBilling() {
   const [loading, setLoading] = useState(false);
   const [proteins, setProteins] = useState([]);
   const [selectedItems, setSelectedItems] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [highlightedProduct, setHighlightedProduct] = useState(null);
+  const [discount, setDiscount] = useState(0);
   const [formData, setFormData] = useState({
     customerName: '',
     customerPhone: '',
-    paymentMode: 'cash',
+    paymentMode: 'CASH',
+    paymentStatus: 'PAID',
+    paidAmount: '',
     remarks: ''
   });
 
@@ -1398,6 +1403,21 @@ export function ProteinBilling() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  const getProductPrice = (p) => {
+    return p.SellingPrice || parseFloat(p.MRPPrice) || parseFloat(p.LandingPrice) || 0;
+  };
+
+  const filteredProteins = proteins.filter(p => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      (p.ProductName || '').toLowerCase().includes(q) ||
+      (p.Brand || '').toLowerCase().includes(q) ||
+      (p.Flavour || '').toLowerCase().includes(q) ||
+      (p.Weight || '').toLowerCase().includes(q)
+    );
+  });
+
   const addItem = (protein) => {
     const existing = selectedItems.find(i => i.id === protein.id);
     if (existing) {
@@ -1405,15 +1425,25 @@ export function ProteinBilling() {
     } else {
       setSelectedItems(prev => [...prev, {
         id: protein.id,
-        name: `${protein.Brand} - ${protein.ProductName}`,
-        price: protein.SellingPrice || parseFloat(protein.LandingPrice) || 0,
+        productName: protein.ProductName || '',
+        brand: protein.Brand || '',
+        flavour: protein.Flavour || '',
+        weight: protein.Weight || '',
+        mrp: parseFloat(protein.MRPPrice) || 0,
+        price: getProductPrice(protein),
         quantity: 1
       }]);
     }
+    setSearchQuery('');
+    setIsDropdownOpen(false);
+    setHighlightedProduct(protein);
   };
 
   const removeItem = (id) => {
     setSelectedItems(prev => prev.filter(i => i.id !== id));
+    if (highlightedProduct && highlightedProduct.id === id) {
+      setHighlightedProduct(null);
+    }
   };
 
   const updateQuantity = (id, qty) => {
@@ -1421,7 +1451,20 @@ export function ProteinBilling() {
     setSelectedItems(prev => prev.map(i => i.id === id ? { ...i, quantity: qty } : i));
   };
 
-  const total = selectedItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const subtotal = selectedItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const totalItems = selectedItems.reduce((sum, item) => sum + item.quantity, 0);
+  const total = Math.max(0, subtotal - (parseFloat(discount) || 0));
+
+  // Auto-set paidAmount when paymentStatus changes or total changes
+  useEffect(() => {
+    if (formData.paymentStatus === 'PAID') {
+      setFormData(prev => ({ ...prev, paidAmount: total }));
+    } else if (formData.paymentStatus === 'UNPAID') {
+      setFormData(prev => ({ ...prev, paidAmount: 0 }));
+    }
+  }, [formData.paymentStatus, total]);
+
+  const pendingBalance = total - (parseFloat(formData.paidAmount) || 0);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -1431,19 +1474,25 @@ export function ProteinBilling() {
     }
     setLoading(true);
     try {
+      const paidAmt = parseFloat(formData.paidAmount) || 0;
+      let status = 'PENDING';
+      if (paidAmt >= total) status = 'PAID';
+      else if (paidAmt > 0) status = 'PARTIAL';
+
       const invoiceData = {
         customerName: formData.customerName,
-        customerPhone: formData.customerPhone,
-        invoiceType: 'protein',
+        invoiceType: 'Protein',
         items: selectedItems.map(i => ({
-          productId: i.id,
-          description: i.name,
+          description: `${i.brand} - ${i.productName}${i.flavour ? ' (' + i.flavour + ')' : ''}${i.weight ? ' - ' + i.weight : ''}`,
           quantity: i.quantity,
-          price: i.price
+          rate: i.price,
+          amount: i.price * i.quantity
         })),
-        total: total,
+        tax: 0,
+        discount: parseFloat(discount) || 0,
+        status: status,
         paymentMode: formData.paymentMode,
-        remarks: formData.remarks
+        paidAmount: paidAmt
       };
 
       const res = await fetch('/api/invoices', {
@@ -1462,7 +1511,9 @@ export function ProteinBilling() {
         }
         showToast('Protein sale recorded!', 'success');
         setSelectedItems([]);
-        setFormData({ customerName: '', customerPhone: '', paymentMode: 'cash', remarks: '' });
+        setHighlightedProduct(null);
+        setDiscount(0);
+        setFormData({ customerName: '', customerPhone: '', paymentMode: 'CASH', paymentStatus: 'PAID', paidAmount: '', remarks: '' });
       } else {
         throw new Error('Failed to create invoice');
       }
@@ -1473,6 +1524,9 @@ export function ProteinBilling() {
     }
   };
 
+  // Find full protein data for highlighted product
+  const specProduct = highlightedProduct ? proteins.find(p => p.id === highlightedProduct.id) || highlightedProduct : null;
+
   return (
     <div className="bg-surface-light dark:bg-surface-dark p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm mx-auto">
       <form autoComplete="off" onSubmit={handleSubmit} className="space-y-6">
@@ -1480,78 +1534,275 @@ export function ProteinBilling() {
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Protein Billing</h1>
           <p className="text-sm text-zinc-500 mt-1">Sell protein supplements and products</p>
         </div>
+        {/* Two-column layout: Left = Product Selection + Cart, Right = Specs + Bill */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* LEFT COLUMN - 3/5 width */}
+          <div className="lg:col-span-3 space-y-4">
+            {/* Searchable Product Dropdown */}
+            <div className="relative">
+              <div className="grid grid-cols-1 md:grid-cols-2 mb-6 gap-6">
+                <div>
+                  <label className={labelStyle}>Customer Name</label>
+                  <input type="text" name="customerName" value={formData.customerName} onChange={handleChange} placeholder="Customer name" className={inputStyle} required />
+                </div>
+                <div>
+                  <label className={labelStyle}>Phone</label>
+                  <input type="tel" name="customerPhone" value={formData.customerPhone} onChange={handleChange} placeholder="Phone number" className={inputStyle} />
+                </div>
+              </div>
+              <label className={labelStyle}>Search & Select Product</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setIsDropdownOpen(true); }}
+                  onFocus={() => setIsDropdownOpen(true)}
+                  placeholder="🔍 Search by product name, brand, flavour, weight..."
+                  className={inputStyle}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => { setSearchQuery(''); setIsDropdownOpen(false); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 text-sm"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className={labelStyle}>Customer Name</label>
-            <input type="text" name="customerName" value={formData.customerName} onChange={handleChange} placeholder="Customer name" className={inputStyle} required />
-          </div>
-          <div>
-            <label className={labelStyle}>Phone</label>
-            <input type="tel" name="customerPhone" value={formData.customerPhone} onChange={handleChange} placeholder="Phone number" className={inputStyle} />
-          </div>
-        </div>
+              {/* Dropdown Results */}
+              {isDropdownOpen && (
+                <div className="absolute z-20 w-full mt-1 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-xl max-h-64 overflow-y-auto stitch-scrollbar">
+                  {filteredProteins.length === 0 ? (
+                    <div className="p-4 text-center text-zinc-400 text-sm">No products found</div>
+                  ) : (
+                    filteredProteins.map(p => {
+                      const inCart = selectedItems.find(i => i.id === p.id);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => addItem(p)}
+                          className="w-full p-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-700/50 border-b border-zinc-100 dark:border-zinc-700 last:border-b-0 flex items-center justify-between gap-3 transition-colors"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-sm text-zinc-900 dark:text-white truncate">{p.ProductName}</span>
+                              {inCart && (
+                                <span className="flex-shrink-0 text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">×{inCart.quantity}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-xs text-zinc-500">{p.Brand}</span>
+                              {p.Flavour && <span className="text-xs text-zinc-400">• {p.Flavour}</span>}
+                              {p.Weight && <span className="text-xs text-zinc-400">• {p.Weight}</span>}
+                            </div>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-sm font-bold text-primary">₹{getProductPrice(p).toLocaleString()}</p>
+                            {p.MRPPrice && parseFloat(p.MRPPrice) > getProductPrice(p) && (
+                              <p className="text-[10px] text-zinc-400 line-through">MRP ₹{parseFloat(p.MRPPrice).toLocaleString()}</p>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
 
-        {/* Product Selection */}
-        <div>
-          <label className={labelStyle}>Select Products</label>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
-            {proteins.map(p => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => addItem(p)}
-                className="p-3 text-left bg-white dark:bg-zinc-700 rounded-lg border border-zinc-200 dark:border-zinc-600 hover:border-primary transition-colors"
-              >
-                <p className="text-xs font-bold text-zinc-900 dark:text-white truncate">{p.ProductName}</p>
-                <p className="text-[10px] text-zinc-500">{p.Brand}</p>
-                <p className="text-sm font-bold text-primary mt-1">₹{p.SellingPrice || p.LandingPrice || 0}</p>
-              </button>
-            ))}
-          </div>
-        </div>
+            {/* Close dropdown on outside click */}
+            {isDropdownOpen && (
+              <div className="fixed inset-0 z-10" onClick={() => setIsDropdownOpen(false)} />
+            )}
 
-        {/* Cart */}
-        {selectedItems.length > 0 && (
-          <div className="bg-zinc-50 dark:bg-zinc-800 rounded-lg p-4">
-            <h3 className="font-bold text-zinc-900 dark:text-white mb-3">Cart</h3>
-            <div className="space-y-2">
+            {/* Cart with detailed rows */}
+            {selectedItems.length > 0 && (
+              <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-4 border border-zinc-200 dark:border-zinc-700">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold text-zinc-900 dark:text-white text-sm uppercase tracking-wider">Cart ({totalItems} items)</h3>
+                  <button type="button" onClick={() => { setSelectedItems([]); setHighlightedProduct(null); }} className="text-xs text-rose-500 hover:text-rose-600 font-medium transition-colors">Clear All</button>
+                </div>
+
+                <div className="space-y-2">
+                  {selectedItems.map(item => (
+                    <div
+                      key={item.id}
+                      className={`bg-white dark:bg-zinc-700/50 p-3 rounded-lg border transition-all cursor-pointer ${highlightedProduct?.id === item.id ? 'border-primary ring-1 ring-primary/30' : 'border-zinc-200 dark:border-zinc-600 hover:border-zinc-300 dark:hover:border-zinc-500'}`}
+                      onClick={() => setHighlightedProduct(proteins.find(p => p.id === item.id) || item)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-zinc-900 dark:text-white truncate">{item.productName}</p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-600/50 px-1.5 py-0.5 rounded">{item.brand}</span>
+                            {item.flavour && <span className="text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-600/50 px-1.5 py-0.5 rounded">{item.flavour}</span>}
+                            {item.weight && <span className="text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-600/50 px-1.5 py-0.5 rounded">{item.weight}</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button type="button" onClick={(e) => { e.stopPropagation(); updateQuantity(item.id, item.quantity - 1); }}
+                            className="w-7 h-7 flex items-center justify-center bg-zinc-100 dark:bg-zinc-600 rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-500 transition-colors font-bold text-sm">−</button>
+                          <span className="w-8 text-center font-bold text-sm text-zinc-900 dark:text-white">{item.quantity}</span>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); updateQuantity(item.id, item.quantity + 1); }}
+                            className="w-7 h-7 flex items-center justify-center bg-zinc-100 dark:bg-zinc-600 rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-500 transition-colors font-bold text-sm">+</button>
+                          <span className="w-20 text-right font-bold text-primary text-sm">₹{(item.price * item.quantity).toLocaleString()}</span>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); removeItem(item.id); }}
+                            className="w-7 h-7 flex items-center justify-center text-rose-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors text-xs">✕</button>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-1.5 text-xs text-zinc-400">
+                        <span>₹{item.price.toLocaleString()} × {item.quantity}</span>
+                        {item.mrp > item.price && <span className="line-through">MRP ₹{item.mrp.toLocaleString()}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT COLUMN - 2/5 width: Product Specs + Bill Summary */}
+          <div className="lg:col-span-2 space-y-4">
+            {/* Product Specs Card */}
+            {specProduct ? (
+              <div className="bg-gradient-to-br from-zinc-50 to-white dark:from-zinc-800 dark:to-zinc-800/50 rounded-xl p-5 border border-zinc-200 dark:border-zinc-700">
+                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-3">Product Details</h3>
+                <div className="space-y-2.5">
+                  {[
+                    { label: 'Product', value: specProduct.ProductName },
+                    { label: 'Brand', value: specProduct.Brand },
+                    { label: 'Flavour', value: specProduct.Flavour || '—' },
+                    { label: 'Weight', value: specProduct.Weight || '—' },
+                    { label: 'MRP', value: specProduct.MRPPrice ? `₹${parseFloat(specProduct.MRPPrice).toLocaleString()}` : '—' },
+                    { label: 'Selling Price', value: `₹${getProductPrice(specProduct).toLocaleString()}`, highlight: true },
+                    { label: 'Stock', value: specProduct.Quantity || specProduct.AvailableStock || '—' },
+                  ].map((row, i) => (
+                    <div key={i} className="flex justify-between items-center py-1 border-b border-zinc-100 dark:border-zinc-700/50 last:border-b-0">
+                      <span className="text-xs text-zinc-500 font-medium">{row.label}</span>
+                      <span className={`text-sm font-semibold ${row.highlight ? 'text-primary' : 'text-zinc-900 dark:text-white'}`}>{row.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-6 border border-dashed border-zinc-300 dark:border-zinc-600 text-center">
+                <p className="text-zinc-400 text-sm">Select a product to view details</p>
+              </div>
+            )}
+
+            {/* Bill Summary */}
+            <div className="bg-zinc-50 dark:bg-zinc-900 rounded-xl p-5 space-y-3 border border-zinc-200 dark:border-zinc-700">
+              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-3 border-b border-zinc-200 dark:border-zinc-700 pb-2">Bill Summary</h3>
+
+              {/* Line items */}
               {selectedItems.map(item => (
-                <div key={item.id} className="flex items-center justify-between bg-white dark:bg-zinc-700 p-3 rounded-lg">
-                  <span className="text-sm font-medium text-zinc-900 dark:text-white flex-1">{item.name}</span>
-                  <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => updateQuantity(item.id, item.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-zinc-200 dark:bg-zinc-600 rounded">-</button>
-                    <span className="w-8 text-center font-bold">{item.quantity}</span>
-                    <button type="button" onClick={() => updateQuantity(item.id, item.quantity + 1)} className="w-6 h-6 flex items-center justify-center bg-zinc-200 dark:bg-zinc-600 rounded">+</button>
-                    <span className="w-20 text-right font-bold text-primary">₹{(item.price * item.quantity).toLocaleString()}</span>
-                  </div>
+                <div key={item.id} className="flex justify-between items-center text-sm">
+                  <span className="text-zinc-600 dark:text-zinc-400 truncate max-w-[60%]">{item.productName} × {item.quantity}</span>
+                  <span className="font-medium text-zinc-900 dark:text-white">₹{(item.price * item.quantity).toLocaleString()}</span>
                 </div>
               ))}
-              <div className="flex justify-between pt-3 border-t border-zinc-200 dark:border-zinc-600">
-                <span className="font-bold text-lg">Total</span>
-                <span className="font-bold text-lg text-primary">₹{total.toLocaleString()}</span>
+
+              {selectedItems.length === 0 && (
+                <p className="text-center text-zinc-400 text-sm py-2">No items added</p>
+              )}
+
+              <div className="border-t border-zinc-200 dark:border-zinc-700 pt-2 space-y-2">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-zinc-600 dark:text-zinc-400">Subtotal</span>
+                  <span className="font-medium text-zinc-900 dark:text-white">₹{subtotal.toLocaleString()}</span>
+                </div>
+
+                {/* Editable Discount */}
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-zinc-600 dark:text-zinc-400 flex items-center gap-2">
+                    Discount
+                    <span className="text-zinc-400 text-[10px]">Editable</span>
+                  </span>
+                  <input
+                    type="number"
+                    value={discount}
+                    onChange={(e) => setDiscount(e.target.value)}
+                    className="w-24 text-right bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none"
+                    min="0"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+
+              {/* Total Payable */}
+              <div className="border-t border-zinc-200 dark:border-zinc-700 pt-3">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-zinc-900 dark:text-white">Total Payable</span>
+                  <span className="font-bold text-xl text-primary">₹{total.toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* Payment Fields */}
+              <div className="border-t border-zinc-200 dark:border-zinc-700 pt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Payment Status</label>
+                    <select name="paymentStatus" value={formData.paymentStatus} onChange={handleChange} className={selectStyle}>
+                      <option value="PAID">Paid</option>
+                      <option value="PARTIAL">Partial</option>
+                      <option value="UNPAID">Unpaid</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Paid Amount</label>
+                    <input
+                      type="number"
+                      name="paidAmount"
+                      value={formData.paidAmount === '' ? '' : formData.paidAmount}
+                      onChange={handleChange}
+                      className={inputStyle}
+                      min="0"
+                      max={total}
+                      placeholder="0"
+                      disabled={formData.paymentStatus === 'PAID' || formData.paymentStatus === 'UNPAID'}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Payment Mode</label>
+                    <select name="paymentMode" value={formData.paymentMode} onChange={handleChange} className={selectStyle}>
+                      <option value="CASH">Cash</option>
+                      <option value="UPI">UPI</option>
+                      <option value="CARD">Card</option>
+                      <option value="BANK">Bank Transfer</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Remarks</label>
+                    <input type="text" name="remarks" value={formData.remarks} onChange={handleChange} placeholder="Optional" className={inputStyle} />
+                  </div>
+                </div>
+
+                {/* Pending Balance Display */}
+                {pendingBalance > 0 && formData.paymentStatus !== 'PAID' && (
+                  <div className="flex justify-between items-center bg-rose-50 dark:bg-rose-900/20 rounded-lg px-3 py-2 border border-rose-200 dark:border-rose-800">
+                    <span className="text-sm font-medium text-rose-600 dark:text-rose-400">Pending Balance</span>
+                    <span className="font-bold text-rose-600 dark:text-rose-400">₹{pendingBalance.toLocaleString()}</span>
+                  </div>
+                )}
+
+                {formData.paymentStatus === 'PAID' && total > 0 && (
+                  <div className="flex justify-between items-center bg-emerald-50 dark:bg-emerald-900/20 rounded-lg px-3 py-2 border border-emerald-200 dark:border-emerald-800">
+                    <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">✓ Fully Paid</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">₹{total.toLocaleString()}</span>
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className={labelStyle}>Payment Mode</label>
-            <select name="paymentMode" value={formData.paymentMode} onChange={handleChange} className={selectStyle}>
-              <option value="cash">Cash</option>
-              <option value="upi">UPI</option>
-              <option value="card">Card</option>
-            </select>
-          </div>
-          <div>
-            <label className={labelStyle}>Remarks</label>
-            <input type="text" name="remarks" value={formData.remarks} onChange={handleChange} placeholder="Optional remarks" className={inputStyle} />
           </div>
         </div>
 
         <button type="submit" disabled={loading || selectedItems.length === 0} className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 disabled:opacity-50">
-          {loading ? 'Processing...' : `Complete Sale (₹${total.toLocaleString()})`}
+          {loading ? 'Processing...' : formData.paymentStatus === 'PAID' ? `Complete Sale (₹${total.toLocaleString()})` : formData.paymentStatus === 'PARTIAL' ? `Complete Sale — Paying ₹${(parseFloat(formData.paidAmount) || 0).toLocaleString()} of ₹${total.toLocaleString()}` : `Record Sale (₹${total.toLocaleString()} — Unpaid)`}
         </button>
       </form>
     </div>

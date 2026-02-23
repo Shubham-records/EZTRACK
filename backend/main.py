@@ -27,6 +27,9 @@ def run_startup_migrations():
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "imageData" BYTEA',
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "imageMimeType" VARCHAR(50)',
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "branchId" VARCHAR(255)',
+        'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "ProfitAmount" FLOAT',
+        'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "ExpiryDate" VARCHAR(255)',
+        'ALTER TABLE "ProteinStock" DROP COLUMN IF EXISTS "ProfitPercentage"',
         # Invoice table columns
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "branchId" VARCHAR(255)',
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "paymentLogs" JSON',

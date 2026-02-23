@@ -6,7 +6,7 @@ from typing import Dict, Any
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Member, Invoice, ProteinStock, Expense, GymSettings
+from models.all_models import Gym, Member, Invoice, ProteinStock, ProteinLot, Expense, GymSettings
 
 router = APIRouter()
 
@@ -55,16 +55,21 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
         Invoice.status.in_(['PENDING', 'PARTIAL'])
     ).scalar() or 0.0
     
-    # 7. Low Stock Count
+    # 7. Low Stock Count (Lots)
     settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
-    default_threshold = settings.lowStockThreshold if settings else 0
+    default_threshold = settings.lowStockThreshold if settings else 5
     
-    proteins = db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()
+    lots = db.query(ProteinLot).filter(ProteinLot.gymId == current_gym.id).all()
+    proteins = {p.id: p for p in db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()}
+    
     low_stock_count = 0
-    for p in proteins:
+    for lot in lots:
+        protein = proteins.get(lot.proteinId)
+        if not protein:
+            continue
         try:
-            qty = int(p.Quantity) if p.Quantity else 0
-            threshold = p.StockThreshold or default_threshold
+            qty = int(lot.quantity) if lot.quantity else 0
+            threshold = protein.StockThreshold or default_threshold
             if qty < threshold:
                 low_stock_count += 1
         except (ValueError, TypeError):
@@ -258,3 +263,73 @@ def get_recent_activity(
     # Sort by timestamp and return top items
     activities.sort(key=lambda x: x.get('timestamp') or '', reverse=True)
     return activities[:limit]
+
+
+@router.get("/stock-alerts")
+def get_dashboard_stock_alerts(
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    """Get stock alerts including low stock lots and expiring soon lots."""
+    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    default_threshold = settings.lowStockThreshold if settings else 5
+    expiry_warning_days = settings.expiryWarningDays if settings and settings.expiryWarningDays else 30
+    
+    today = datetime.now().date()
+    
+    # Get all lots and proteins
+    lots = db.query(ProteinLot).filter(ProteinLot.gymId == current_gym.id).all()
+    proteins = {p.id: p for p in db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()}
+    
+    low_stock_lots = []
+    expiring_lots = []
+    
+    for lot in lots:
+        protein = proteins.get(lot.proteinId)
+        if not protein:
+            continue
+            
+        threshold = protein.StockThreshold or default_threshold
+        
+        # Determine product name
+        brand_name = protein.Brand or ""
+        prod_name = protein.ProductName or brand_name or "Unknown Product"
+        flavor = f" - {protein.Flavour}" if protein.Flavour else ""
+        full_name = f"{prod_name}{flavor}"
+        
+        # Low stock check
+        if lot.quantity is not None and lot.quantity < threshold:
+            low_stock_lots.append({
+                "lotId": lot.id,
+                "lotNumber": lot.lotNumber,
+                "productName": full_name,
+                "quantity": lot.quantity,
+                "threshold": threshold,
+                "sellingPrice": lot.sellingPrice or protein.SellingPrice or 0
+            })
+            
+        # Expiry check
+        if lot.expiryDate:
+            try:
+                expiry_date = datetime.strptime(lot.expiryDate, "%Y-%m-%d").date()
+                days_to_expiry = (expiry_date - today).days
+                if days_to_expiry <= expiry_warning_days:
+                    expiring_lots.append({
+                        "lotId": lot.id,
+                        "lotNumber": lot.lotNumber,
+                        "productName": full_name,
+                        "expiryDate": lot.expiryDate,
+                        "daysToExpiry": days_to_expiry,
+                        "quantity": lot.quantity
+                    })
+            except ValueError:
+                pass
+                
+    # Sort expiring by days to expiry
+    expiring_lots.sort(key=lambda x: x['daysToExpiry'])
+    
+    return {
+        "lowStock": low_stock_lots,
+        "expiring": expiring_lots
+    }
+

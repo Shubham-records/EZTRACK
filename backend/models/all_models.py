@@ -149,6 +149,8 @@ class ProteinStock(Base):
     MarginPrice = Column(Float, nullable=True)
     OfferPrice = Column(Float, nullable=True)
     SellingPrice = Column(Float, nullable=True)
+    ProfitAmount = Column(Float, nullable=True)  # Selling - Landing per pcs
+    ExpiryDate = Column(String, nullable=True)  # YYYY-MM-DD
     AvailableStock = Column(Integer, default=0)  # Current stock count
     StockThreshold = Column(Integer, default=5)
     
