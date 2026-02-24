@@ -161,8 +161,8 @@ export default function AddMemberModal({ isOpen, onClose, onSuccess }) {
                         <h3 className="text-sm font-semibold text-primary uppercase tracking-wider mb-3 border-b border-zinc-100 dark:border-zinc-800 pb-2">Personal Information</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             <div className="space-y-1">
-                                <label className={labelClass}>Name *</label>
-                                <input name="Name" value={formData.Name} onChange={handleChange} required className={inputClass} />
+                                <label className={labelClass}>Name <span className="text-rose-500">*</span></label>
+                                <input name="Name" value={formData.Name} onChange={handleChange} required pattern="[A-Za-z\s]{2,}" title="Name must be at least 2 letters" className={inputClass} />
                             </div>
                             <div className="space-y-1">
                                 <label className={labelClass}>Client No.</label>
@@ -178,7 +178,7 @@ export default function AddMemberModal({ isOpen, onClose, onSuccess }) {
                             </div>
                             <div className="space-y-1">
                                 <label className={labelClass}>Age</label>
-                                <input type="number" name="Age" value={formData.Age} onChange={handleChange} className={inputClass} />
+                                <input type="number" name="Age" value={formData.Age} onChange={handleChange} min="1" max="120" title="Age must be 1-120" className={inputClass} />
                             </div>
                             <div className="space-y-1">
                                 <label className={labelClass}>Height</label>
@@ -190,15 +190,15 @@ export default function AddMemberModal({ isOpen, onClose, onSuccess }) {
                             </div>
                             <div className="space-y-1">
                                 <label className={labelClass}>Mobile</label>
-                                <input name="Mobile" value={formData.Mobile} onChange={handleChange} className={inputClass} />
+                                <input type="tel" name="Mobile" value={formData.Mobile} onChange={handleChange} pattern="[0-9]{10}" title="Mobile must be exactly 10 digits" maxLength="10" className={inputClass} />
                             </div>
                             <div className="space-y-1">
                                 <label className={labelClass}>WhatsApp</label>
-                                <input name="Whatsapp" value={formData.Whatsapp} onChange={handleChange} className={inputClass} />
+                                <input type="tel" name="Whatsapp" value={formData.Whatsapp} onChange={handleChange} pattern="[0-9]{10}" title="WhatsApp must be exactly 10 digits" maxLength="10" className={inputClass} />
                             </div>
                             <div className="space-y-1">
                                 <label className={labelClass}>Aadhaar</label>
-                                <input name="Aadhaar" value={formData.Aadhaar} onChange={handleChange} className={inputClass} />
+                                <input type="text" name="Aadhaar" value={formData.Aadhaar} onChange={handleChange} pattern="[0-9]{12}" title="Aadhaar must be exactly 12 digits" maxLength="12" className={inputClass} />
                             </div>
                             <div className="space-y-1 md:col-span-2 lg:col-span-3">
                                 <label className={labelClass}>Address</label>

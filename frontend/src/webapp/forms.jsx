@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { addMonths, addYears, addDays, subDays, format, parse, parseISO } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import { useToast } from "@/context/ToastContext";
+import { generateInvoicePDF } from './utils/generateInvoicePDF';
+import { shareViaWhatsApp, renderTemplate, fetchWhatsAppTemplate, fetchBranchDetailsForInvoice } from './utils/whatsappShare';
 
 // Billing helper functions inlined (moved from billingHelpers.js)
 async function fetchJson(url, token, dbName) {
@@ -182,6 +184,9 @@ export function NewAdmission() {
   const [ptPricingMatrix, setPtPricingMatrix] = useState({});
   const [ptPlans, setPtPlans] = useState([]);
   const [enablePersonalTraining, setEnablePersonalTraining] = useState(false);
+  const [dateFormat, setDateFormat] = useState('dd/MM/yyyy');
+  const [gymSettings, setGymSettings] = useState(null);
+  const [termsPoints, setTermsPoints] = useState([]);
 
   useEffect(() => {
     const init = async () => {
@@ -191,9 +196,20 @@ export function NewAdmission() {
       if (ptPricingMatrix) setPtPricingMatrix(ptPricingMatrix);
       if (ptList) setPtPlans(ptList);
       if (settings) {
+        setGymSettings(settings);
         if (settings.admissionFee) setFormData(prev => ({ ...prev, admissionPrice: settings.admissionFee }));
         if (settings.enablePersonalTraining) setEnablePersonalTraining(true);
       }
+
+      // Fetch Terms & Conditions
+      try {
+        const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        const resTerms = await fetch('/api/terms?appliesTo=Admission', {
+          headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName }
+        });
+        if (resTerms.ok) setTermsPoints(await resTerms.json());
+      } catch (e) { console.error('Failed to load terms', e); }
     };
     init();
   }, []);
@@ -314,6 +330,29 @@ export function NewAdmission() {
     await submitAdmission();
   };
 
+  // Helper: build invoice data from form + server response for PDF
+  const buildAdmissionInvoiceData = (responseData) => ({
+    ...formData,
+    ...responseData,
+    customerName: formData.Name,
+    customerWhatsapp: formData.Whatsapp,
+    customerPhone: formData.Mobile,
+    customerAddress: formData.Address,
+    Aadhaar: formData.Aadhaar,
+    clientNumber: formData.MembershipReceiptnumber,
+    invoiceDate: formData.DateOfJoining,
+    total: formData.LastPaymentAmount,
+    paidAmount: formData.paidAmount,
+    billType: 'Admission',
+    planType: formData.PlanType,
+    planPeriod: formData.PlanPeriod,
+    dateOfJoining: formData.DateOfJoining,
+    expiryDate: formData.MembershipExpiryDate,
+    nextDueDate: formData.NextDuedate,
+    paymentMode: formData.paymentMode || 'CASH',
+    status: (formData.LastPaymentAmount || 0) - (formData.paidAmount || 0) > 0 ? 'PARTIAL' : 'PAID',
+  });
+
   const submitAdmission = async () => {
     try {
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
@@ -334,10 +373,62 @@ export function NewAdmission() {
       const responseData = await response.json();
       if (!response.ok) throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
 
-      showToast('Admission submitted successfully!', 'success');
-      router.push("/webapp");
+      // Generate and download PDF on normal save
+      try {
+        const branchDetails = await fetchBranchDetailsForInvoice();
+        const invoicePayload = buildAdmissionInvoiceData(responseData);
+        const doc = generateInvoicePDF(invoicePayload, branchDetails, gymSettings, termsPoints);
+        const pdfBlob = doc.output('blob');
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Invoice_${formData.Name}_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+      } catch (pdfErr) {
+        console.error('PDF generation failed', pdfErr);
+      }
+
+      showToast('Admission saved successfully!', 'success');
+
+      // Navigate to invoices
+      if (responseData.id) sessionStorage.setItem('highlightInvoiceId', responseData.id);
+      setTimeout(() => { window.location.href = '/webapp?page=Invoices'; }, 1500);
+
+      return responseData;
     } catch (error) {
       showToast(error.message, 'error');
+      return null;
+    }
+  };
+
+  const handleSaveAndShare = async (e) => {
+    e.preventDefault();
+
+    const invoiceData = await submitAdmission();
+
+    if (invoiceData) {
+      try {
+        const branchDetails = await fetchBranchDetailsForInvoice();
+        const invoicePayload = buildAdmissionInvoiceData(invoiceData);
+        const doc = generateInvoicePDF(invoicePayload, branchDetails, gymSettings, termsPoints);
+        const pdfBlob = doc.output('blob');
+
+        // Fetch and render WhatsApp template
+        const template = await fetchWhatsAppTemplate('Admission');
+        const renderedMsg = renderTemplate(template, {
+          ...invoicePayload,
+          gymName: branchDetails.gymName || localStorage.getItem('eztracker_jwt_gymName_control_token') || '',
+        });
+
+        const sharePhone = formData.Whatsapp || formData.Mobile;
+        await shareViaWhatsApp(sharePhone, pdfBlob, invoicePayload, renderedMsg);
+      } catch (err) {
+        console.error(err);
+        showToast('Failed to generate PDF for sharing', 'error');
+      }
     }
   };
 
@@ -354,8 +445,8 @@ export function NewAdmission() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="col-span-1 md:col-span-2">
-            <label className={labelStyle}>Full Name</label>
-            <input type="text" name="Name" value={formData.Name} onChange={handleInputChange} placeholder="John Doe" className={inputStyle} required />
+            <label className={labelStyle}>Full Name <span className="text-rose-500">*</span></label>
+            <input type="text" name="Name" value={formData.Name} onChange={handleInputChange} placeholder="John Doe" className={inputStyle} required pattern="[A-Za-z\s]{2,}" title="Name must contain at least 2 letters (letters and spaces only)" />
           </div>
 
           <div>
@@ -370,8 +461,8 @@ export function NewAdmission() {
 
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className={labelStyle}>Age</label>
-              <input type="number" name="Age" value={formData.Age || ''} onChange={handleInputChange} className={inputStyle} required />
+              <label className={labelStyle}>Age <span className="text-rose-500">*</span></label>
+              <input type="number" name="Age" value={formData.Age || ''} onChange={handleInputChange} className={inputStyle} required min="1" max="120" title="Age must be between 1 and 120" />
             </div>
             <div>
               <label className={labelStyle}>Height (ft)</label>
@@ -390,15 +481,15 @@ export function NewAdmission() {
 
           <div>
             <label className={labelStyle}>Aadhaar Number</label>
-            <input type="number" name="Aadhaar" value={formData.Aadhaar || ''} onChange={handleInputChange} className={inputStyle} />
+            <input type="text" name="Aadhaar" value={formData.Aadhaar || ''} onChange={handleInputChange} className={inputStyle} pattern="[0-9]{12}" title="Aadhaar must be exactly 12 digits" maxLength="12" />
           </div>
           <div>
-            <label className={labelStyle}>Mobile No</label>
-            <input type="number" name="Mobile" value={formData.Mobile || ''} onChange={handleInputChange} className={inputStyle} required />
+            <label className={labelStyle}>Mobile No <span className="text-rose-500">*</span></label>
+            <input type="tel" name="Mobile" value={formData.Mobile || ''} onChange={handleInputChange} className={inputStyle} required pattern="[0-9]{10}" title="Mobile must be exactly 10 digits" maxLength="10" />
           </div>
           <div>
-            <label className={labelStyle}>WhatsApp No</label>
-            <input type="number" name="Whatsapp" value={formData.Whatsapp || ''} onChange={handleInputChange} className={inputStyle} required />
+            <label className={labelStyle}>WhatsApp No <span className="text-rose-500">*</span></label>
+            <input type="tel" name="Whatsapp" value={formData.Whatsapp || ''} onChange={handleInputChange} className={inputStyle} required pattern="[0-9]{10}" title="WhatsApp must be exactly 10 digits" maxLength="10" />
           </div>
           <div>
             <label className={labelStyle}>Remark</label>
@@ -563,14 +654,39 @@ export function NewAdmission() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 pt-4">
-          <input type="checkbox" id="agreeTerms" name="agreeTerms" checked={formData.agreeTerms} onChange={handleInputChange} className="w-5 h-5 text-primary rounded focus:ring-primary" required />
-          <label htmlFor="agreeTerms" className="text-sm text-zinc-600 dark:text-zinc-400">I agree to the terms and conditions.</label>
-        </div>
+        {/* Terms & Conditions Section */}
+        {termsPoints.length > 0 && (
+          <div className="bg-zinc-50 dark:bg-zinc-800/80 p-5 rounded-xl border border-zinc-200 dark:border-zinc-700 mt-6">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-white mb-3">Terms & Conditions</h3>
+            <div className="space-y-2 mb-4">
+              {termsPoints.map((term, index) => (
+                <div key={term.id} className="flex gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  <span className="whitespace-pre-wrap">{term.text}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-700">
+              <input type="checkbox" id="agreeTerms" name="agreeTerms" checked={formData.agreeTerms} onChange={handleInputChange} className="w-5 h-5 text-primary rounded focus:ring-primary" required />
+              <label htmlFor="agreeTerms" className="text-sm font-medium text-zinc-900 dark:text-white">I agree to the terms and conditions outlined above.</label>
+            </div>
+          </div>
+        )}
 
-        <button type="submit" className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 mt-4">
-          Submit Admission
-        </button>
+        {termsPoints.length === 0 && (
+          <div className="flex items-center gap-2 pt-4">
+            <input type="checkbox" id="agreeTerms" name="agreeTerms" checked={formData.agreeTerms} onChange={handleInputChange} className="w-5 h-5 text-primary rounded focus:ring-primary" required />
+            <label htmlFor="agreeTerms" className="text-sm text-zinc-600 dark:text-zinc-400">I agree to the terms and conditions.</label>
+          </div>
+        )}
+
+        <div className="flex gap-3 mt-4">
+          <button type="submit" onClick={async (e) => { e.preventDefault(); const inv = await submitAdmission(); if (inv) { showToast('Admission saved successfully!', 'success'); if (inv.id) sessionStorage.setItem('highlightInvoiceId', inv.id); setTimeout(() => { window.location.href = '/webapp?page=Invoices'; }, 500); } }} className="flex-1 bg-zinc-800 dark:bg-zinc-700 hover:bg-zinc-900 dark:hover:bg-zinc-600 text-white font-bold py-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5">
+            Save Admission
+          </button>
+          <button type="button" onClick={handleSaveAndShare} className="flex-[2] bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-2">
+            <span className="text-lg">💬</span> Save & Share via WhatsApp
+          </button>
+        </div>
       </form >
 
       <DuplicateModal
@@ -614,6 +730,7 @@ export function ReAdmission() {
   const [ptPricingMatrix, setPtPricingMatrix] = useState({});
   const [ptPlans, setPtPlans] = useState([]);
   const [enablePersonalTraining, setEnablePersonalTraining] = useState(false);
+  const [termsPoints, setTermsPoints] = useState([]);
 
   useEffect(() => {
     const init = async () => {
@@ -633,6 +750,16 @@ export function ReAdmission() {
         setFormData(prev => ({ ...prev, admissionPrice: s.reAdmissionFee }));
         if (settings.enablePersonalTraining) setEnablePersonalTraining(true);
       }
+
+      // Fetch Terms
+      try {
+        const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        const resTerms = await fetch('/api/terms?appliesTo=Re-Admission', {
+          headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName }
+        });
+        if (resTerms.ok) setTermsPoints(await resTerms.json());
+      } catch (e) { console.error('Failed to load terms', e); }
     };
     init();
   }, []);
@@ -762,8 +889,30 @@ export function ReAdmission() {
     if (formData.PlanPeriod && formData.DateOfReJoin) updateExpiryDate();
   }, [formData.PlanPeriod, formData.DateOfReJoin, formData.extraDays]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const buildReAdmissionInvoiceData = (responseData) => ({
+    ...formData,
+    ...responseData,
+    customerName: formData.Name,
+    customerWhatsapp: formData.Whatsapp,
+    customerPhone: formData.Mobile,
+    customerAddress: formData.Address,
+    Aadhaar: formData.Aadhaar,
+    clientNumber: formData.MembershipReceiptnumber,
+    invoiceDate: formData.DateOfReJoin,
+    total: formData.LastPaymentAmount,
+    paidAmount: formData.paidAmount,
+    billType: 'Re-Admission',
+    planType: formData.PlanType,
+    planPeriod: formData.PlanPeriod,
+    dateOfJoining: formData.DateOfReJoin,
+    expiryDate: formData.MembershipExpiryDate,
+    nextDueDate: formData.NextDuedate,
+    paymentMode: formData.paymentMode || 'CASH',
+    status: (formData.LastPaymentAmount || 0) - (formData.paidAmount || 0) > 0 ? 'PARTIAL' : 'PAID',
+  });
+
+  const submitReAdmission = async (e) => {
+    if (e) e.preventDefault();
     try {
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
       const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
@@ -778,10 +927,65 @@ export function ReAdmission() {
       const responseData = await response.json();
       if (!response.ok) throw new Error(responseData.error || `HTTP error! status: ${response.status}`);
 
-      showToast('Re-Admission successful!', 'success');
-      router.push("/webapp");
+      return responseData;
     } catch (error) {
       showToast(error.message, 'error');
+      return null;
+    }
+  };
+
+  const handleSaveAndShare = async (e) => {
+    e.preventDefault();
+
+    const invoiceData = await submitReAdmission(e);
+
+    if (invoiceData) {
+      try {
+        const branchDetails = await fetchBranchDetailsForInvoice();
+        const invoicePayload = buildReAdmissionInvoiceData(invoiceData);
+        const doc = generateInvoicePDF(invoicePayload, branchDetails, gymSettings, termsPoints);
+        const pdfBlob = doc.output('blob');
+
+        const template = await fetchWhatsAppTemplate('Re-Admission');
+        const renderedMsg = renderTemplate(template, {
+          ...invoicePayload,
+          gymName: branchDetails.gymName || localStorage.getItem('eztracker_jwt_gymName_control_token') || '',
+        });
+
+        const sharePhone = formData.Whatsapp || formData.Mobile;
+        await shareViaWhatsApp(sharePhone, pdfBlob, invoicePayload, renderedMsg);
+      } catch (err) {
+        console.error(err);
+        showToast('Failed to generate PDF for sharing', 'error');
+      }
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const inv = await submitReAdmission(e);
+    if (inv) {
+      // Generate PDF on normal save too
+      try {
+        const branchDetails = await fetchBranchDetailsForInvoice();
+        const invoicePayload = buildReAdmissionInvoiceData(inv);
+        const doc = generateInvoicePDF(invoicePayload, branchDetails, gymSettings, termsPoints);
+        const pdfBlob = doc.output('blob');
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Invoice_${formData.Name}_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+      } catch (pdfErr) {
+        console.error('PDF generation failed', pdfErr);
+      }
+
+      showToast('Re-Admission saved successfully!', 'success');
+      if (inv.id) sessionStorage.setItem('highlightInvoiceId', inv.id);
+      setTimeout(() => { window.location.href = '/webapp?page=Invoices'; }, 1500);
     }
   };
 
@@ -983,9 +1187,39 @@ export function ReAdmission() {
           </div>
         </div>
 
-        <button type="submit" className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 mt-4">
-          Submit Re-Admission
-        </button>
+        {/* Terms & Conditions Section */}
+        {termsPoints.length > 0 && (
+          <div className="bg-zinc-50 dark:bg-zinc-800/80 p-5 rounded-xl border border-zinc-200 dark:border-zinc-700 mt-6">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-white mb-3">Terms & Conditions</h3>
+            <div className="space-y-2 mb-4">
+              {termsPoints.map((term, index) => (
+                <div key={term.id} className="flex gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  <span className="whitespace-pre-wrap">{term.text}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-700">
+              <input type="checkbox" id="agreeTerms" name="agreeTerms" checked={formData.agreeTerms} onChange={handleInputChange} className="w-5 h-5 text-primary rounded focus:ring-primary" required />
+              <label htmlFor="agreeTerms" className="text-sm font-medium text-zinc-900 dark:text-white">I agree to the terms and conditions outlined above.</label>
+            </div>
+          </div>
+        )}
+
+        {termsPoints.length === 0 && (
+          <div className="flex items-center gap-2 pt-4">
+            <input type="checkbox" id="agreeTerms" name="agreeTerms" checked={formData.agreeTerms} onChange={handleInputChange} className="w-5 h-5 text-primary rounded focus:ring-primary" required />
+            <label htmlFor="agreeTerms" className="text-sm text-zinc-600 dark:text-zinc-400">I agree to the terms and conditions.</label>
+          </div>
+        )}
+
+        <div className="flex gap-3 mt-4">
+          <button type="submit" onClick={handleSubmit} className="flex-1 bg-zinc-800 dark:bg-zinc-700 hover:bg-zinc-900 dark:hover:bg-zinc-600 text-white font-bold py-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5">
+            Save Re-Admission
+          </button>
+          <button type="button" onClick={handleSaveAndShare} className="flex-[2] bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-2">
+            <span className="text-lg">💬</span> Save & Share via WhatsApp
+          </button>
+        </div>
       </form >
     </div >
   );
@@ -1010,6 +1244,8 @@ export function Renewal() {
   const [ptPlans, setPtPlans] = useState([]);
   const [enablePersonalTraining, setEnablePersonalTraining] = useState(false);
   const [dateFormat, setDateFormat] = useState('dd/MM/yyyy');
+  const [gymSettings, setGymSettings] = useState(null);
+  const [termsPoints, setTermsPoints] = useState([]);
 
   useEffect(() => {
     const init = async () => {
@@ -1019,8 +1255,21 @@ export function Renewal() {
       if (ptpm) setPtPricingMatrix(ptpm);
       if (ptList) setPtPlans(ptList);
       if (settings) {
+        setGymSettings(settings);
         if (settings.enablePersonalTraining) setEnablePersonalTraining(true);
         if (settings.dateFormat) setDateFormat(settings.dateFormat);
+      }
+
+      // Fetch Terms
+      try {
+        const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        const resTerms = await fetch('/api/terms?appliesTo=Renewal', {
+          headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName }
+        });
+        if (resTerms.ok) setTermsPoints(await resTerms.json());
+      } catch (e) {
+        console.error('Failed to load terms', e);
       }
     };
     init();
@@ -1140,8 +1389,30 @@ export function Renewal() {
     if (formData.PlanPeriod && formData.DateOfRenewal) updateExpiryDate();
   }, [formData.PlanPeriod, formData.DateOfRenewal, formData.extraDays]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const buildRenewalInvoiceData = (responseData) => ({
+    ...formData,
+    ...responseData,
+    customerName: formData.Name,
+    customerWhatsapp: formData.Whatsapp,
+    customerPhone: formData.Mobile,
+    customerAddress: formData.Address,
+    Aadhaar: formData.Aadhaar,
+    clientNumber: formData.MembershipReceiptnumber,
+    invoiceDate: formData.DateOfRenewal,
+    total: formData.LastPaymentAmount,
+    paidAmount: formData.paidAmount,
+    billType: 'Renewal',
+    planType: formData.PlanType,
+    planPeriod: formData.PlanPeriod,
+    dateOfJoining: formData.DateOfRenewal,
+    expiryDate: formData.MembershipExpiryDate,
+    nextDueDate: formData.NextDuedate,
+    paymentMode: formData.paymentMode || 'CASH',
+    status: (parseFloat(formData.LastPaymentAmount) || 0) - (parseFloat(formData.paidAmount) || 0) > 0 ? 'PARTIAL' : 'PAID',
+  });
+
+  const submitRenewal = async (e) => {
+    if (e) e.preventDefault();
     try {
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
       const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
@@ -1152,13 +1423,13 @@ export function Renewal() {
       if (!formData.PlanType) throw new Error('Plan is required.');
       if (!formData.PlanPeriod) throw new Error('Duration is required.');
 
-      // Map DateOfRenewal → LastPaymentDate so backend sets it correctly
       const payload = {
         ...formData,
         Billtype: 'Renewal',
         LastPaymentDate: formData.DateOfRenewal,
         DateOfReJoin: formData.DateOfRenewal,
-        RenewalReceiptNumber: formData.RenewalReceiptNumber
+        RenewalReceiptNumber: formData.RenewalReceiptNumber,
+        termsAndConditions: termsPoints
       };
 
       const response = await fetch('/api/members/renewal', {
@@ -1170,10 +1441,64 @@ export function Renewal() {
       const responseData = await response.json();
       if (!response.ok) throw new Error(responseData.detail || responseData.error || `HTTP error! status: ${response.status}`);
 
-      showToast('Renewal successful!', 'success');
-      router.push("/webapp");
+      return responseData;
     } catch (error) {
       showToast(error.message, 'error');
+      return null;
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    const inv = await submitRenewal(e);
+    if (inv) {
+      // Generate PDF on normal save
+      try {
+        const branchDetails = await fetchBranchDetailsForInvoice();
+        const invoicePayload = buildRenewalInvoiceData(inv);
+        const doc = generateInvoicePDF(invoicePayload, branchDetails, gymSettings, termsPoints);
+        const pdfBlob = doc.output('blob');
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Invoice_${formData.Name}_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+      } catch (pdfErr) {
+        console.error('PDF generation failed', pdfErr);
+      }
+
+      showToast('Renewal saved successfully!', 'success');
+      if (inv.id) sessionStorage.setItem('highlightInvoiceId', inv.id);
+      setTimeout(() => { window.location.href = '/webapp?page=Invoices'; }, 1500);
+    }
+  };
+
+  const handleSaveAndShare = async (e) => {
+    e.preventDefault();
+
+    const invoiceData = await submitRenewal(e);
+
+    if (invoiceData) {
+      try {
+        const branchDetails = await fetchBranchDetailsForInvoice();
+        const invoicePayload = buildRenewalInvoiceData(invoiceData);
+        const doc = generateInvoicePDF(invoicePayload, branchDetails, gymSettings, termsPoints);
+        const pdfBlob = doc.output('blob');
+
+        const template = await fetchWhatsAppTemplate('Renewal');
+        const renderedMsg = renderTemplate(template, {
+          ...invoicePayload,
+          gymName: branchDetails.gymName || localStorage.getItem('eztracker_jwt_gymName_control_token') || '',
+        });
+
+        const sharePhone = formData.Whatsapp || formData.Mobile;
+        await shareViaWhatsApp(sharePhone, pdfBlob, invoicePayload, renderedMsg);
+      } catch (err) {
+        console.error(err);
+        showToast('Failed to generate PDF for sharing', 'error');
+      }
     }
   };
 
@@ -1344,10 +1669,39 @@ export function Renewal() {
           </div>
         </div>
 
-        <button type="submit" className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 mt-4">
-          Submit Renewal
-        </button>
+        {/* Terms & Conditions Section */}
+        {termsPoints.length > 0 && (
+          <div className="bg-zinc-50 dark:bg-zinc-800/80 p-5 rounded-xl border border-zinc-200 dark:border-zinc-700 mt-6">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-white mb-3">Terms & Conditions</h3>
+            <div className="space-y-2 mb-4">
+              {termsPoints.map((term, index) => (
+                <div key={term.id} className="flex gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  <span className="whitespace-pre-wrap">{term.text}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-700">
+              <input type="checkbox" id="agreeTerms" name="agreeTerms" checked={formData.agreeTerms} onChange={handleInputChange} className="w-5 h-5 text-primary rounded focus:ring-primary" required />
+              <label htmlFor="agreeTerms" className="text-sm font-medium text-zinc-900 dark:text-white">I agree to the terms and conditions outlined above.</label>
+            </div>
+          </div>
+        )}
 
+        {termsPoints.length === 0 && (
+          <div className="flex items-center gap-2 pt-4">
+            <input type="checkbox" id="agreeTerms" name="agreeTerms" checked={formData.agreeTerms} onChange={handleInputChange} className="w-5 h-5 text-primary rounded focus:ring-primary" required />
+            <label htmlFor="agreeTerms" className="text-sm text-zinc-600 dark:text-zinc-400">I agree to the terms and conditions.</label>
+          </div>
+        )}
+
+        <div className="flex gap-3 mt-4">
+          <button type="submit" onClick={handleSubmit} className="flex-1 bg-zinc-800 dark:bg-zinc-700 hover:bg-zinc-900 dark:hover:bg-zinc-600 text-white font-bold py-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5">
+            Save Renewal
+          </button>
+          <button type="button" onClick={handleSaveAndShare} className="flex-[2] bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-2">
+            <span className="text-lg">💬</span> Save & Share via WhatsApp
+          </button>
+        </div>
       </form>
     </div>
   );
@@ -1382,8 +1736,26 @@ export function ProteinBilling() {
     };
   };
 
+  const [termsPoints, setTermsPoints] = useState([]);
+  const [gymSettings, setGymSettings] = useState(null);
+
   useEffect(() => {
     fetchProteins();
+    const fetchTermsAndSettings = async () => {
+      try {
+        const headers = getAuthHeaders();
+        const [settingsRes, termsRes] = await Promise.all([
+          fetch('/api/settings', { headers }),
+          fetch('/api/terms?appliesTo=Protein', { headers })
+        ]);
+
+        if (settingsRes.ok) setGymSettings(await settingsRes.json());
+        if (termsRes.ok) setTermsPoints(await termsRes.json());
+      } catch (e) {
+        console.error('Failed to fetch settings/terms', e);
+      }
+    };
+    fetchTermsAndSettings();
   }, []);
 
   const fetchProteins = async () => {
@@ -1466,11 +1838,11 @@ export function ProteinBilling() {
 
   const pendingBalance = total - (parseFloat(formData.paidAmount) || 0);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const submitProteinBill = async (e) => {
+    if (e) e.preventDefault();
     if (selectedItems.length === 0) {
       showToast('Please add at least one product', 'error');
-      return;
+      return null;
     }
     setLoading(true);
     try {
@@ -1481,6 +1853,7 @@ export function ProteinBilling() {
 
       const invoiceData = {
         customerName: formData.customerName,
+        customerWhatsapp: formData.customerWhatsapp,
         invoiceType: 'Protein',
         items: selectedItems.map(i => ({
           description: `${i.brand} - ${i.productName}${i.flavour ? ' (' + i.flavour + ')' : ''}${i.weight ? ' - ' + i.weight : ''}`,
@@ -1492,7 +1865,8 @@ export function ProteinBilling() {
         discount: parseFloat(discount) || 0,
         status: status,
         paymentMode: formData.paymentMode,
-        paidAmount: paidAmt
+        paidAmount: paidAmt,
+        termsAndConditions: termsPoints
       };
 
       const res = await fetch('/api/invoices', {
@@ -1500,6 +1874,8 @@ export function ProteinBilling() {
         headers: getAuthHeaders(),
         body: JSON.stringify(invoiceData)
       });
+
+      const resData = await res.json();
 
       if (res.ok) {
         // Update stock quantities
@@ -1509,18 +1885,94 @@ export function ProteinBilling() {
             headers: getAuthHeaders()
           });
         }
-        showToast('Protein sale recorded!', 'success');
-        setSelectedItems([]);
-        setHighlightedProduct(null);
-        setDiscount(0);
-        setFormData({ customerName: '', customerPhone: '', paymentMode: 'CASH', paymentStatus: 'PAID', paidAmount: '', remarks: '' });
+
+        return resData;
       } else {
-        throw new Error('Failed to create invoice');
+        throw new Error(resData.error || 'Failed to create invoice');
       }
     } catch (error) {
       showToast(error.message, 'error');
+      return null;
     } finally {
       setLoading(false);
+    }
+  };
+
+  const buildProteinInvoiceData = (responseData) => ({
+    ...formData,
+    ...responseData,
+    customerName: formData.customerName,
+    customerWhatsapp: formData.customerWhatsapp,
+    invoiceDate: new Date().toISOString(),
+    total: total,
+    paidAmount: formData.paidAmount,
+    billType: 'Protein',
+    paymentMode: formData.paymentMode || 'CASH',
+    status: responseData.status || 'PAID',
+  });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const inv = await submitProteinBill(e);
+    if (inv) {
+      // Generate PDF on normal save
+      try {
+        const branchDetails = await fetchBranchDetailsForInvoice();
+        const invoicePayload = buildProteinInvoiceData(inv);
+        const doc = generateInvoicePDF(invoicePayload, branchDetails, gymSettings, termsPoints);
+        const pdfBlob = doc.output('blob');
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Invoice_${formData.customerName}_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+      } catch (pdfErr) {
+        console.error('PDF generation failed', pdfErr);
+      }
+
+      showToast('Protein sale recorded!', 'success');
+      setSelectedItems([]);
+      setHighlightedProduct(null);
+      setDiscount(0);
+      setFormData({ customerName: '', customerWhatsapp: '', paymentMode: 'CASH', paymentStatus: 'PAID', paidAmount: '', remarks: '' });
+      if (inv.id) sessionStorage.setItem('highlightInvoiceId', inv.id);
+      setTimeout(() => { window.location.href = '/webapp?page=Invoices'; }, 1500);
+    }
+  };
+
+  const handleSaveAndShare = async (e) => {
+    e.preventDefault();
+    const invoiceData = await submitProteinBill(e);
+
+    if (invoiceData) {
+      try {
+        const branchDetails = await fetchBranchDetailsForInvoice();
+        const invoicePayload = buildProteinInvoiceData(invoiceData);
+        const doc = generateInvoicePDF(invoicePayload, branchDetails, gymSettings, termsPoints);
+        const pdfBlob = doc.output('blob');
+
+        if (formData.customerWhatsapp) {
+          const template = await fetchWhatsAppTemplate('Protein');
+          const renderedMsg = renderTemplate(template, {
+            ...invoicePayload,
+            gymName: branchDetails.gymName || localStorage.getItem('eztracker_jwt_gymName_control_token') || '',
+          });
+          await shareViaWhatsApp(formData.customerWhatsapp, pdfBlob, invoicePayload, renderedMsg);
+        }
+
+        setSelectedItems([]);
+        setHighlightedProduct(null);
+        setDiscount(0);
+        setFormData({ customerName: '', customerWhatsapp: '', paymentMode: 'CASH', paymentStatus: 'PAID', paidAmount: '', remarks: '' });
+        if (invoiceData.id) sessionStorage.setItem('highlightInvoiceId', invoiceData.id);
+        setTimeout(() => { window.location.href = '/webapp?page=Invoices'; }, 2000);
+      } catch (err) {
+        console.error(err);
+        showToast('Failed to generate PDF for sharing', 'error');
+      }
     }
   };
 
@@ -1542,12 +1994,12 @@ export function ProteinBilling() {
             <div className="relative">
               <div className="grid grid-cols-1 md:grid-cols-2 mb-6 gap-6">
                 <div>
-                  <label className={labelStyle}>Customer Name</label>
-                  <input type="text" name="customerName" value={formData.customerName} onChange={handleChange} placeholder="Customer name" className={inputStyle} required />
+                  <label className={labelStyle}>Customer Name <span className="text-rose-500">*</span></label>
+                  <input type="text" name="customerName" value={formData.customerName} onChange={handleChange} placeholder="Customer name" className={inputStyle} required pattern="[A-Za-z\s]{2,}" title="Name must contain at least 2 letters" />
                 </div>
                 <div>
-                  <label className={labelStyle}>Phone</label>
-                  <input type="tel" name="customerPhone" value={formData.customerPhone} onChange={handleChange} placeholder="Phone number" className={inputStyle} />
+                  <label className={labelStyle}>WhatsApp Number</label>
+                  <input type="tel" name="customerWhatsapp" value={formData.customerWhatsapp} onChange={handleChange} placeholder="WhatsApp number" className={inputStyle} pattern="[0-9]{10}" title="WhatsApp must be exactly 10 digits" maxLength="10" />
                 </div>
               </div>
               <label className={labelStyle}>Search & Select Product</label>
@@ -1798,12 +2250,31 @@ export function ProteinBilling() {
                 )}
               </div>
             </div>
+
+            {/* Terms & Conditions Section */}
+            {termsPoints.length > 0 && (
+              <div className="bg-zinc-50 dark:bg-zinc-800/80 p-5 rounded-xl border border-zinc-200 dark:border-zinc-700 mt-6">
+                <h3 className="text-sm font-bold text-zinc-900 dark:text-white mb-3">Terms & Conditions</h3>
+                <div className="space-y-2 mb-4">
+                  {termsPoints.map((term, index) => (
+                    <div key={term.id} className="flex gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                      <span className="whitespace-pre-wrap">{term.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        <button type="submit" disabled={loading || selectedItems.length === 0} className="w-full bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 disabled:opacity-50">
-          {loading ? 'Processing...' : formData.paymentStatus === 'PAID' ? `Complete Sale (₹${total.toLocaleString()})` : formData.paymentStatus === 'PARTIAL' ? `Complete Sale — Paying ₹${(parseFloat(formData.paidAmount) || 0).toLocaleString()} of ₹${total.toLocaleString()}` : `Record Sale (₹${total.toLocaleString()} — Unpaid)`}
-        </button>
+        <div className="flex gap-3 mt-4">
+          <button type="button" onClick={handleSubmit} disabled={loading || selectedItems.length === 0} className="flex-1 bg-zinc-800 dark:bg-zinc-700 hover:bg-zinc-900 dark:hover:bg-zinc-600 text-white font-bold py-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5 disabled:opacity-50">
+            {loading ? 'Processing...' : formData.paymentStatus === 'PAID' ? `Complete Sale (₹${total.toLocaleString()})` : formData.paymentStatus === 'PARTIAL' ? `Complete Sale — Paying ₹${(parseFloat(formData.paidAmount) || 0).toLocaleString()} of ₹${total.toLocaleString()}` : `Record Sale (₹${total.toLocaleString()} — Unpaid)`}
+          </button>
+          <button type="button" onClick={handleSaveAndShare} disabled={loading || selectedItems.length === 0} className="flex-[2] bg-primary hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-2 disabled:opacity-50">
+            <span className="text-lg">💬</span> Save & Share via WhatsApp
+          </button>
+        </div>
       </form>
     </div>
   );
@@ -1894,7 +2365,7 @@ export function Expenses() {
           </div>
 
           <div>
-            <label className={labelStyle}>Category</label>
+            <label className={labelStyle}>Category <span className="text-rose-500">*</span></label>
             <select name="category" value={formData.category} onChange={handleChange} className={selectStyle} required>
               <option value="" disabled>Select category</option>
               {categories.map(cat => (
@@ -1904,12 +2375,12 @@ export function Expenses() {
           </div>
 
           <div>
-            <label className={labelStyle}>Amount (₹)</label>
-            <input type="number" name="amount" value={formData.amount} onChange={handleChange} placeholder="Enter amount" className={inputStyle} required />
+            <label className={labelStyle}>Amount (₹) <span className="text-rose-500">*</span></label>
+            <input type="number" name="amount" value={formData.amount} onChange={handleChange} placeholder="Enter amount" className={inputStyle} required min="1" title="Amount must be greater than 0" />
           </div>
 
           <div>
-            <label className={labelStyle}>Date</label>
+            <label className={labelStyle}>Date <span className="text-rose-500">*</span></label>
             <input type="date" name="date" value={formData.date} onChange={handleChange} className={inputStyle} required />
           </div>
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useToast } from "@/context/ToastContext";
-import { Save, Settings, DollarSign, Bell, Package, FileText, Plus, Trash2, Dumbbell } from 'lucide-react';
+import { Save, Settings, DollarSign, Bell, Package, FileText, Plus, Trash2, Dumbbell, Pencil, Check, Building2, MessageSquare, Upload, Image as ImageIcon } from 'lucide-react';
 import AddPlanModal from './components/AddPlanModal';
 import ConfirmModal from './components/ConfirmModal';
 
@@ -61,21 +61,47 @@ export default function AdminSettings() {
     const [ptPricingMatrix, setPtPricingMatrix] = useState({});
     const [initialPtPricingMatrix, setInitialPtPricingMatrix] = useState({});
 
+    // Terms & Conditions
+    const [terms, setTerms] = useState([]);
+    const [isEditingTerm, setIsEditingTerm] = useState(null);
+    const [termForm, setTermForm] = useState({ text: '', appliesTo: [] });
+
+    // Gym Details
+    const [gymDetails, setGymDetails] = useState({
+        gymName: '', phone: '', whatsapp: '', email: '',
+        slogan: '', website: '', address: '', city: '', state: '', pincode: '',
+    });
+    const [gymLogoPreview, setGymLogoPreview] = useState(null);
+    const [gymLogoFile, setGymLogoFile] = useState(null);
+    const [savingGymDetails, setSavingGymDetails] = useState(false);
+
+    // WhatsApp Templates
+    const [waTemplates, setWaTemplates] = useState([]);
+    const [activeTemplateType, setActiveTemplateType] = useState('Admission');
+    const [editingTemplate, setEditingTemplate] = useState('');
+    const [savingTemplate, setSavingTemplate] = useState(false);
+    const [templatePreview, setTemplatePreview] = useState('');
+
     const tabs = [
+        { id: 'gymDetails', label: 'Gym Details', icon: Building2 },
         { id: 'general', label: 'General', icon: Settings },
         { id: 'gst', label: 'GST & Tax', icon: FileText },
         { id: 'pricing', label: 'Member Pricing', icon: DollarSign },
         { id: 'ptPricing', label: 'PT Pricing', icon: Dumbbell },
-        // Removed Protein Pricing tab as pricing will be managed per-supplement
         { id: 'billing', label: 'Billing', icon: FileText },
         { id: 'stock', label: 'Stock Settings', icon: Package },
         { id: 'notifications', label: 'Notifications', icon: Bell },
+        { id: 'terms', label: 'Terms & Conditions', icon: FileText },
+        { id: 'whatsapp', label: 'WhatsApp', icon: MessageSquare },
     ];
 
     useEffect(() => {
         fetchSettings();
         fetchPricingMatrix();
         fetchPtPricingMatrix();
+        fetchTerms();
+        fetchGymDetails();
+        fetchWaTemplates();
     }, []);
 
     const getAuthHeaders = () => {
@@ -132,8 +158,158 @@ export default function AdminSettings() {
         }
     };
 
+    const fetchTerms = async () => {
+        try {
+            const res = await fetch('/api/terms', { headers: getAuthHeaders() });
+            if (res.ok) setTerms(await res.json());
+        } catch (e) {
+            console.error('Failed to load terms', e);
+        }
+    };
+
     const fetchProteinDefaults = async () => {
         // deprecated: protein defaults managed per-supplement now
+    };
+
+    // ---- Gym Details ----
+    const fetchGymDetails = async () => {
+        try {
+            const res = await fetch('/api/branch-details', { headers: getAuthHeaders() });
+            if (res.ok) {
+                const data = await res.json();
+                setGymDetails({
+                    gymName: data.gymName || '',
+                    phone: data.phone || '',
+                    whatsapp: data.whatsapp || '',
+                    email: data.email || '',
+                    slogan: data.slogan || '',
+                    website: data.website || '',
+                    address: data.address || '',
+                    city: data.city || '',
+                    state: data.state || '',
+                    pincode: data.pincode || '',
+                });
+                if (data.hasLogo) {
+                    const headers = getAuthHeaders();
+                    delete headers['Content-Type'];
+                    setGymLogoPreview(`/api/branch-details/logo?t=${Date.now()}`);
+                }
+            }
+        } catch (e) {
+            console.error('Failed to load gym details', e);
+        }
+    };
+
+    const handleGymDetailsChange = (e) => {
+        setGymDetails(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    };
+
+    const handleLogoSelect = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+            showToast('Only PNG, JPEG, or WebP images are allowed', 'error');
+            return;
+        }
+        setGymLogoFile(file);
+        setGymLogoPreview(URL.createObjectURL(file));
+    };
+
+    const handleSaveGymDetails = async () => {
+        setSavingGymDetails(true);
+        try {
+            // Save details
+            const res = await fetch('/api/branch-details', {
+                method: 'PUT',
+                headers: getAuthHeaders(),
+                body: JSON.stringify(gymDetails)
+            });
+            if (!res.ok) throw new Error('Failed to save');
+
+            // Upload logo if selected
+            if (gymLogoFile) {
+                const formData = new FormData();
+                formData.append('file', gymLogoFile);
+                const token = localStorage.getItem('eztracker_jwt_access_control_token');
+                const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+                const logoRes = await fetch('/api/branch-details/logo', {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        'X-Database-Name': dbName,
+                    },
+                    body: formData
+                });
+                if (!logoRes.ok) throw new Error('Failed to upload logo');
+                setGymLogoFile(null);
+            }
+
+            showToast('Gym details saved successfully', 'success');
+        } catch (e) {
+            showToast(e.message || 'Failed to save gym details', 'error');
+        } finally {
+            setSavingGymDetails(false);
+        }
+    };
+
+    // ---- WhatsApp Templates ----
+    const fetchWaTemplates = async () => {
+        try {
+            const res = await fetch('/api/whatsapp-templates', { headers: getAuthHeaders() });
+            if (res.ok) {
+                const data = await res.json();
+                setWaTemplates(data);
+                const active = data.find(t => t.templateType === activeTemplateType);
+                if (active) setEditingTemplate(active.messageTemplate);
+            }
+        } catch (e) {
+            console.error('Failed to load WhatsApp templates', e);
+        }
+    };
+
+    useEffect(() => {
+        const active = waTemplates.find(t => t.templateType === activeTemplateType);
+        if (active) {
+            setEditingTemplate(active.messageTemplate);
+        }
+    }, [activeTemplateType, waTemplates]);
+
+    // Live preview
+    useEffect(() => {
+        const gymName = gymDetails.gymName || 'Your Gym';
+        let rendered = editingTemplate
+            .replace(/{customerName}/g, 'John Doe')
+            .replace(/{gymName}/g, gymName)
+            .replace(/{total}/g, '3,000')
+            .replace(/{paidAmount}/g, '3,000')
+            .replace(/{balance}/g, '0')
+            .replace(/{planType}/g, 'Strength')
+            .replace(/{planPeriod}/g, 'Monthly')
+            .replace(/{date}/g, new Date().toLocaleDateString())
+            .replace(/{paymentMode}/g, 'CASH')
+            .replace(/{branchName}/g, 'Main Branch');
+        setTemplatePreview(rendered);
+    }, [editingTemplate, gymDetails.gymName]);
+
+    const handleSaveTemplate = async () => {
+        setSavingTemplate(true);
+        try {
+            const res = await fetch(`/api/whatsapp-templates/${activeTemplateType}`, {
+                method: 'PUT',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ messageTemplate: editingTemplate })
+            });
+            if (res.ok) {
+                showToast('Template saved successfully', 'success');
+                fetchWaTemplates();
+            } else {
+                showToast('Failed to save template', 'error');
+            }
+        } catch (e) {
+            showToast('Failed to save template', 'error');
+        } finally {
+            setSavingTemplate(false);
+        }
     };
 
     const handleChange = (e) => {
@@ -260,6 +436,62 @@ export default function AdminSettings() {
                 [period]: { ...(prev[plan]?.[period] || {}), price: parseFloat(value) || 0 }
             }
         }));
+    };
+
+    const handleEditTerm = (term) => {
+        setIsEditingTerm(term.id);
+        setTermForm({ text: term.text, appliesTo: term.appliesTo });
+    };
+
+    const handleCancelEditTerm = () => {
+        setIsEditingTerm(null);
+        setTermForm({ text: '', appliesTo: [] });
+    };
+
+    const handleSaveTerm = async () => {
+        if (!termForm.text || termForm.appliesTo.length === 0) {
+            showToast('Text and at least one billing page are required', 'error');
+            return;
+        }
+        try {
+            const method = isEditingTerm ? 'PUT' : 'POST';
+            const url = isEditingTerm ? `/api/terms/${isEditingTerm}` : '/api/terms';
+            const res = await fetch(url, {
+                method,
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ ...termForm, isActive: true })
+            });
+            if (res.ok) {
+                fetchTerms();
+                handleCancelEditTerm();
+                showToast(isEditingTerm ? 'Term updated' : 'Term added', 'success');
+            } else {
+                showToast('Failed to save term', 'error');
+            }
+        } catch (e) {
+            showToast('Failed to save term', 'error');
+        }
+    };
+
+    const handleDeleteTerm = async (id) => {
+        setConfirmModal({
+            isOpen: true,
+            title: 'Delete Term',
+            message: 'Are you sure you want to delete this term?',
+            action: async () => {
+                try {
+                    const res = await fetch(`/api/terms/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
+                    if (res.ok) {
+                        fetchTerms();
+                        showToast('Term deleted', 'success');
+                    } else {
+                        showToast('Failed to delete term', 'error');
+                    }
+                } catch (e) {
+                    showToast('Failed to delete term', 'error');
+                }
+            }
+        });
     };
 
     // Removed individual save handlers as we now have a global save
@@ -861,6 +1093,258 @@ export default function AdminSettings() {
                                 <p className="text-xs text-zinc-500 mt-1">Show reminder button this many days before expiry</p>
                             </div>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* Terms & Conditions Tab */}
+            {activeTab === 'terms' && (
+                <div className={cardStyle}>
+                    <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">Terms & Conditions Management</h2>
+                    <p className="text-sm text-zinc-500 mb-6">Manage terms that appear on different billing pages and invoices. You can specify which billing type each term applies to.</p>
+
+                    <div className="bg-zinc-50 dark:bg-zinc-800/50 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700 mb-6">
+                        <h3 className="text-sm font-bold text-zinc-900 dark:text-white mb-3">{isEditingTerm ? 'Edit Term' : 'Add New Term'}</h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className={labelStyle}>Term Text</label>
+                                <textarea
+                                    value={termForm.text}
+                                    onChange={e => setTermForm({ ...termForm, text: e.target.value })}
+                                    className={inputStyle}
+                                    rows={3}
+                                    placeholder="Enter term conditions here..."
+                                />
+                            </div>
+                            <div>
+                                <div>
+                                    <label className={labelStyle}>Applies To</label>
+                                    <div className="flex flex-wrap gap-3 mt-2">
+                                        {['Admission', 'Re-Admission', 'Renewal', 'Protein'].map(page => (
+                                            <label key={page} className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={termForm.appliesTo.includes(page)}
+                                                    onChange={(e) => {
+                                                        const newAppliesTo = e.target.checked
+                                                            ? [...termForm.appliesTo, page]
+                                                            : termForm.appliesTo.filter(p => p !== page);
+                                                        setTermForm({ ...termForm, appliesTo: newAppliesTo });
+                                                    }}
+                                                    className="w-4 h-4 text-primary rounded focus:ring-primary"
+                                                />
+                                                {page}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2">
+                                {isEditingTerm && (
+                                    <button
+                                        onClick={handleCancelEditTerm}
+                                        className="px-4 py-2 text-sm font-bold bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-700"
+                                    >
+                                        Cancel
+                                    </button>
+                                )}
+                                <button
+                                    onClick={handleSaveTerm}
+                                    disabled={!termForm.text || termForm.appliesTo.length === 0}
+                                    className="px-4 py-2 text-sm font-bold bg-primary hover:bg-teal-700 text-white rounded-lg flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    {isEditingTerm ? <><Check size={16} /> Update Term</> : <><Plus size={16} /> Add Term</>}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full border-collapse">
+                            <thead>
+                                <tr className="bg-zinc-50 dark:bg-zinc-800">
+                                    <th className="px-4 py-3 text-left text-xs font-bold text-zinc-500 uppercase">Term Text</th>
+                                    <th className="px-4 py-3 text-left text-xs font-bold text-zinc-500 uppercase w-48">Applies To</th>
+                                    <th className="px-4 py-3 text-center text-xs font-bold text-zinc-500 uppercase w-24">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {terms.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="3" className="px-4 py-8 text-center text-sm text-zinc-500">No terms configured yet.</td>
+                                    </tr>
+                                ) : (
+                                    terms.map(term => (
+                                        <tr key={term.id} className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/30">
+                                            <td className="px-4 py-3 text-sm text-zinc-900 dark:text-white whitespace-pre-wrap">{term.text}</td>
+                                            <td className="px-4 py-3">
+                                                <div className="flex flex-wrap gap-1">
+                                                    {term.appliesTo.map(page => (
+                                                        <span key={page} className="px-2 py-0.5 text-[10px] font-bold bg-primary/10 text-primary rounded-full uppercase tracking-wider">
+                                                            {page}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3 text-center text-sm">
+                                                <div className="flex justify-center gap-2">
+                                                    <button onClick={() => handleEditTerm(term)} className="p-1 text-zinc-400 hover:text-primary transition-colors">
+                                                        <Pencil size={15} />
+                                                    </button>
+                                                    <button onClick={() => handleDeleteTerm(term.id)} className="p-1 text-zinc-400 hover:text-rose-500 transition-colors">
+                                                        <Trash2 size={15} />
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Gym Details Tab */}
+            {activeTab === 'gymDetails' && (
+                <div className={cardStyle}>
+                    <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">Gym / Business Details</h2>
+                    <p className="text-sm text-zinc-500 mb-6">These details appear on invoices, receipts, and WhatsApp messages.</p>
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* Logo Section */}
+                        <div className="flex flex-col items-center gap-4">
+                            <div className="w-32 h-32 rounded-xl border-2 border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center overflow-hidden bg-zinc-50 dark:bg-zinc-800">
+                                {gymLogoPreview ? (
+                                    <img src={gymLogoPreview} alt="Logo" className="w-full h-full object-contain" />
+                                ) : (
+                                    <ImageIcon size={40} className="text-zinc-300" />
+                                )}
+                            </div>
+                            <label className="cursor-pointer flex items-center gap-2 px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-sm font-medium transition-colors">
+                                <Upload size={16} />
+                                {gymLogoFile ? 'Change Logo' : 'Upload Logo'}
+                                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleLogoSelect} />
+                            </label>
+                            {gymLogoFile && <span className="text-xs text-primary">{gymLogoFile.name}</span>}
+                        </div>
+
+                        {/* Details Fields */}
+                        <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className={labelStyle}>Gym Name <span className="text-rose-500">*</span></label>
+                                <input name="gymName" value={gymDetails.gymName} onChange={handleGymDetailsChange} className={inputStyle} placeholder="Your gym name" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>Phone</label>
+                                <input name="phone" value={gymDetails.phone} onChange={handleGymDetailsChange} className={inputStyle} placeholder="Phone number" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>WhatsApp</label>
+                                <input name="whatsapp" value={gymDetails.whatsapp} onChange={handleGymDetailsChange} className={inputStyle} placeholder="WhatsApp number" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>Email</label>
+                                <input name="email" value={gymDetails.email} onChange={handleGymDetailsChange} className={inputStyle} placeholder="Email address" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>Slogan / Tagline</label>
+                                <input name="slogan" value={gymDetails.slogan} onChange={handleGymDetailsChange} className={inputStyle} placeholder="e.g. Train Hard, Stay Fit" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>Website</label>
+                                <input name="website" value={gymDetails.website} onChange={handleGymDetailsChange} className={inputStyle} placeholder="https://" />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className={labelStyle}>Address</label>
+                                <input name="address" value={gymDetails.address} onChange={handleGymDetailsChange} className={inputStyle} placeholder="Full address" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>City</label>
+                                <input name="city" value={gymDetails.city} onChange={handleGymDetailsChange} className={inputStyle} placeholder="City" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>State</label>
+                                <input name="state" value={gymDetails.state} onChange={handleGymDetailsChange} className={inputStyle} placeholder="State" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>Pincode</label>
+                                <input name="pincode" value={gymDetails.pincode} onChange={handleGymDetailsChange} className={inputStyle} placeholder="Pincode" />
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex justify-end mt-6">
+                        <button onClick={handleSaveGymDetails} disabled={savingGymDetails} className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white bg-primary hover:bg-teal-700 shadow-md transition-all disabled:opacity-50">
+                            <Save size={16} />
+                            {savingGymDetails ? 'Saving...' : 'Save Gym Details'}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* WhatsApp Templates Tab */}
+            {activeTab === 'whatsapp' && (
+                <div className={cardStyle}>
+                    <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">WhatsApp Message Templates</h2>
+                    <p className="text-sm text-zinc-500 mb-6">Customize the greeting message sent with invoice PDFs for each billing type.</p>
+
+                    {/* Template Type Selector */}
+                    <div className="flex gap-2 mb-6 flex-wrap">
+                        {['Admission', 'Re-Admission', 'Renewal', 'Protein'].map(type => (
+                            <button
+                                key={type}
+                                onClick={() => setActiveTemplateType(type)}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTemplateType === type
+                                    ? 'bg-primary text-white shadow-md'
+                                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700'}`}
+                            >
+                                {type}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Editor */}
+                        <div>
+                            <label className={labelStyle}>Message Template</label>
+                            <textarea
+                                value={editingTemplate}
+                                onChange={(e) => setEditingTemplate(e.target.value)}
+                                rows={6}
+                                className={inputStyle + ' resize-none font-mono'}
+                                placeholder="Type your WhatsApp message template here..."
+                            />
+                            <div className="mt-3">
+                                <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2">Available Placeholders (click to insert):</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {['{customerName}', '{gymName}', '{total}', '{paidAmount}', '{balance}', '{planType}', '{planPeriod}', '{date}', '{paymentMode}', '{branchName}'].map(ph => (
+                                        <button
+                                            key={ph}
+                                            type="button"
+                                            onClick={() => setEditingTemplate(prev => prev + ' ' + ph)}
+                                            className="px-2 py-1 text-[11px] font-mono bg-primary/10 text-primary rounded-md hover:bg-primary/20 transition-colors cursor-pointer"
+                                        >
+                                            {ph}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Live Preview */}
+                        <div>
+                            <label className={labelStyle}>Live Preview</label>
+                            <div className="bg-[#DCF8C6] dark:bg-[#005C4B] rounded-xl p-4 min-h-[160px] text-sm text-zinc-900 dark:text-white whitespace-pre-wrap shadow-inner">
+                                {templatePreview || <span className="text-zinc-400 italic">Preview will appear here...</span>}
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-2">This is how the message will appear in WhatsApp (with actual customer data).</p>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end mt-6">
+                        <button onClick={handleSaveTemplate} disabled={savingTemplate} className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white bg-primary hover:bg-teal-700 shadow-md transition-all disabled:opacity-50">
+                            <Save size={16} />
+                            {savingTemplate ? 'Saving...' : 'Save Template'}
+                        </button>
                     </div>
                 </div>
             )}

@@ -32,6 +32,8 @@ export default function WebappSidebar({ clickedBUTTON }) {
   const [openDropdown, setOpenDropdown] = useState(null);
   const [userRole, setUserRole] = useState(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [gymInfo, setGymInfo] = useState({ gymName: 'EZTRACK', slogan: '' });
+  const [gymLogoUrl, setGymLogoUrl] = useState(null);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -54,7 +56,37 @@ export default function WebappSidebar({ clickedBUTTON }) {
         console.error("Failed to fetch user role", e);
       }
     };
+
+    const fetchGymDetails = async () => {
+      try {
+        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        if (!token) return;
+
+        const res = await fetch('/api/branch-details', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-Database-Name': dbName,
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setGymInfo({
+            gymName: data.gymName || 'EZTRACK',
+            slogan: data.slogan || '',
+          });
+          if (data.hasLogo) {
+            setGymLogoUrl(`/api/branch-details/logo?t=${Date.now()}`);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch gym details", e);
+      }
+    };
+
     fetchUser();
+    fetchGymDetails();
   }, []);
 
   const baseItems = [
@@ -166,14 +198,19 @@ export default function WebappSidebar({ clickedBUTTON }) {
         {!isCollapsed && (
           <div className="flex items-center overflow-hidden">
             <div className="w-8 h-8 rounded bg-primary flex items-center justify-center text-white mr-3 overflow-hidden shrink-0">
-              {/* Use uploaded logo or fallback icon */}
-              <Image src={logo} alt="FlexFlow" width={32} height={32} className="object-cover relative" />
+              {gymLogoUrl ? (
+                <img src={gymLogoUrl} alt={gymInfo.gymName} width={32} height={32} className="object-cover w-full h-full" />
+              ) : (
+                <Image src={logo} alt={gymInfo.gymName} width={32} height={32} className="object-cover relative" />
+              )}
             </div>
             <div className="overflow-hidden">
-              <h1 className="font-bold text-lg tracking-tight text-zinc-900 dark:text-white truncate">Rmg</h1>
-              <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold flex items-center gap-1 truncate">
-                Enterprise
-              </p>
+              <h1 className="font-bold text-lg tracking-tight text-zinc-900 dark:text-white truncate">{gymInfo.gymName}</h1>
+              {gymInfo.slogan && (
+                <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold flex items-center gap-1 truncate">
+                  {gymInfo.slogan}
+                </p>
+              )}
             </div>
           </div>
         )}

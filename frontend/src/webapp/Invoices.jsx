@@ -6,10 +6,12 @@ import {
     ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
     User, Phone, CreditCard, CheckCircle, Clock, AlertCircle,
     Calendar, Package, Hash, Dumbbell, MapPin, Activity,
-    ExternalLink, ArrowRight, ShieldCheck, Flame
+    ExternalLink, ArrowRight, ShieldCheck, Flame, Download, Send
 } from 'lucide-react';
 import ImportDataModal from './components/ImportDataModal';
 import ConfirmModal from './components/ConfirmModal';
+import { generateInvoicePDF } from './utils/generateInvoicePDF';
+import { shareViaWhatsApp } from './utils/whatsappShare';
 
 const cardStyle = "bg-surface-light dark:bg-surface-dark p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm";
 
@@ -365,18 +367,65 @@ function InvoiceDetailModal({ invoice, onClose, onNavigateToMember, onRefresh })
                 </div>
 
                 {/* Footer */}
-                <div className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 flex gap-3 flex-shrink-0">
+                <div className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 flex gap-3 flex-shrink-0 flex-wrap">
+                    <button
+                        onClick={() => {
+                            try {
+                                const doc = generateInvoicePDF({
+                                    ...invoice,
+                                    customerName: invoice.customerName || member?.Name,
+                                    customerWhatsapp: member?.Whatsapp,
+                                    customerPhone: member?.Mobile,
+                                }, {}, []);
+                                doc.save(`Invoice_${invoice.customerName || 'Customer'}_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`);
+                                showToast('Invoice PDF downloaded!', 'success');
+                            } catch (err) {
+                                console.error(err);
+                                showToast('Failed to generate PDF', 'error');
+                            }
+                        }}
+                        className="flex-1 flex items-center justify-center gap-2 py-2.5 border-2 border-primary text-primary font-bold rounded-xl hover:bg-primary/5 transition-colors text-sm"
+                    >
+                        <Download size={16} /> Download PDF
+                    </button>
+                    <button
+                        onClick={() => {
+                            const phone = member?.Whatsapp || member?.Mobile || invoice.customerWhatsapp;
+                            if (!phone) { showToast('No phone number found for this customer', 'error'); return; }
+                            try {
+                                const doc = generateInvoicePDF({
+                                    ...invoice,
+                                    customerName: invoice.customerName || member?.Name,
+                                    customerWhatsapp: phone,
+                                }, {}, []);
+                                const pdfBlob = doc.output('blob');
+                                shareViaWhatsApp(phone, pdfBlob, {
+                                    customerName: invoice.customerName || member?.Name,
+                                    total: invoice.total,
+                                    paidAmount: paidAmount,
+                                    editReason: invoice.editReason,
+                                });
+                                showToast('Opening WhatsApp...', 'success');
+                            } catch (err) {
+                                console.error(err);
+                                showToast('Failed to share via WhatsApp', 'error');
+                            }
+                        }}
+                        className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-colors text-sm"
+                    >
+                        <Send size={16} /> Share via WhatsApp
+                    </button>
                     {invoice.memberId && onNavigateToMember && (
                         <button
                             onClick={() => { onNavigateToMember(invoice, invType); onClose(); }}
-                            className="flex-1 flex items-center justify-center gap-2 py-2.5 border-2 border-primary text-primary font-bold rounded-xl hover:bg-primary/5 transition-colors text-sm"
+                            className="flex-1 flex items-center justify-center gap-2 py-2.5 border-2 border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 font-bold rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-sm"
                         >
-                            <ArrowRight size={16} /> View in Members Table
+                            <ArrowRight size={16} /> View Member
                         </button>
                     )}
                     <button
                         onClick={onClose}
-                        className="flex-1 py-2.5 bg-primary hover:bg-teal-700 text-white font-bold rounded-xl transition-colors text-sm"
+                        className="flex-1 py-2.5 bg-zinc-800 dark:bg-zinc-700 hover:bg-zinc-900 dark:hover:bg-zinc-600 text-white font-bold rounded-xl transition-colors text-sm"
                     >
                         Close
                     </button>
@@ -387,7 +436,7 @@ function InvoiceDetailModal({ invoice, onClose, onNavigateToMember, onRefresh })
 }
 
 // ─── Main Invoices Component ─────────────────────────────────────────────────
-export default function Invoices({ initialFilter = '', onNavigate }) {
+export default function Invoices({ initialFilter = '', highlightInvoiceId = '', onHighlightClear, onNavigate }) {
     const { showToast } = useToast();
     const [loading, setLoading] = useState(true);
     const [invoices, setInvoices] = useState([]);
@@ -398,6 +447,7 @@ export default function Invoices({ initialFilter = '', onNavigate }) {
     const [filters, setFilters] = useState({ status: 'all', paymentMode: 'all' });
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, action: null, title: '', message: '' });
     const [currentPage, setCurrentPage] = useState(1);
+    const [blinkId, setBlinkId] = useState('');
     const itemsPerPage = 30;
 
     const getAuthHeaders = useCallback(() => {
@@ -407,6 +457,28 @@ export default function Invoices({ initialFilter = '', onNavigate }) {
     }, []);
 
     useEffect(() => { fetchInvoices(); }, []);
+
+    // Highlight (blink) the newly created invoice after load
+    useEffect(() => {
+        if (!highlightInvoiceId || loading || invoices.length === 0) return;
+        // Find the invoice index to determine which page it's on
+        const idx = invoices.findIndex(inv => inv.id === highlightInvoiceId);
+        if (idx >= 0) {
+            const targetPage = Math.floor(idx / itemsPerPage) + 1;
+            setCurrentPage(targetPage);
+            setBlinkId(highlightInvoiceId);
+            // Scroll to element after a short delay (to let page render)
+            setTimeout(() => {
+                const el = document.getElementById(`invoice-row-${highlightInvoiceId}`);
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 300);
+            // Stop blinking after ~3 seconds (3 blinks at 1s each)
+            setTimeout(() => {
+                setBlinkId('');
+                if (onHighlightClear) onHighlightClear();
+            }, 3000);
+        }
+    }, [highlightInvoiceId, loading, invoices]);
 
     const fetchInvoices = async (skip = 0, currentData = []) => {
         try {
@@ -587,8 +659,8 @@ export default function Invoices({ initialFilter = '', onNavigate }) {
                             {paginatedInvoices.map(inv => {
                                 const sc = getStatusConfig(inv.status);
                                 return (
-                                    <tr key={inv.id} onClick={() => setSelectedInvoice(inv)}
-                                        className="hover:bg-zinc-50 dark:hover:bg-zinc-800/60 cursor-pointer transition-colors group">
+                                    <tr key={inv.id} id={`invoice-row-${inv.id}`} onClick={() => setSelectedInvoice(inv)}
+                                        className={`hover:bg-zinc-50 dark:hover:bg-zinc-800/60 cursor-pointer transition-colors group ${blinkId === inv.id ? 'invoice-blink' : ''}`}>
                                         <td className="py-3 px-3">
                                             <input type="checkbox" checked={selectedIds.includes(inv.id)}
                                                 onChange={e => { e.stopPropagation(); setSelectedIds(prev => prev.includes(inv.id) ? prev.filter(id => id !== inv.id) : [...prev, inv.id]); }}

@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from core.security import verify_password, create_access_token, get_password_hash
 from core.dependencies import get_current_gym
-from models.all_models import Gym
+from models.all_models import Gym, Branch, BranchDetails, WhatsAppTemplate
 from schemas.auth import LoginRequest, LoginResponse, SignupRequest
+from routers.whatsapp_templates import DEFAULT_TEMPLATES
 import uuid
 
 router = APIRouter()
@@ -64,18 +65,57 @@ def signup(request: SignupRequest, db: Session = Depends(get_db)):
     db.add(new_gym)
     db.commit()
     db.refresh(new_gym)
-    
+
+    # Auto-create default Branch
+    default_branch = Branch(
+        id=str(uuid.uuid4()),
+        gymId=new_gym.id,
+        name=request.GYMNAME,
+        isActive=True,
+        isDefault=True,
+    )
+    db.add(default_branch)
+
+    # Auto-create BranchDetails (gym-level, no branchId)
+    gym_details = BranchDetails(
+        gymId=new_gym.id,
+        branchId=None,
+        gymName=request.GYMNAME,
+        email=request.EMAILID,
+    )
+    db.add(gym_details)
+
+    # Auto-create default WhatsApp templates
+    for t_type, t_msg in DEFAULT_TEMPLATES.items():
+        template = WhatsAppTemplate(
+            gymId=new_gym.id,
+            templateType=t_type,
+            messageTemplate=t_msg,
+            isActive=True,
+        )
+        db.add(template)
+
+    db.commit()
+
     return "User registered successfully!"
 
 @router.get("/me")
 @router.get("/me/")
-def get_me(current_gym: Gym = Depends(get_current_gym)):
+def get_me(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    # Get branches this gym has
+    branches = db.query(Branch).filter(Branch.gymId == current_gym.id, Branch.isActive == True).all()
+    branch_list = [{"id": b.id, "name": b.name, "isDefault": b.isDefault} for b in branches]
+    default_branch = next((b for b in branch_list if b["isDefault"]), branch_list[0] if branch_list else None)
+
     return {
         "id": current_gym.id,
         "username": current_gym.username,
         "gymname": current_gym.gymname,
         "email": current_gym.email,
-        "role": "OWNER" # Default role as per current model
+        "role": "OWNER",
+        "branches": branch_list,
+        "activeBranchId": default_branch["id"] if default_branch else None,
+        "isMultiBranch": len(branch_list) > 1,
     }
 
 @router.post("/logout")

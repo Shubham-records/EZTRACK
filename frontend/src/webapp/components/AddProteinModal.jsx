@@ -123,11 +123,11 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                         <h3 className="text-sm font-semibold text-primary uppercase tracking-wider mb-3 border-b border-zinc-100 dark:border-zinc-800 pb-2">Product Information</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             <div className="space-y-1">
-                                <label className={labelClass}>Year *</label>
+                                <label className={labelClass}>Year <span className="text-rose-500">*</span></label>
                                 <input type="number" name="Year" value={formData.Year} onChange={handleChange} required className={inputClass} />
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>Month *</label>
+                                <label className={labelClass}>Month <span className="text-rose-500">*</span></label>
                                 <select name="Month" value={formData.Month} onChange={handleChange} required className={inputClass}>
                                     {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map(m => (
                                         <option key={m} value={m}>{m}</option>
@@ -135,19 +135,19 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                                 </select>
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>Brand *</label>
+                                <label className={labelClass}>Brand <span className="text-rose-500">*</span></label>
                                 <input name="Brand" value={formData.Brand} onChange={handleChange} required className={inputClass} />
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>Product Name *</label>
+                                <label className={labelClass}>Product Name <span className="text-rose-500">*</span></label>
                                 <input name="ProductName" value={formData.ProductName} onChange={handleChange} required className={inputClass} />
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>Flavour *</label>
+                                <label className={labelClass}>Flavour <span className="text-rose-500">*</span></label>
                                 <input name="Flavour" value={formData.Flavour} onChange={handleChange} required className={inputClass} />
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>Weight *</label>
+                                <label className={labelClass}>Weight <span className="text-rose-500">*</span></label>
                                 <input name="Weight" value={formData.Weight} onChange={handleChange} required placeholder="e.g. 1kg, 5lbs" className={inputClass} />
                             </div>
                         </div>
@@ -158,20 +158,20 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                         <h3 className="text-sm font-semibold text-primary uppercase tracking-wider mb-3 border-b border-zinc-100 dark:border-zinc-800 pb-2">Stock & Pricing</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             <div className="space-y-1">
-                                <label className={labelClass}>Quantity *</label>
-                                <input type="number" name="Quantity" value={formData.Quantity} onChange={handleChange} required className={inputClass} />
+                                <label className={labelClass}>Quantity <span className="text-rose-500">*</span></label>
+                                <input type="number" name="Quantity" value={formData.Quantity} onChange={handleChange} required min="1" title="Quantity must be at least 1" className={inputClass} />
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>MRP (per pcs) *</label>
-                                <input type="number" name="MRPPrice" value={formData.MRPPrice} onChange={handleChange} required className={inputClass} />
+                                <label className={labelClass}>MRP (per pcs) <span className="text-rose-500">*</span></label>
+                                <input type="number" name="MRPPrice" value={formData.MRPPrice} onChange={handleChange} required min="0" className={inputClass} />
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>Landing Price (per pcs) *</label>
-                                <input type="number" name="LandingPrice" value={formData.LandingPrice} onChange={handleChange} required className={inputClass} />
+                                <label className={labelClass}>Landing Price (per pcs) <span className="text-rose-500">*</span></label>
+                                <input type="number" name="LandingPrice" value={formData.LandingPrice} onChange={handleChange} required min="0" className={inputClass} />
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>Selling Price (per pcs) *</label>
-                                <input type="number" name="SellingPrice" value={formData.SellingPrice} onChange={handleChange} required placeholder="Your sale price" className={inputClass} />
+                                <label className={labelClass}>Selling Price (per pcs) <span className="text-rose-500">*</span></label>
+                                <input type="number" name="SellingPrice" value={formData.SellingPrice} onChange={handleChange} required min="0" placeholder="Your sale price" className={inputClass} />
                             </div>
                             <div className="space-y-1">
                                 <label className={labelClass}>Total Price (auto)</label>
@@ -182,7 +182,7 @@ export default function AddProteinModal({ isOpen, onClose, onSuccess }) {
                                 <input type="number" name="ProfitAmount" value={formData.ProfitAmount} readOnly placeholder="Selling − Landing" className={readOnlyClass} />
                             </div>
                             <div className="space-y-1">
-                                <label className={labelClass}>Expiry Date *</label>
+                                <label className={labelClass}>Expiry Date <span className="text-rose-500">*</span></label>
                                 <input type="date" name="ExpiryDate" value={formData.ExpiryDate} onChange={handleChange} required className={inputClass} />
                             </div>
                         </div>

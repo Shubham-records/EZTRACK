@@ -21,6 +21,7 @@ import SearchResultsPage from './SearchResults';
 export default function WebappMain() {
   const [selectedPage, setSelectedPage] = useState("Dashboard");
   const [highlightId, setHighlightId] = useState('');
+  const [highlightInvoiceId, setHighlightInvoiceId] = useState('');
   const [gymmemberdata, Setgymmemberdata] = useState([]);
   const [proteinsdata, Setproteinsdata] = useState([]);
 
@@ -33,6 +34,22 @@ export default function WebappMain() {
   const [pageSearchFilter, setPageSearchFilter] = useState('');
 
   const { showToast } = useToast();
+
+  // On mount, check URL query params and sessionStorage for invoice redirect
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pageParm = params.get('page');
+    if (pageParm) {
+      setSelectedPage(pageParm);
+      // Clean up URL without reload
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    const storedInvoiceId = sessionStorage.getItem('highlightInvoiceId');
+    if (storedInvoiceId) {
+      setHighlightInvoiceId(storedInvoiceId);
+      sessionStorage.removeItem('highlightInvoiceId');
+    }
+  }, []);
 
   // Handle 401 Unauthorized - auto logout
   const handleUnauthorized = () => {
@@ -388,6 +405,8 @@ export default function WebappMain() {
           {selectedPage === "Bmi" && <BmiCalculator />}
           {selectedPage === "Invoices" && <Invoices
             initialFilter={pageSearchFilter}
+            highlightInvoiceId={highlightInvoiceId}
+            onHighlightClear={() => setHighlightInvoiceId('')}
             onNavigate={(page, filterVal, memberId) => {
               setPageSearchFilter(filterVal);
               setHighlightId(memberId || '');  // UUID for exact row blink

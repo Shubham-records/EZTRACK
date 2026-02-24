@@ -660,3 +660,12 @@ a {
 .material-symbols-outlined {
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
+
+/* Invoice row blink animation — 3 blinks */
+@keyframes invoiceBlink {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: rgba(0, 128, 128, 0.15); }
+}
+.invoice-blink {
+  animation: invoiceBlink 1s ease-in-out 3;
+}

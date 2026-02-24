@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from routers import auth, members, staff, proteins, invoices, dashboard, settings, expenses, contacts, pending, automation, audit
+from routers import auth, members, staff, proteins, invoices, dashboard, settings, expenses, contacts, pending, automation, audit, terms, branch_details, whatsapp_templates
 from core.database import Base, engine
 from sqlalchemy import text
 
@@ -34,6 +34,7 @@ def run_startup_migrations():
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "branchId" VARCHAR(255)',
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "paymentLogs" JSON',
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "paidAmount" FLOAT DEFAULT 0',
+        'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "termsAndConditions" JSON',
         # PendingBalance table columns
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "entityType" VARCHAR(50)',
         'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "invoiceId" VARCHAR(255)',
@@ -49,6 +50,9 @@ def run_startup_migrations():
         'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "postExpiryGraceDays" INTEGER DEFAULT 30',
         'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "reminderDaysBefore" INTEGER DEFAULT 3',
         'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "enablePersonalTraining" BOOLEAN DEFAULT FALSE',
+        # User table — branch access columns
+        'ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "branchIds" JSON',
+        'ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "activeBranchId" VARCHAR(255)',
     ]
     
     try:
@@ -95,6 +99,9 @@ app.include_router(contacts.router, prefix="/api/contacts", tags=["Contacts"])
 app.include_router(pending.router, prefix="/api/pending", tags=["Pending Balance"])
 app.include_router(automation.router, prefix="/api/automation", tags=["Automation"])
 app.include_router(audit.router, prefix="/api/audit", tags=["Audit Logs"])
+app.include_router(terms.router, prefix="/api/terms", tags=["Terms"])
+app.include_router(branch_details.router, prefix="/api/branch-details", tags=["Branch Details"])
+app.include_router(whatsapp_templates.router, prefix="/api/whatsapp-templates", tags=["WhatsApp Templates"])
 
 @app.get("/")
 def read_root():

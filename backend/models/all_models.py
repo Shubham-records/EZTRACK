@@ -23,6 +23,7 @@ class Gym(Base):
     proteinStocks = relationship("ProteinStock", back_populates="gym", cascade="all, delete-orphan")
     users = relationship("User", back_populates="gym", cascade="all, delete-orphan")
     invoices = relationship("Invoice", back_populates="gym", cascade="all, delete-orphan")
+    termsAndConditions = relationship("TermsAndConditions", back_populates="gym", cascade="all, delete-orphan")
 
 class User(Base):
     __tablename__ = "User"
@@ -34,6 +35,10 @@ class User(Base):
     password = Column(String, nullable=False)
     role = Column(String, default="STAFF")
     permissions = Column(ARRAY(String)) 
+    
+    # Multi-branch access control
+    branchIds = Column(JSON, nullable=True)  # Array of branch IDs user can access
+    activeBranchId = Column(String, nullable=True)  # Currently selected branch
     
     createdAt = Column(DateTime, default=func.now())
     updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -67,6 +72,7 @@ class Invoice(Base):
 
     lastEditedBy = Column(String, nullable=True)
     editReason = Column(String, nullable=True)
+    termsAndConditions = Column(JSON, nullable=True) # Snapshot of T&C
     
     # Multi-branch support
     branchId = Column(String, ForeignKey("Branch.id"), nullable=True)
@@ -404,3 +410,68 @@ class AuditLog(Base):
     createdAt = Column(DateTime, default=func.now())
 
     gym = relationship("Gym", backref="auditLogs")
+
+
+class TermsAndConditions(Base):
+    """Terms and Conditions for different billing forms"""
+    __tablename__ = "TermsAndConditions"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
+
+    text = Column(Text, nullable=False)
+    appliesTo = Column(ARRAY(String), nullable=False) # e.g. ["Admission", "Re-Admission", "Renewal", "Protein"]
+    sortOrder = Column(Integer, default=0)
+    isActive = Column(Boolean, default=True)
+
+    createdAt = Column(DateTime, default=func.now())
+    updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    gym = relationship("Gym", back_populates="termsAndConditions")
+
+
+class BranchDetails(Base):
+    """Rich branding/details for gym or specific branch — used in invoices, sidebar, WhatsApp"""
+    __tablename__ = "BranchDetails"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
+    branchId = Column(String, ForeignKey("Branch.id"), nullable=True)  # NULL = gym-level default
+
+    gymName = Column(String, nullable=True)  # Display name (pre-filled from registration)
+    phone = Column(String, nullable=True)
+    whatsapp = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    slogan = Column(String, nullable=True)  # Short tagline
+    website = Column(String, nullable=True)
+    address = Column(Text, nullable=True)
+    city = Column(String, nullable=True)
+    state = Column(String, nullable=True)
+    pincode = Column(String, nullable=True)
+
+    # Logo storage
+    logoData = Column(LargeBinary, nullable=True)
+    logoMimeType = Column(String, nullable=True)  # image/png, image/jpeg
+
+    createdAt = Column(DateTime, default=func.now())
+    updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    gym = relationship("Gym", backref="branchDetails")
+    branch = relationship("Branch", backref="details")
+
+
+class WhatsAppTemplate(Base):
+    """Customizable WhatsApp message templates per billing type"""
+    __tablename__ = "WhatsAppTemplate"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
+
+    templateType = Column(String, nullable=False)  # Admission, Re-Admission, Renewal, Protein
+    messageTemplate = Column(Text, nullable=False)
+    isActive = Column(Boolean, default=True)
+
+    createdAt = Column(DateTime, default=func.now())
+    updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    gym = relationship("Gym", backref="whatsappTemplates")

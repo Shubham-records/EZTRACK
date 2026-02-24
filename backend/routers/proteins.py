@@ -529,6 +529,16 @@ def adjust_protein_stock(
         raise HTTPException(status_code=400, detail="Stock cannot be negative")
     
     protein.Quantity = str(new_qty)
+    
+    # Recalculate computed fields based on new quantity
+    try:
+        landing_price = float(protein.LandingPrice) if protein.LandingPrice else 0
+        selling_price = float(protein.SellingPrice) if protein.SellingPrice else 0
+        protein.TotalPrice = str(round(landing_price * new_qty, 2))
+        protein.ProfitAmount = round((selling_price - landing_price) * new_qty, 2)
+    except (ValueError, TypeError):
+        pass  # Keep existing values if conversion fails
+    
     db.commit()
     db.refresh(protein)
     

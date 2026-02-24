@@ -20,6 +20,7 @@ class InvoiceBase(BaseModel):
     total: float = 0
     status: Optional[str] = "PENDING"
     paymentMode: Optional[str] = "CASH"
+    termsAndConditions: Optional[Any] = None
 
 class InvoiceCreate(BaseModel):
     # Reduced create model as total usually calculated by server? 
@@ -36,6 +37,7 @@ class InvoiceCreate(BaseModel):
     invoiceDate: Optional[datetime] = None
     dueDate: Optional[datetime] = None
     paidAmount: Optional[float] = None
+    termsAndConditions: Optional[Any] = None
 
 class InvoiceResponse(InvoiceBase):
     id: str
