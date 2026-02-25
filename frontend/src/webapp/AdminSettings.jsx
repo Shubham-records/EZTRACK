@@ -70,6 +70,7 @@ export default function AdminSettings() {
     const [gymDetails, setGymDetails] = useState({
         gymName: '', phone: '', whatsapp: '', email: '',
         slogan: '', website: '', address: '', city: '', state: '', pincode: '',
+        phoneCountryCode: '+91',
     });
     const [gymLogoPreview, setGymLogoPreview] = useState(null);
     const [gymLogoFile, setGymLogoFile] = useState(null);
@@ -188,11 +189,22 @@ export default function AdminSettings() {
                     city: data.city || '',
                     state: data.state || '',
                     pincode: data.pincode || '',
+                    phoneCountryCode: data.phoneCountryCode || '+91',
                 });
                 if (data.hasLogo) {
-                    const headers = getAuthHeaders();
-                    delete headers['Content-Type'];
-                    setGymLogoPreview(`/api/branch-details/logo?t=${Date.now()}`);
+                    try {
+                        const token = localStorage.getItem('eztracker_jwt_access_control_token');
+                        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+                        const logoRes = await fetch('/api/branch-details/logo', {
+                            headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
+                        });
+                        if (logoRes.ok) {
+                            const blob = await logoRes.blob();
+                            setGymLogoPreview(URL.createObjectURL(blob));
+                        }
+                    } catch (logoErr) {
+                        console.error('Failed to fetch logo', logoErr);
+                    }
                 }
             }
         } catch (e) {
@@ -1159,25 +1171,16 @@ export default function AdminSettings() {
                         </div>
                     </div>
 
-                    <div className="overflow-x-auto">
-                        <table className="w-full border-collapse">
-                            <thead>
-                                <tr className="bg-zinc-50 dark:bg-zinc-800">
-                                    <th className="px-4 py-3 text-left text-xs font-bold text-zinc-500 uppercase">Term Text</th>
-                                    <th className="px-4 py-3 text-left text-xs font-bold text-zinc-500 uppercase w-48">Applies To</th>
-                                    <th className="px-4 py-3 text-center text-xs font-bold text-zinc-500 uppercase w-24">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {terms.length === 0 ? (
-                                    <tr>
-                                        <td colSpan="3" className="px-4 py-8 text-center text-sm text-zinc-500">No terms configured yet.</td>
-                                    </tr>
-                                ) : (
-                                    terms.map(term => (
-                                        <tr key={term.id} className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/30">
-                                            <td className="px-4 py-3 text-sm text-zinc-900 dark:text-white whitespace-pre-wrap">{term.text}</td>
-                                            <td className="px-4 py-3">
+                    <div className="space-y-3">
+                        {terms.length === 0 ? (
+                            <div className="text-center py-8 text-sm text-zinc-500">No terms configured yet.</div>
+                        ) : (
+                            terms.map((term, idx) => (
+                                <div key={term.id} className="bg-white dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="bg-zinc-100 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-xs font-bold rounded-md px-2 py-0.5">#{idx + 1}</span>
                                                 <div className="flex flex-wrap gap-1">
                                                     {term.appliesTo.map(page => (
                                                         <span key={page} className="px-2 py-0.5 text-[10px] font-bold bg-primary/10 text-primary rounded-full uppercase tracking-wider">
@@ -1185,22 +1188,21 @@ export default function AdminSettings() {
                                                         </span>
                                                     ))}
                                                 </div>
-                                            </td>
-                                            <td className="px-4 py-3 text-center text-sm">
-                                                <div className="flex justify-center gap-2">
-                                                    <button onClick={() => handleEditTerm(term)} className="p-1 text-zinc-400 hover:text-primary transition-colors">
-                                                        <Pencil size={15} />
-                                                    </button>
-                                                    <button onClick={() => handleDeleteTerm(term.id)} className="p-1 text-zinc-400 hover:text-rose-500 transition-colors">
-                                                        <Trash2 size={15} />
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))
-                                )}
-                            </tbody>
-                        </table>
+                                            </div>
+                                            <p className="text-sm text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap leading-relaxed">{term.text}</p>
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                            <button onClick={() => handleEditTerm(term)} className="p-1.5 text-zinc-400 hover:text-primary transition-colors rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700">
+                                                <Pencil size={15} />
+                                            </button>
+                                            <button onClick={() => handleDeleteTerm(term.id)} className="p-1.5 text-zinc-400 hover:text-rose-500 transition-colors rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700">
+                                                <Trash2 size={15} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
                     </div>
                 </div>
             )}
@@ -1233,6 +1235,11 @@ export default function AdminSettings() {
                             <div>
                                 <label className={labelStyle}>Gym Name <span className="text-rose-500">*</span></label>
                                 <input name="gymName" value={gymDetails.gymName} onChange={handleGymDetailsChange} className={inputStyle} placeholder="Your gym name" />
+                            </div>
+                            <div>
+                                <label className={labelStyle}>Phone Country Code</label>
+                                <input name="phoneCountryCode" value={gymDetails.phoneCountryCode} onChange={handleGymDetailsChange} className={inputStyle} placeholder="+91" />
+                                <p className="text-xs text-zinc-400 mt-1">Auto-applied to phone/WhatsApp fields in billing forms</p>
                             </div>
                             <div>
                                 <label className={labelStyle}>Phone</label>

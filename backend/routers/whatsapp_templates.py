@@ -39,7 +39,7 @@ def ensure_default_templates(gym_id: str, db: Session):
     db.commit()
 
 
-@router.get("/")
+@router.get("")
 def get_all_templates(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)

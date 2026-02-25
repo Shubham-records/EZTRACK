@@ -53,6 +53,8 @@ def run_startup_migrations():
         # User table — branch access columns
         'ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "branchIds" JSON',
         'ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "activeBranchId" VARCHAR(255)',
+        # BranchDetails — phone country code
+        'ALTER TABLE "BranchDetails" ADD COLUMN IF NOT EXISTS "phoneCountryCode" VARCHAR(10) DEFAULT \'+91\'',
     ]
     
     try:

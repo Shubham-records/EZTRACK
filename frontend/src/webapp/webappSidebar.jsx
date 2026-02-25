@@ -77,7 +77,20 @@ export default function WebappSidebar({ clickedBUTTON }) {
             slogan: data.slogan || '',
           });
           if (data.hasLogo) {
-            setGymLogoUrl(`/api/branch-details/logo?t=${Date.now()}`);
+            try {
+              const logoRes = await fetch('/api/branch-details/logo', {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'X-Database-Name': dbName,
+                }
+              });
+              if (logoRes.ok) {
+                const blob = await logoRes.blob();
+                setGymLogoUrl(URL.createObjectURL(blob));
+              }
+            } catch (logoErr) {
+              console.error("Failed to fetch logo", logoErr);
+            }
           }
         }
       } catch (e) {
@@ -197,21 +210,15 @@ export default function WebappSidebar({ clickedBUTTON }) {
       <div className={`h-16 flex items-center ${isCollapsed ? 'justify-center' : 'justify-between px-4'} border-b border-zinc-100 dark:border-zinc-800`}>
         {!isCollapsed && (
           <div className="flex items-center overflow-hidden">
-            <div className="w-8 h-8 rounded bg-primary flex items-center justify-center text-white mr-3 overflow-hidden shrink-0">
-              {gymLogoUrl ? (
-                <img src={gymLogoUrl} alt={gymInfo.gymName} width={32} height={32} className="object-cover w-full h-full" />
-              ) : (
-                <Image src={logo} alt={gymInfo.gymName} width={32} height={32} className="object-cover relative" />
-              )}
-            </div>
-            <div className="overflow-hidden">
-              <h1 className="font-bold text-lg tracking-tight text-zinc-900 dark:text-white truncate">{gymInfo.gymName}</h1>
-              {gymInfo.slogan && (
-                <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold flex items-center gap-1 truncate">
-                  {gymInfo.slogan}
-                </p>
-              )}
-            </div>
+            {gymLogoUrl ? (
+              <div className="h-10 max-w-[160px] flex items-center">
+                <img src={gymLogoUrl} alt="Logo" className="h-full w-auto object-contain" />
+              </div>
+            ) : (
+              <h1 className="font-bold text-lg tracking-tight text-zinc-900 dark:text-white truncate">
+                {gymInfo.gymName || 'EZTRACK'}
+              </h1>
+            )}
           </div>
         )}
         <button

@@ -27,12 +27,12 @@ def _to_response(bd: BranchDetails) -> dict:
         "city": bd.city,
         "state": bd.state,
         "pincode": bd.pincode,
+        "phoneCountryCode": bd.phoneCountryCode or '+91',
         "hasLogo": bd.logoData is not None,
     }
 
 
-@router.get("/")
-@router.get("/", include_in_schema=False)
+@router.get("")
 def get_gym_details(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
@@ -121,7 +121,7 @@ def get_branch_details(
     return _to_response(bd)
 
 
-@router.put("/")
+@router.put("")
 def update_gym_details(
     data: BranchDetailsUpdate,
     current_gym: Gym = Depends(get_current_gym),

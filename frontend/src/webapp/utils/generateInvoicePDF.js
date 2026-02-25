@@ -1,6 +1,46 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+// Strip emojis and non-ASCII chars that jsPDF default font can't render
+function sanitize(str) {
+    if (!str) return '';
+    return String(str).replace(/[^\x20-\x7E\xA0-\xFF\n\r]/g, '').trim();
+}
+
+// Convert HTML content to structured plain text preserving line breaks
+function htmlToPlainText(html) {
+    if (!html) return '';
+    let text = String(html);
+    // Replace block-level tags with newlines
+    text = text.replace(/<br\s*\/?>/gi, '\n');
+    text = text.replace(/<\/p>/gi, '\n\n');
+    text = text.replace(/<\/div>/gi, '\n');
+    text = text.replace(/<\/h[1-6]>/gi, '\n');
+    text = text.replace(/<\/li>/gi, '\n');
+    text = text.replace(/<li[^>]*>/gi, '  - ');
+    text = text.replace(/<\/tr>/gi, '\n');
+    text = text.replace(/<\/blockquote>/gi, '\n');
+    // Strip remaining HTML tags
+    text = text.replace(/<[^>]+>/g, '');
+    // Decode HTML entities
+    text = text.replace(/&amp;/g, '&');
+    text = text.replace(/&lt;/g, '<');
+    text = text.replace(/&gt;/g, '>');
+    text = text.replace(/&quot;/g, '"');
+    text = text.replace(/&#39;/g, "'");
+    text = text.replace(/&nbsp;/g, ' ');
+    text = text.replace(/&rsquo;/g, "'");
+    text = text.replace(/&lsquo;/g, "'");
+    text = text.replace(/&rdquo;/g, '"');
+    text = text.replace(/&ldquo;/g, '"');
+    text = text.replace(/&mdash;/g, '--');
+    text = text.replace(/&ndash;/g, '-');
+    text = text.replace(/&#\d+;/g, '');
+    // Collapse multiple blank lines to max 2
+    text = text.replace(/\n{3,}/g, '\n\n');
+    return text.trim();
+}
+
 /**
  * Generate a comprehensive invoice PDF with gym branding, all billing details,
  * and terms & conditions.
@@ -34,14 +74,14 @@ export function generateInvoicePDF(invoiceData, branchDetails = {}, gymSettings 
     doc.setFontSize(18);
     doc.setFont(undefined, 'bold');
     doc.setTextColor(20, 184, 166); // Primary teal
-    doc.text(gymName, logoEndX, headerY + 6);
+    doc.text(sanitize(gymName), logoEndX, headerY + 6);
 
     // Slogan
     if (branchDetails.slogan) {
         doc.setFontSize(8);
         doc.setFont(undefined, 'italic');
         doc.setTextColor(120);
-        doc.text(branchDetails.slogan, logoEndX, headerY + 12);
+        doc.text(sanitize(branchDetails.slogan), logoEndX, headerY + 12);
     }
 
     // Address line
@@ -122,25 +162,30 @@ export function generateInvoicePDF(invoiceData, branchDetails = {}, gymSettings 
 
     if (invoiceData.customerPhone || invoiceData.Mobile) {
         detailY += 5;
-        doc.text(`Mobile: ${invoiceData.customerPhone || invoiceData.Mobile}`, 14, detailY);
+        const phone = String(invoiceData.customerPhone || invoiceData.Mobile);
+        const maskedPhone = phone.length >= 4 ? '******' + phone.slice(-4) : phone;
+        doc.text(`Mobile: ${maskedPhone}`, 14, detailY);
     }
 
     if (invoiceData.customerWhatsapp || invoiceData.Whatsapp) {
         detailY += 5;
-        doc.text(`WhatsApp: ${invoiceData.customerWhatsapp || invoiceData.Whatsapp}`, 14, detailY);
+        const wa = String(invoiceData.customerWhatsapp || invoiceData.Whatsapp);
+        const maskedWa = wa.length >= 4 ? '******' + wa.slice(-4) : wa;
+        doc.text(`WhatsApp: ${maskedWa}`, 14, detailY);
     }
 
     if (invoiceData.customerAddress || invoiceData.Address) {
         detailY += 5;
-        const addr = doc.splitTextToSize(`Address: ${invoiceData.customerAddress || invoiceData.Address}`, 75);
-        doc.text(addr, 14, detailY);
-        detailY += (addr.length - 1) * 4;
+        const fullAddr = String(invoiceData.customerAddress || invoiceData.Address);
+        const maskedAddr = fullAddr.length > 8 ? fullAddr.slice(0, 8) + '...' : fullAddr;
+        doc.text(`Address: ${maskedAddr}`, 14, detailY);
     }
 
     if (invoiceData.Aadhaar) {
         detailY += 5;
         const aadhaar = String(invoiceData.Aadhaar);
-        doc.text(`Aadhaar: ****${aadhaar.slice(-4)}`, 14, detailY);
+        const maskedAadhaar = aadhaar.length >= 4 ? '********' + aadhaar.slice(-4) : aadhaar;
+        doc.text(`Aadhaar: ${maskedAadhaar}`, 14, detailY);
     }
 
     // Right column: Membership Details
@@ -212,7 +257,7 @@ export function generateInvoicePDF(invoiceData, branchDetails = {}, gymSettings 
 
     autoTable(doc, {
         startY: tableStartY,
-        head: [['Description', 'Qty', 'Rate (₹)', 'Amount (₹)']],
+        head: [['Description', 'Qty', 'Rate (Rs)', 'Amount (Rs)']],
         body: tableData,
         theme: 'grid',
         headStyles: {
@@ -322,14 +367,25 @@ export function generateInvoicePDF(invoiceData, branchDetails = {}, gymSettings 
         doc.setTextColor(100);
 
         termsY += 5;
-        termsPoints.forEach((term, idx) => {
-            const splitText = doc.splitTextToSize(`${idx + 1}. ${term.text}`, pageWidth - 28);
-            if (termsY + (splitText.length * 3.5) > 280) {
-                doc.addPage();
-                termsY = 20;
-            }
-            doc.text(splitText, 14, termsY);
-            termsY += (splitText.length * 3.5) + 1.5;
+        termsPoints.forEach((term) => {
+            // Convert HTML to plain text with line breaks preserved
+            const plainText = sanitize(htmlToPlainText(term.text));
+            if (!plainText) return;
+
+            // Split by double newlines into paragraphs
+            const paragraphs = plainText.split(/\n\n+/);
+            paragraphs.forEach((para) => {
+                const trimmed = para.replace(/\n/g, ' ').trim();
+                if (!trimmed) return;
+                const lines = doc.splitTextToSize(trimmed, pageWidth - 28);
+                if (termsY + (lines.length * 3.5) > 280) {
+                    doc.addPage();
+                    termsY = 20;
+                }
+                doc.text(lines, 14, termsY);
+                termsY += (lines.length * 3.5) + 2;
+            });
+            termsY += 2; // Extra space between terms
         });
     } else if (gymSettings?.showTermsOnInvoice && gymSettings?.invoiceTermsText) {
         if (termsY > 255) {

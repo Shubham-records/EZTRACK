@@ -14,6 +14,7 @@ class BranchDetailsCreate(BaseModel):
     city: Optional[str] = None
     state: Optional[str] = None
     pincode: Optional[str] = None
+    phoneCountryCode: Optional[str] = '+91'
 
 
 class BranchDetailsUpdate(BaseModel):
@@ -27,6 +28,7 @@ class BranchDetailsUpdate(BaseModel):
     city: Optional[str] = None
     state: Optional[str] = None
     pincode: Optional[str] = None
+    phoneCountryCode: Optional[str] = None
 
 
 class BranchDetailsResponse(BaseModel):
@@ -43,6 +45,7 @@ class BranchDetailsResponse(BaseModel):
     city: Optional[str] = None
     state: Optional[str] = None
     pincode: Optional[str] = None
+    phoneCountryCode: Optional[str] = '+91'
     hasLogo: bool = False
 
     class Config:

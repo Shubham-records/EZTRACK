@@ -448,6 +448,7 @@ class BranchDetails(Base):
     city = Column(String, nullable=True)
     state = Column(String, nullable=True)
     pincode = Column(String, nullable=True)
+    phoneCountryCode = Column(String, nullable=True, default='+91')  # Default India
 
     # Logo storage
     logoData = Column(LargeBinary, nullable=True)

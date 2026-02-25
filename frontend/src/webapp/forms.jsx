@@ -13,6 +13,20 @@ async function fetchJson(url, token, dbName) {
   return res.json();
 }
 
+// Shared validation for phone, whatsapp, aadhaar
+function validateContactFields(data) {
+  const phoneRegex = /^[0-9]{10}$/;
+  if (data.Mobile && !phoneRegex.test(data.Mobile)) {
+    throw new Error('Mobile number must be exactly 10 digits.');
+  }
+  if (data.Whatsapp && !phoneRegex.test(data.Whatsapp)) {
+    throw new Error('WhatsApp number must be exactly 10 digits.');
+  }
+  if (data.Aadhaar && !/^[0-9]{12}$/.test(data.Aadhaar)) {
+    throw new Error('Aadhaar must be exactly 12 digits.');
+  }
+}
+
 async function loadPricingAndSettings() {
   try {
     const token = localStorage.getItem('eztracker_jwt_access_control_token');
@@ -187,6 +201,7 @@ export function NewAdmission() {
   const [dateFormat, setDateFormat] = useState('dd/MM/yyyy');
   const [gymSettings, setGymSettings] = useState(null);
   const [termsPoints, setTermsPoints] = useState([]);
+  const [countryCode, setCountryCode] = useState('+91');
 
   useEffect(() => {
     const init = async () => {
@@ -210,6 +225,19 @@ export function NewAdmission() {
         });
         if (resTerms.ok) setTermsPoints(await resTerms.json());
       } catch (e) { console.error('Failed to load terms', e); }
+
+      // Fetch country code from branch details
+      try {
+        const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
+        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+        const resBd = await fetch('/api/branch-details', {
+          headers: { Authorization: `Bearer ${jwtToken}`, 'X-Database-Name': dbName }
+        });
+        if (resBd.ok) {
+          const bdData = await resBd.json();
+          if (bdData.phoneCountryCode) setCountryCode(bdData.phoneCountryCode);
+        }
+      } catch (e) { console.error('Failed to load branch details', e); }
     };
     init();
   }, []);
@@ -363,6 +391,7 @@ export function NewAdmission() {
       for (let field of requiredFields) {
         if (!formData[field]) throw new Error(`${field} is required.`);
       }
+      validateContactFields(formData);
 
       const response = await fetch('/api/members', {
         method: 'POST',
@@ -485,11 +514,17 @@ export function NewAdmission() {
           </div>
           <div>
             <label className={labelStyle}>Mobile No <span className="text-rose-500">*</span></label>
-            <input type="tel" name="Mobile" value={formData.Mobile || ''} onChange={handleInputChange} className={inputStyle} required pattern="[0-9]{10}" title="Mobile must be exactly 10 digits" maxLength="10" />
+            <div className="flex">
+              <span className="inline-flex items-center px-3 bg-zinc-100 dark:bg-zinc-700 border border-r-0 border-zinc-200 dark:border-zinc-700 rounded-l-lg text-sm text-zinc-500 dark:text-zinc-300">{countryCode}</span>
+              <input type="tel" name="Mobile" value={formData.Mobile || ''} onChange={handleInputChange} className={inputStyle + ' rounded-l-none'} required pattern="[0-9]{10}" title="Mobile must be exactly 10 digits" maxLength="10" />
+            </div>
           </div>
           <div>
             <label className={labelStyle}>WhatsApp No <span className="text-rose-500">*</span></label>
-            <input type="tel" name="Whatsapp" value={formData.Whatsapp || ''} onChange={handleInputChange} className={inputStyle} required pattern="[0-9]{10}" title="WhatsApp must be exactly 10 digits" maxLength="10" />
+            <div className="flex">
+              <span className="inline-flex items-center px-3 bg-zinc-100 dark:bg-zinc-700 border border-r-0 border-zinc-200 dark:border-zinc-700 rounded-l-lg text-sm text-zinc-500 dark:text-zinc-300">{countryCode}</span>
+              <input type="tel" name="Whatsapp" value={formData.Whatsapp || ''} onChange={handleInputChange} className={inputStyle + ' rounded-l-none'} required pattern="[0-9]{10}" title="WhatsApp must be exactly 10 digits" maxLength="10" />
+            </div>
           </div>
           <div>
             <label className={labelStyle}>Remark</label>
@@ -917,6 +952,7 @@ export function ReAdmission() {
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
       const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
       if (!jwtToken || !dbName) throw new Error('No token found.');
+      validateContactFields(formData);
 
       const response = await fetch('/api/members/re-admission', {
         method: 'POST',
@@ -1422,6 +1458,7 @@ export function Renewal() {
       if (!formData.DateOfRenewal) throw new Error('Renewal Date is required.');
       if (!formData.PlanType) throw new Error('Plan is required.');
       if (!formData.PlanPeriod) throw new Error('Duration is required.');
+      validateContactFields(formData);
 
       const payload = {
         ...formData,
