@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useContext } from 'react'
-import { useReactTable, getCoreRowModel, getFilteredRowModel, getSortedRowModel, getPaginationRowModel, flexRender, createColumnHelper, } from '@tanstack/react-table';
+import { useReactTable, getCoreRowModel, getFilteredRowModel, getSortedRowModel, flexRender, createColumnHelper, } from '@tanstack/react-table';
 import { rankItem } from '@tanstack/match-sorter-utils'
 import { ChevronDown, ChevronUp, Edit2, Save, X, Trash2, Search, CheckSquare, Square, MinusSquare, Plus, Filter, RefreshCcw, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { useToast } from "@/context/ToastContext";
@@ -35,7 +35,7 @@ function IndeterminateCheckbox({
 export default function TableComponent({ gymmemberdata, allColumns, onUpdateData, dataType, onNavigate, initialFilter = '', highlightId = '' }) {
   const { showToast } = useToast();
 
-  const [data, setData] = useState(gymmemberdata)
+  const [data, setData] = useState(gymmemberdata?.data || gymmemberdata || [])
   const [globalFilter, setGlobalFilter] = useState(initialFilter)
   const [rowSelection, setRowSelection] = useState({})
   const [visibleColumns, setVisibleColumns] = useState(allColumns)
@@ -47,6 +47,14 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false)
   const [isAddProteinModalOpen, setIsAddProteinModalOpen] = useState(false)
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, action: null, title: '', message: '' })
+
+  // Server-side pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(gymmemberdata?.totalPages || 1)
+  const [totalRecords, setTotalRecords] = useState(gymmemberdata?.total || 0)
+  const [serverPageSize, setServerPageSize] = useState(gymmemberdata?.pageSize || 30)
+  const [searchQuery, setSearchQuery] = useState(initialFilter)
+  const searchTimerRef = useRef(null)
 
   const [editingId, setEditingId] = useState(null)
   const [editedMember, setEditedMember] = useState(null)
@@ -103,16 +111,22 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
       })
     )], [])
 
-  async function fetchDATA() {
+  async function fetchDATA(page = currentPage, search = searchQuery, pageSizeOverride = null) {
     setshowloading(true)
     try {
       const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
       const eztracker_jwt_databaseName_control_token = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-      const url = dataType === 'member'
+      const baseUrl = dataType === 'member'
         ? `/api/members`
         : `/api/proteins`;
 
-      const response = await fetch(url, {
+      const params = new URLSearchParams({
+        page: page.toString(),
+        page_size: (pageSizeOverride || serverPageSize).toString(),
+      });
+      if (search) params.set('search', search);
+
+      const response = await fetch(`${baseUrl}?${params}`, {
         headers: {
           Authorization: `Bearer ${jwtToken}`,
           'Content-Type': 'application/json',
@@ -125,11 +139,39 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
       }
 
       const result = await response.json();
-      setData(result);
+      // Handle paginated response { data, total, page, pageSize, totalPages }
+      if (result.data && result.totalPages !== undefined) {
+        setData(result.data);
+        setCurrentPage(result.page);
+        setTotalPages(result.totalPages);
+        setTotalRecords(result.total);
+        setServerPageSize(result.pageSize);
+      } else {
+        // Backward compat: plain array response
+        setData(Array.isArray(result) ? result : []);
+      }
     } catch (err) {
       showToast(err.message, 'error');
     }
     setshowloading(false)
+  }
+
+  // Debounced server-side search
+  function handleSearchChange(value) {
+    setGlobalFilter(value);
+    setSearchQuery(value);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setCurrentPage(1);
+      fetchDATA(1, value);
+    }, 400);
+  }
+
+  // Page navigation helpers
+  function goToPage(page) {
+    if (page < 1 || page > totalPages) return;
+    setCurrentPage(page);
+    fetchDATA(page, searchQuery);
   }
 
 
@@ -142,16 +184,12 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
       columnVisibility: Object.fromEntries(allColumns.map(col => [col, visibleColumns.includes(col)])),
       columnFilters,
     },
-    initialState: {
-      pagination: {
-        pageSize: 30,
-      },
-    },
+    manualPagination: true, // Server-side pagination
+    pageCount: totalPages,
     enableRowSelection: true,
     onRowSelectionChange: setRowSelection,
     onGlobalFilterChange: setGlobalFilter,
     onColumnFiltersChange: setColumnFilters,
-    getPaginationRowModel: getPaginationRowModel(),
     globalFilterFn: fuzzyFilter,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -286,11 +324,9 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
 
           const result = await response.json();
           showToast(`Successfully deleted ${result.count} items`, 'success');
-
-          const remainingData = data.filter(item => !selectedIds.includes(item._id));
-          setData(remainingData);
-          onUpdateData(remainingData);
           setRowSelection({});
+          // Re-fetch current page to sync totals
+          fetchDATA(currentPage, searchQuery);
 
         } catch (err) {
           showToast(err.message, 'error');
@@ -324,10 +360,9 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
             throw new Error('Failed to delete data')
           }
 
-          const newData = data.filter(member => member._id !== _id)
-          setData(newData)
-          onUpdateData(newData)
           showToast(`${dataType} deleted successfully`, 'success');
+          // Re-fetch current page to sync totals
+          fetchDATA(currentPage, searchQuery);
         } catch (err) {
           showToast(err.message, 'error')
         }
@@ -337,7 +372,9 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
 
   function clearAllFilters() {
     setGlobalFilter('')
-    setData([...gymmemberdata])
+    setSearchQuery('')
+    setCurrentPage(1)
+    fetchDATA(1, '')
   }
 
   return (
@@ -397,9 +434,9 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
             </div>
             <input
               type="text"
-              placeholder="Search members..."
+              placeholder="Search..."
               value={globalFilter ?? ''}
-              onChange={e => setGlobalFilter(e.target.value)}
+              onChange={e => handleSearchChange(e.target.value)}
               className="block w-full pl-10 pr-3 py-2.5 text-sm rounded-lg border focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-white placeholder-zinc-400" />
           </div>
         </div>
@@ -636,64 +673,73 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
         </table>
       </div>
 
-      {/* Pagination Controls */}
+      {/* Pagination Controls — Server-Side */}
       <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-900/50">
         <div className="flex-1 flex justify-between sm:hidden">
           <button
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
+            onClick={() => goToPage(currentPage - 1)}
+            disabled={currentPage <= 1}
             className="relative inline-flex items-center px-4 py-2 border border-zinc-300 text-sm font-medium rounded-md text-zinc-700 bg-white hover:bg-zinc-50 disabled:opacity-50"
           >
             Previous
           </button>
           <button
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
+            onClick={() => goToPage(currentPage + 1)}
+            disabled={currentPage >= totalPages}
             className="ml-3 relative inline-flex items-center px-4 py-2 border border-zinc-300 text-sm font-medium rounded-md text-zinc-700 bg-white hover:bg-zinc-50 disabled:opacity-50"
           >
             Next
           </button>
         </div>
         <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-          <div>
+          <div className="flex items-center gap-4">
             <p className="text-sm text-zinc-700 dark:text-zinc-300">
-              Showing <span className="font-medium">{table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1}</span> to <span className="font-medium">{Math.min((table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize, table.getFilteredRowModel().rows.length)}</span> of{' '}
-              <span className="font-medium">{table.getFilteredRowModel().rows.length}</span> results
+              Showing <span className="font-medium">{totalRecords === 0 ? 0 : (currentPage - 1) * serverPageSize + 1}</span> to <span className="font-medium">{Math.min(currentPage * serverPageSize, totalRecords)}</span> of{' '}
+              <span className="font-medium">{totalRecords}</span> results
             </p>
+            <select
+              value={serverPageSize}
+              onChange={e => { const newSize = Number(e.target.value); setServerPageSize(newSize); setCurrentPage(1); fetchDATA(1, searchQuery, newSize); }}
+              className="text-sm border border-zinc-300 dark:border-zinc-600 rounded px-2 py-1 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
+            >
+              {[15, 30, 50, 100].map(size => (
+                <option key={size} value={size}>{size} / page</option>
+              ))}
+            </select>
           </div>
           <div>
             <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
               <button
-                onClick={() => table.setPageIndex(0)}
-                disabled={!table.getCanPreviousPage()}
-                className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-zinc-300 bg-white text-sm font-medium text-zinc-500 hover:bg-zinc-50 disabled:opacity-50"
+                onClick={() => goToPage(1)}
+                disabled={currentPage <= 1}
+                className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-zinc-300 bg-white text-sm font-medium text-zinc-500 hover:bg-zinc-50 disabled:opacity-50 dark:bg-zinc-800 dark:border-zinc-600 dark:text-zinc-400"
               >
                 <span className="sr-only">First</span>
                 <ChevronsLeft className="h-4 w-4" />
               </button>
               <button
-                onClick={() => table.previousPage()}
-                disabled={!table.getCanPreviousPage()}
-                className="relative inline-flex items-center px-2 py-2 border border-zinc-300 bg-white text-sm font-medium text-zinc-500 hover:bg-zinc-50 disabled:opacity-50"
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage <= 1}
+                className="relative inline-flex items-center px-2 py-2 border border-zinc-300 bg-white text-sm font-medium text-zinc-500 hover:bg-zinc-50 disabled:opacity-50 dark:bg-zinc-800 dark:border-zinc-600 dark:text-zinc-400"
               >
                 <span className="sr-only">Previous</span>
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              <span className="relative inline-flex items-center px-4 py-2 border border-zinc-300 bg-white text-sm font-medium text-zinc-700">
-                Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+              <span className="relative inline-flex items-center px-4 py-2 border border-zinc-300 bg-white text-sm font-medium text-zinc-700 dark:bg-zinc-800 dark:border-zinc-600 dark:text-zinc-300">
+                Page {currentPage} of {totalPages}
               </span>
               <button
-                onClick={() => table.nextPage()}
-                disabled={!table.getCanNextPage()}
-                className="relative inline-flex items-center px-2 py-2 border border-zinc-300 bg-white text-sm font-medium text-zinc-500 hover:bg-zinc-50 disabled:opacity-50"
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage >= totalPages}
+                className="relative inline-flex items-center px-2 py-2 border border-zinc-300 bg-white text-sm font-medium text-zinc-500 hover:bg-zinc-50 disabled:opacity-50 dark:bg-zinc-800 dark:border-zinc-600 dark:text-zinc-400"
               >
                 <span className="sr-only">Next</span>
                 <ChevronRight className="h-4 w-4" />
               </button>
               <button
-                onClick={() => table.setPageIndex(table.getPageCount() - 1)}
-                disabled={!table.getCanNextPage()}
-                className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-zinc-300 bg-white text-sm font-medium text-zinc-500 hover:bg-zinc-50 disabled:opacity-50"
+                onClick={() => goToPage(totalPages)}
+                disabled={currentPage >= totalPages}
+                className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-zinc-300 bg-white text-sm font-medium text-zinc-500 hover:bg-zinc-50 disabled:opacity-50 dark:bg-zinc-800 dark:border-zinc-600 dark:text-zinc-400"
               >
                 <span className="sr-only">Last</span>
                 <ChevronsRight className="h-4 w-4" />

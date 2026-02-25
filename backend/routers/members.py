@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, func
+from sqlalchemy import or_, func, String
 from typing import List
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Member, Invoice, PendingBalance
+from core.date_utils import parse_date, format_date
+from models.all_models import Gym, Member, Invoice, GymSettings
 from schemas.member import MemberCreate, MemberResponse, MemberUpdate
 
 router = APIRouter()
@@ -22,38 +23,23 @@ def calculate_member_status(member: Member, admission_expiry_days: int = 365) ->
         "is_admission_expired": False
     }
     
-    # Check if member has a NextDueDate
+    # NextDuedate is now a native Date — no parsing needed
     if member.NextDuedate:
         try:
-            # Parse date - handle potential formats
-            # Attempt to parse DD/MM/YYYY or YYYY-MM-DD
-            try:
-                due_date = datetime.strptime(member.NextDuedate, "%d/%m/%Y").date()
-            except ValueError:
-                due_date = datetime.strptime(member.NextDuedate, "%Y-%m-%d").date()
-                
+            due_date = member.NextDuedate
             delta = (due_date - today).days
             status_data["days_until_expiry"] = delta
             
-            # 1. Plan Expiry (Monthly Dues)
             if due_date < today:
                 status_data["computed_status"] = "Expired"
                 status_data["is_expired"] = True
             else:
-                 # Check if expiring soon? Typically "Active" until actually expired.
-                 # Frontend determines "Expiring Soon" visual with warnings, 
-                 # but status is simply Active or Expired.
-                 status_data["computed_status"] = "Active"
-                 status_data["is_expired"] = False
+                status_data["computed_status"] = "Active"
+                status_data["is_expired"] = False
             
-            # 2. Admission Expiry (Long-term)
-            # Admission Expires X days AFTER the Next Due Date (if not renewed)
-            # OR typically calculated from Join Date? 
-            # User said: "membership admission expiry to 365 days, so bob membership expiry date is 2nd jan 26 as per the next due date of his"
-            # So dependent on NextDueDate.
-            from datetime import timedelta
+            # Admission Expiry
             admission_expiry_date = due_date + timedelta(days=admission_expiry_days)
-            status_data["admission_expiry_date"] = admission_expiry_date
+            status_data["admission_expiry_date"] = format_date(admission_expiry_date)
             
             if today > admission_expiry_date:
                 status_data["is_admission_expired"] = True
@@ -61,14 +47,10 @@ def calculate_member_status(member: Member, admission_expiry_days: int = 365) ->
                 status_data["is_admission_expired"] = False
                  
         except Exception:
-            # If date parse fails, fallback to existing status or default
             status_data["computed_status"] = member.MembershipStatus
             
     else:
-        # No due date
         status_data["computed_status"] = member.MembershipStatus
-        # Without a due date, we can't calculate admission expiry accurately yet via this logic. 
-        # Falls back to defaults (None/False)
 
     return status_data
 
@@ -87,44 +69,38 @@ def map_member_response(member: Member, admission_expiry_days: int = 365):
     
     # Remove AccessStatus from response (deprecated field)
     m_dict.pop('AccessStatus', None)
+    # Remove binary image data from list responses (deferred, but safety net)
+    m_dict.pop('imageData', None)
+    m_dict.pop('imageMimeType', None)
+    m_dict['hasImage'] = getattr(member, 'hasImage', False) or False
     
-    # Dynamically compute MembershipStatus based on dates
+    # Format all date fields as DD/MM/YYYY for frontend display
+    date_fields = ['DateOfJoining', 'DateOfReJoin', 'MembershipExpiryDate', 'LastPaymentDate', 'NextDuedate']
+    for field in date_fields:
+        m_dict[field] = format_date(getattr(member, field, None))
+    
+    # Dynamically compute MembershipStatus based on native Date columns (no parsing needed)
     today = datetime.now().date()
     computed_membership_status = 'Inactive'  # default
     
     try:
-        # Check NextDuedate first
         if member.NextDuedate:
-            try:
-                due_date = datetime.strptime(member.NextDuedate, "%d/%m/%Y").date()
-            except ValueError:
-                due_date = datetime.strptime(member.NextDuedate, "%Y-%m-%d").date()
-            
-            if today <= due_date:
+            if today <= member.NextDuedate:
                 computed_membership_status = 'Active'
             else:
                 computed_membership_status = 'Inactive'
         
-        # Check MembershipExpiryDate - if exceeded, mark as Expired
         if member.MembershipExpiryDate:
-            try:
-                expiry_date = datetime.strptime(member.MembershipExpiryDate, "%d/%m/%Y").date()
-            except ValueError:
-                expiry_date = datetime.strptime(member.MembershipExpiryDate, "%Y-%m-%d").date()
-            
-            if today > expiry_date:
+            if today > member.MembershipExpiryDate:
                 computed_membership_status = 'Expired'
-    except (ValueError, TypeError):
-        pass  # Keep default if date parsing fails
+    except (TypeError, AttributeError):
+        pass
     
     m_dict['MembershipStatus'] = computed_membership_status
         
     # Calculate Dynamic Status
     status_info = calculate_member_status(member, admission_expiry_days)
     m_dict.update(status_info)
-    
-    # Validating pydantic model effectively ignores extra fields if not in schema,
-    # but we added them to schema.
         
     return m_dict
 
@@ -138,18 +114,59 @@ def generate_client_number(current_gym: Gym = Depends(get_current_gym), db: Sess
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-from models.all_models import Gym, Member, Invoice, GymSettings
 
-@router.get("", response_model=List[MemberResponse])
-@router.get("/", response_model=List[MemberResponse])
-def get_members(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    members = db.query(Member).filter(Member.gymId == current_gym.id).all()
+
+@router.get("")
+@router.get("/")
+def get_members(
+    page: int = 1,
+    page_size: int = 30,
+    search: str = "",
+    status_filter: str = "",
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
     # Fetch settings for admission expiry
     settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
     admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
     
-    # Map _id and compute status
-    return [map_member_response(m, admission_expiry_days) for m in members]
+    query = db.query(Member).filter(Member.gymId == current_gym.id)
+    
+    # Apply search filter at DB level
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            or_(
+                Member.Name.ilike(search_term),
+                Member.Mobile.cast(String).ilike(search_term),
+                Member.Whatsapp.cast(String).ilike(search_term),
+                Member.MembershipReceiptnumber.cast(String).ilike(search_term),
+            )
+        )
+    
+    # Apply status filter
+    if status_filter:
+        query = query.filter(Member.MembershipStatus == status_filter)
+    
+    total = query.count()
+    
+    # page_size=0 means return all (for exports/bulk operations)
+    if page_size > 0:
+        offset = (page - 1) * page_size
+        members = query.order_by(Member.createdAt.desc()).offset(offset).limit(page_size).all()
+        total_pages = (total + page_size - 1) // page_size
+    else:
+        members = query.order_by(Member.createdAt.desc()).all()
+        total_pages = 1
+        page_size = total
+    
+    return {
+        "data": [map_member_response(m, admission_expiry_days) for m in members],
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+        "totalPages": total_pages
+    }
 
 
 
@@ -261,17 +278,17 @@ def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym),
                 AccessStatus=member_data.get("AccessStatus", "no"),  # legacy field, kept for DB compat
                 height=float(member_data.get("height")) if member_data.get("height") else None,
                 weight=int(member_data.get("weight")) if member_data.get("weight") else None,
-                DateOfJoining=member_data.get("DateOfJoining"),
-                DateOfReJoin=member_data.get("DateOfReJoin"),
+                DateOfJoining=parse_date(member_data.get("DateOfJoining")),
+                DateOfReJoin=parse_date(member_data.get("DateOfReJoin")),
                 Billtype=member_data.get("Billtype"),
                 Address=member_data.get("Address"),
                 Whatsapp=int(member_data.get("Whatsapp")) if member_data.get("Whatsapp") else None,
                 PlanPeriod=member_data.get("PlanPeriod"),
                 PlanType=member_data.get("PlanType"),
                 MembershipStatus=member_data.get("MembershipStatus", ""),
-                MembershipExpiryDate=member_data.get("MembershipExpiryDate"),
-                LastPaymentDate=member_data.get("LastPaymentDate"),
-                NextDuedate=member_data.get("NextDuedate"),
+                MembershipExpiryDate=parse_date(member_data.get("MembershipExpiryDate")),
+                LastPaymentDate=parse_date(member_data.get("LastPaymentDate")),
+                NextDuedate=parse_date(member_data.get("NextDuedate")),
                 LastPaymentAmount=int(member_data.get("LastPaymentAmount")) if member_data.get("LastPaymentAmount") else None,
                 RenewalReceiptNumber=member_data.get("RenewalReceiptNumber"),
                 Aadhaar=int(member_data.get("Aadhaar")) if member_data.get("Aadhaar") else None,
@@ -302,18 +319,11 @@ def bulk_delete_members(data: dict, current_gym: Gym = Depends(get_current_gym),
     # Check if all members belong to current gym
     # We can delete in one query for efficiency
     try:
-        from models.all_models import Invoice, PendingBalance
-        
-        # Unlink invoices and pending balances first to avoid foreign key violations
+        # Unlink invoices first to avoid foreign key violations
         db.query(Invoice).filter(
             Invoice.memberId.in_(ids),
             Invoice.gymId == current_gym.id
         ).update({Invoice.memberId: None}, synchronize_session=False)
-
-        db.query(PendingBalance).filter(
-            PendingBalance.memberId.in_(ids),
-            PendingBalance.gymId == current_gym.id
-        ).update({PendingBalance.memberId: None}, synchronize_session=False)
 
         stmt = Member.__table__.delete().where(
             Member.id.in_(ids),
@@ -385,16 +395,16 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     # member.AccessStatus = data.AccessStatus  # Removed: deprecated field
     member.height = data.height
     member.weight = data.weight
-    member.DateOfReJoin = data.DateOfReJoin
+    member.DateOfReJoin = parse_date(data.DateOfReJoin)
     member.Billtype = data.Billtype
     member.Address = data.Address
     member.Whatsapp = data.Whatsapp
     member.PlanPeriod = data.PlanPeriod
     member.PlanType = data.PlanType
     # MembershipStatus is computed dynamically from dates — no need to set it here
-    member.MembershipExpiryDate = data.MembershipExpiryDate
-    member.LastPaymentDate = data.LastPaymentDate # Usually DateOfReJoin
-    member.NextDuedate = data.NextDuedate
+    member.MembershipExpiryDate = parse_date(data.MembershipExpiryDate)
+    member.LastPaymentDate = parse_date(data.LastPaymentDate)
+    member.NextDuedate = parse_date(data.NextDuedate)
     member.LastPaymentAmount = data.LastPaymentAmount
     member.RenewalReceiptNumber = data.RenewalReceiptNumber
     member.Aadhaar = data.Aadhaar
@@ -406,10 +416,7 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     member.lastEditedBy = current_gym.username
     member.editReason = 'Re-Admission'
     
-    # Store changes
-    db.commit()
-    
-    # Create Invoice with breakdown
+    # Create Invoice with breakdown (SINGLE TRANSACTION with member update)
     if data.LastPaymentAmount and data.LastPaymentAmount > 0:
         items = []
         
@@ -481,7 +488,13 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
             editReason=f"Re-Admission Invoice | Paid: ₹{paid_amount:.0f} | Balance: ₹{balance:.0f}" if payment_status != 'PAID' else "Re-Admission Invoice"
         )
         db.add(new_invoice)
+
+    # ONE commit for both member update + invoice (atomic)
+    try:
         db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     db.refresh(member)
     return {
@@ -509,9 +522,9 @@ def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     member.PlanPeriod = data.PlanPeriod
     member.PlanType = data.PlanType
     # MembershipStatus is computed dynamically from dates — no need to set it here
-    member.MembershipExpiryDate = data.MembershipExpiryDate
-    member.LastPaymentDate = data.LastPaymentDate or data.DateOfReJoin
-    member.NextDuedate = data.NextDuedate
+    member.MembershipExpiryDate = parse_date(data.MembershipExpiryDate)
+    member.LastPaymentDate = parse_date(data.LastPaymentDate or data.DateOfReJoin)
+    member.NextDuedate = parse_date(data.NextDuedate)
     member.LastPaymentAmount = data.LastPaymentAmount
     member.RenewalReceiptNumber = data.RenewalReceiptNumber
     member.extraDays = data.extraDays
@@ -519,9 +532,7 @@ def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     member.lastEditedBy = current_gym.username
     member.editReason = 'Renewal'
     
-    db.commit()
-    
-    # Create Invoice with breakdown
+    # Create Invoice with breakdown (SINGLE TRANSACTION with member update)
     if data.LastPaymentAmount and data.LastPaymentAmount > 0:
         items = []
         
@@ -583,8 +594,14 @@ def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
         if payment_status != 'PAID':
             new_invoice.editReason = f"Renewal Invoice | Paid: ₹{paid_amount:.0f} | Balance: ₹{balance:.0f}"
         db.add(new_invoice)
+
+    # ONE commit for both member update + invoice (atomic)
+    try:
         db.commit()
-    
+    except Exception:
+        db.rollback()
+        raise
+
     db.refresh(member)
     return {
         "message": "Renewal successful",
@@ -616,17 +633,17 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
         # AccessStatus is deprecated, no longer set from data
         height=data.height,
         weight=data.weight,
-        DateOfJoining=data.DateOfJoining,
-        DateOfReJoin=data.DateOfReJoin,
+        DateOfJoining=parse_date(data.DateOfJoining),
+        DateOfReJoin=parse_date(data.DateOfReJoin),
         Billtype=data.Billtype,
         Address=data.Address,
         Whatsapp=data.Whatsapp,
         PlanPeriod=data.PlanPeriod,
         PlanType=data.PlanType,
         MembershipStatus=data.MembershipStatus,
-        MembershipExpiryDate=data.MembershipExpiryDate,
-        LastPaymentDate=data.LastPaymentDate,
-        NextDuedate=data.NextDuedate,
+        MembershipExpiryDate=parse_date(data.MembershipExpiryDate),
+        LastPaymentDate=parse_date(data.LastPaymentDate),
+        NextDuedate=parse_date(data.NextDuedate),
         LastPaymentAmount=data.LastPaymentAmount,
         RenewalReceiptNumber=data.RenewalReceiptNumber,
         Aadhaar=data.Aadhaar,
@@ -732,6 +749,8 @@ def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_curren
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
         
+    date_keys = {'DateOfJoining', 'DateOfReJoin', 'MembershipExpiryDate', 'LastPaymentDate', 'NextDuedate'}
+    
     for key, value in data.items():
         if key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'tableData']:
              continue
@@ -742,6 +761,8 @@ def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_curren
                      value = int(value) if value is not None and value != '' else None
                  elif key in ['height']:
                      value = float(value) if value is not None and value != '' else None
+                 elif key in date_keys:
+                     value = parse_date(value)
                  setattr(member, key, value)
              except Exception:
                  pass # Ignore conversion errors, keep original or skip

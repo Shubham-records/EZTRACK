@@ -6,7 +6,7 @@ import urllib.parse
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Member, ProteinStock, PendingBalance
+from models.all_models import Gym, Member, ProteinStock, Invoice
 
 router = APIRouter()
 
@@ -30,13 +30,13 @@ def get_expiring_memberships(
     for m in members:
         if m.MembershipExpiryDate:
             try:
-                exp_date = datetime.strptime(m.MembershipExpiryDate, '%Y-%m-%d').date()
+                exp_date = m.MembershipExpiryDate  # Native Date
                 if today <= exp_date <= end_date:
                     expiring.append({
                         'id': m.id,
                         'name': m.Name,
                         'phone': m.Mobile or m.Whatsapp,
-                        'expiryDate': m.MembershipExpiryDate,
+                        'expiryDate': exp_date.strftime('%d/%m/%Y'),
                         'daysLeft': (exp_date - today).days,
                         'planType': m.PlanType,
                         'planPeriod': m.PlanPeriod
@@ -81,21 +81,21 @@ def get_overdue_payments(
     db: Session = Depends(get_db)
 ):
     """Get overdue pending payments."""
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().date()
     
-    pending = db.query(PendingBalance).filter(
-        PendingBalance.gymId == current_gym.id,
-        PendingBalance.status.in_(['pending', 'partial']),
-        PendingBalance.dueDate < today
+    pending = db.query(Invoice).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.status.in_(['PENDING', 'PARTIAL']),
+        Invoice.dueDate < datetime.now()
     ).all()
     
     return [{
         'id': p.id,
-        'entityName': p.entityName,
-        'entityType': p.entityType,
-        'phone': p.phone,
-        'amount': p.amount - (p.paidAmount or 0),
-        'dueDate': p.dueDate
+        'entityName': p.customerName,
+        'entityType': 'member' if p.memberId else 'external',
+        'phone': None,
+        'amount': (p.total or 0) - (p.paidAmount or 0),
+        'dueDate': str(p.dueDate) if p.dueDate else None
     } for p in pending]
 
 
@@ -120,8 +120,7 @@ def get_smart_suggestions(
     for m in members:
         if m.MembershipExpiryDate:
             try:
-                exp_date = datetime.strptime(m.MembershipExpiryDate, '%Y-%m-%d').date()
-                if today <= exp_date <= upcoming:
+                if today <= m.MembershipExpiryDate <= upcoming:
                     expiring_soon += 1
             except:
                 pass
@@ -147,11 +146,10 @@ def get_smart_suggestions(
         })
     
     # Check for overdue payments
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    overdue = db.query(PendingBalance).filter(
-        PendingBalance.gymId == current_gym.id,
-        PendingBalance.status.in_(['pending', 'partial']),
-        PendingBalance.dueDate < today_str
+    overdue = db.query(Invoice).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.status.in_(['PENDING', 'PARTIAL']),
+        Invoice.dueDate < today
     ).count()
     
     if overdue > 0:
@@ -186,7 +184,7 @@ def generate_bulk_whatsapp_links(
         for m in members:
             if m.MembershipExpiryDate:
                 try:
-                    exp_date = datetime.strptime(m.MembershipExpiryDate, '%Y-%m-%d').date()
+                    exp_date = m.MembershipExpiryDate  # Native Date
                     if today <= exp_date <= end_date:
                         phone = m.Mobile or m.Whatsapp
                         if phone:
@@ -195,13 +193,13 @@ def generate_bulk_whatsapp_links(
                                 phone_clean = "91" + phone_clean
                             
                             days_left = (exp_date - today).days
-                            message = f"Hi {m.Name}, your gym membership expires in {days_left} day(s) on {m.MembershipExpiryDate}. Please renew to continue your fitness journey! Visit us or call for renewal."
+                            message = f"Hi {m.Name}, your gym membership expires in {days_left} day(s) on {exp_date.strftime('%d/%m/%Y')}. Please renew to continue your fitness journey! Visit us or call for renewal."
                             encoded = urllib.parse.quote(message)
                             
                             links.append({
                                 'name': m.Name,
                                 'phone': phone,
-                                'expiryDate': m.MembershipExpiryDate,
+                                'expiryDate': exp_date.strftime('%d/%m/%Y'),
                                 'daysLeft': days_left,
                                 'link': f"https://web.whatsapp.com/send?phone={phone_clean}&text={encoded}"
                             })
@@ -209,29 +207,32 @@ def generate_bulk_whatsapp_links(
                     pass
     
     elif reminder_type == 'overdue':
-        today_str = datetime.now().strftime('%Y-%m-%d')
         
-        pending = db.query(PendingBalance).filter(
-            PendingBalance.gymId == current_gym.id,
-            PendingBalance.status.in_(['pending', 'partial']),
-            PendingBalance.dueDate < today_str
+        pending = db.query(Invoice).filter(
+            Invoice.gymId == current_gym.id,
+            Invoice.status.in_(['PENDING', 'PARTIAL']),
+            Invoice.dueDate < datetime.now()
         ).all()
         
         for p in pending:
-            if p.phone:
-                phone_clean = str(p.phone).replace("+", "").replace(" ", "")
+            # Try to get phone from linked member
+            phone = None
+            if p.member:
+                phone = p.member.Mobile or p.member.Whatsapp
+            if phone:
+                phone_clean = str(phone).replace("+", "").replace(" ", "")
                 if not phone_clean.startswith("91"):
                     phone_clean = "91" + phone_clean
                 
-                remaining = p.amount - (p.paidAmount or 0)
-                message = f"Hi {p.entityName}, this is a reminder about your pending payment of ₹{remaining:.2f}. The due date was {p.dueDate}. Please clear at your earliest convenience. Thank you!"
+                remaining = (p.total or 0) - (p.paidAmount or 0)
+                message = f"Hi {p.customerName}, this is a reminder about your pending payment of ₹{remaining:.2f}. The due date was {p.dueDate}. Please clear at your earliest convenience. Thank you!"
                 encoded = urllib.parse.quote(message)
                 
                 links.append({
-                    'name': p.entityName,
-                    'phone': p.phone,
+                    'name': p.customerName,
+                    'phone': str(phone),
                     'amount': remaining,
-                    'dueDate': p.dueDate,
+                    'dueDate': str(p.dueDate) if p.dueDate else None,
                     'link': f"https://web.whatsapp.com/send?phone={phone_clean}&text={encoded}"
                 })
     

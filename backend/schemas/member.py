@@ -71,7 +71,7 @@ class MemberResponse(MemberBase):
     computed_status: Optional[str] = None
     is_expired: Optional[bool] = None
     days_until_expiry: Optional[int] = None
-    admission_expiry_date: Optional[date] = None
+    admission_expiry_date: Optional[str] = None
     is_admission_expired: Optional[bool] = None
 
     class Config:

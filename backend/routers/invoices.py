@@ -232,7 +232,8 @@ def delete_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym),
     return None
 
 
-from models.all_models import PendingBalance
+
+
 
 @router.post("/{invoice_id}/pay")
 def pay_invoice(invoice_id: str, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):

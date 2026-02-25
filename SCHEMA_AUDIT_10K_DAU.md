@@ -949,11 +949,45 @@ These five changes alone will take EZTRACK from "breaks at 200 concurrent users"
 
 | # | Fix | Status | Notes |
 |---|---|---|---|
-| 1 | Add composite indexes | ⬜ TODO | Backend only — `all_models.py` |
-| 2 | Add `deferred()` + `hasImage` flag | ⬜ TODO | Backend `all_models.py` + upload endpoints |
-| 3 | Fix dual commits → single transaction | ⬜ TODO | Backend `members.py` — renewal/re-admission |
-| 4 | Connection pooling config | ⬜ TODO | Backend `database.py` |
-| 5 | Drop `PendingBalance` dead table | ⬜ TODO | Backend model + migrations + router cleanup |
-| 6 | Convert ProteinStock numerics (String→Float/Int) | ⬜ TODO | Backend model + routers + frontend |
-| 7 | Convert date strings → `Date` columns | ⬜ TODO | Backend model + routers + frontend forms |
-| 8 | Add pagination to list endpoints | ⬜ TODO | Backend routers + frontend table components |
+| 1 | Add composite indexes | ✅ DONE | 7 models indexed: Member(5), Invoice(4), AuditLog(2), Expense(2), ProteinStock(1), ProteinLot(1) |
+| 2 | Add `deferred()` + `hasImage` flag | ✅ DONE | All binary cols deferred. `hasImage` on Member/ProteinStock, `hasReceipt` on Expense. Upload/delete endpoints updated. Migration SQLs added to `main.py`. |
+| 3 | Fix dual commits → single transaction | ✅ DONE | Both renewal and re-admission now use single `db.commit()` with `try/except/rollback` |
+| 4 | Connection pooling config | ✅ DONE | `pool_size=20`, `max_overflow=30`, `pool_pre_ping=True`, `pool_recycle=3600` |
+| 5 | Drop `PendingBalance` dead table | ✅ DONE | All references in automation.py/invoices.py/members.py/audit.py migrated to use Invoice. Model class kept in `all_models.py` (table remains in DB for safety). |
+| 6 | Convert ProteinStock numerics (String→Float/Int) | ✅ DONE | `Quantity`→Integer, `MRPPrice`/`LandingPrice`→Float, `TotalPrice` removed (computed in response). All routers + schemas + dashboard updated. |
+| 7 | Convert date strings → `Date` columns | ✅ DONE | All 9 date fields converted to native Date. `date_utils.py` created. All routers (members, proteins, expenses, dashboard, automation) updated. DD/MM/YYYY output format. |
+| 8 | Add pagination to list endpoints | ✅ DONE | Members + Proteins endpoints return `{ data, total, page, pageSize, totalPages }`. Frontend `table.jsx` uses server-side pagination with debounced search. `webappmain.jsx` no longer fetches all records on mount. Page size selector (15/30/50/100) added. |
+
+---
+
+## Post-Implementation Verification Audit (26-Feb-2026)
+
+Full DB ↔ Backend ↔ Frontend data-flow audit completed. All files pass Python syntax check. No remaining `strptime` in routers, no stale `PendingBalance` references, no duplicate imports.
+
+### Bugs Found & Fixed During Audit
+
+| # | File | Bug | Severity | Fix |
+|---|------|-----|----------|-----|
+| 1 | `audit.py` seed | `DateOfJoining`/`MembershipExpiryDate` passed as strings → model expects `Date` | Critical | Changed to `.date()` |
+| 2 | `audit.py` seed | `Quantity=str(...)`, `LandingPrice=str(...)`, `MRPPrice=str(...)` → wrong types | Critical | Changed to `int()`/`float()` |
+| 3 | `audit.py` seed | `date=expense_date.strftime(...)` → model expects `Date` | Critical | Changed to `.date()` |
+| 4 | `expenses.py` | `update_expense` didn't parse `date` field → crash on update | Critical | Added `parse_date()` |
+| 5 | `proteins.py` | `update_protein` + `update_protein_body` didn't parse `ExpiryDate` | Critical | Added `parse_date()` in both |
+| 6 | `proteins.py` | `map_protein_response` didn't format `ExpiryDate` → JSON serialization error | Critical | Added `format_date()` |
+| 7 | `members.py` | Duplicate model imports on lines 10, 117, 322 | Minor | Consolidated to single import |
+| 8 | `automation.py` | Dead `today_str` variable (unused) | Minor | Removed |
+| 9 | `main.py` | Migration adds `ExpiryDate` as `VARCHAR(255)` but model uses `Date` | Medium | Changed to `DATE` |
+| 10 | `table.jsx` | After delete, `totalRecords`/`totalPages` stale | Medium | Re-fetch from server after delete |
+| 11 | `table.jsx` | Page size selector race condition (React async state) | Medium | Added `pageSizeOverride` param to `fetchDATA` |
+
+### Verification Checklist
+
+- ✅ All 9 Date columns: `parse_date()` on every input, `format_date()` on every output
+- ✅ All ProteinStock numerics: `Quantity`=Integer, `MRPPrice`/`LandingPrice`=Float in model, schema, and seed
+- ✅ No `strptime` calls in any router (only in `date_utils.py`)
+- ✅ No `PendingBalance` references in any router
+- ✅ No duplicate imports in any router
+- ✅ Frontend: `getPaginationRowModel` removed, `manualPagination: true` set
+- ✅ Frontend: no `table.nextPage()`/`table.previousPage()` calls remaining
+- ✅ Frontend: no recursive fetch-all-on-mount in `webappmain.jsx`
+- ✅ Migration SQL types match model column types

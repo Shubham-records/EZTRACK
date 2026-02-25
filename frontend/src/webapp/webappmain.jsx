@@ -130,9 +130,15 @@ export default function WebappMain() {
 
     try {
       if (category === 'Member') {
-        results = gymmemberdata.filter(m => m.Name?.toLowerCase().includes(lowerTerm));
+        // Server-side search for members
+        const res = await fetch(`/api/members/?page=1&page_size=30&search=${encodeURIComponent(searchTerm)}`, { headers: getAuthHeaders() });
+        const result = await res.json();
+        results = result.data || [];
       } else if (category === 'Protein') {
-        results = proteinsdata.filter(p => p.ProductName?.toLowerCase().includes(lowerTerm) || p.Brand?.toLowerCase().includes(lowerTerm));
+        // Server-side search for proteins
+        const res = await fetch(`/api/proteins/?page=1&page_size=30&search=${encodeURIComponent(searchTerm)}`, { headers: getAuthHeaders() });
+        const result = await res.json();
+        results = result.data || [];
       } else if (category === 'Expense') {
         const data = await fetchAllExpenses();
         results = data.filter(e => e.description?.toLowerCase().includes(lowerTerm));
@@ -177,7 +183,8 @@ export default function WebappMain() {
   };
 
   useEffect(() => {
-    const fetchMembers = async (skip = 0, currentData = []) => {
+    // Initial page-1 fetch for members (server-side paginated)
+    const fetchMembers = async () => {
       try {
         const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
         const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
@@ -187,9 +194,7 @@ export default function WebappMain() {
           return;
         }
 
-        const limit = 50;
-        // Sending limit/skip params to backend. If backend ignores, it returns all.
-        const response = await fetch(`/api/members/?limit=${limit}&skip=${skip}`, {
+        const response = await fetch(`/api/members/?page=1&page_size=30`, {
           headers: {
             Authorization: `Bearer ${jwtToken}`,
             'Content-Type': 'application/json',
@@ -205,18 +210,8 @@ export default function WebappMain() {
         if (!response.ok) throw new Error('Failed to fetch data');
 
         const result = await response.json();
-
-        // Handle if result is wrapped or just array
-        const newData = Array.isArray(result) ? result : (result.data || []);
-        const allData = [...currentData, ...newData];
-
-        Setgymmemberdata(allData);
-
-        // Recursive call if we got a full batch (implies more might exist)
-        if (newData.length === limit) {
-          // Small delay to unblock main thread
-          setTimeout(() => fetchMembers(skip + limit, allData), 100);
-        }
+        // Store the full paginated response
+        Setgymmemberdata(result);
       } catch (err) {
         showToast(err.message, 'error');
       }
@@ -226,7 +221,8 @@ export default function WebappMain() {
   }, []);
 
   useEffect(() => {
-    const fetchProteins = async (skip = 0, currentData = []) => {
+    // Initial page-1 fetch for proteins (server-side paginated)
+    const fetchProteins = async () => {
       try {
         const jwtToken = localStorage.getItem('eztracker_jwt_access_control_token');
         const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
@@ -236,16 +232,13 @@ export default function WebappMain() {
           return;
         }
 
-        const limit = 50;
-        const response = await fetch(`/api/proteins/?limit=${limit}&skip=${skip}`,
-          {
-            headers: {
-              Authorization: `Bearer ${jwtToken}`,
-              'Content-Type': 'application/json',
-              'X-Database-Name': dbName
-            }
+        const response = await fetch(`/api/proteins/?page=1&page_size=30`, {
+          headers: {
+            Authorization: `Bearer ${jwtToken}`,
+            'Content-Type': 'application/json',
+            'X-Database-Name': dbName
           }
-        );
+        });
 
         if (response.status === 401) {
           handleUnauthorized();
@@ -255,14 +248,7 @@ export default function WebappMain() {
         if (!response.ok) throw new Error('Failed to fetch data');
 
         const result = await response.json();
-        const newData = Array.isArray(result) ? result : (result.data || []);
-        const allData = [...currentData, ...newData];
-
-        Setproteinsdata(allData);
-
-        if (newData.length === limit) {
-          setTimeout(() => fetchProteins(skip + limit, allData), 100);
-        }
+        Setproteinsdata(result);
       } catch (err) {
         showToast(err.message, 'error');
       }

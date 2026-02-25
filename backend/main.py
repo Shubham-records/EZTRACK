@@ -28,20 +28,15 @@ def run_startup_migrations():
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "imageMimeType" VARCHAR(50)',
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "branchId" VARCHAR(255)',
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "ProfitAmount" FLOAT',
-        'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "ExpiryDate" VARCHAR(255)',
+        'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "ExpiryDate" DATE',
         'ALTER TABLE "ProteinStock" DROP COLUMN IF EXISTS "ProfitPercentage"',
         # Invoice table columns
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "branchId" VARCHAR(255)',
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "paymentLogs" JSON',
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "paidAmount" FLOAT DEFAULT 0',
         'ALTER TABLE "Invoice" ADD COLUMN IF NOT EXISTS "termsAndConditions" JSON',
-        # PendingBalance table columns
-        'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "entityType" VARCHAR(50)',
-        'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "invoiceId" VARCHAR(255)',
-        'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "entityName" VARCHAR(255)',
-        'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "phone" VARCHAR(50)',
-        'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "paidAmount" FLOAT DEFAULT 0',
-        'ALTER TABLE "PendingBalance" ADD COLUMN IF NOT EXISTS "notes" TEXT',
+        # PendingBalance table — DEPRECATED (all logic now uses Invoice directly)
+        # Keeping table in DB for safety, but no new migrations needed
         # GymSettings table columns
         'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "invoiceStartNumber" INTEGER DEFAULT 1001',
         'ALTER TABLE "GymSettings" ADD COLUMN IF NOT EXISTS "admissionExpiryDays" INTEGER DEFAULT 365',
@@ -55,6 +50,10 @@ def run_startup_migrations():
         'ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "activeBranchId" VARCHAR(255)',
         # BranchDetails — phone country code
         'ALTER TABLE "BranchDetails" ADD COLUMN IF NOT EXISTS "phoneCountryCode" VARCHAR(10) DEFAULT \'+91\'',
+        # hasImage / hasReceipt flags (Fix #2: deferred binary loading)
+        'ALTER TABLE "Member" ADD COLUMN IF NOT EXISTS "hasImage" BOOLEAN DEFAULT FALSE',
+        'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "hasImage" BOOLEAN DEFAULT FALSE',
+        'ALTER TABLE "Expense" ADD COLUMN IF NOT EXISTS "hasReceipt" BOOLEAN DEFAULT FALSE',
     ]
     
     try:

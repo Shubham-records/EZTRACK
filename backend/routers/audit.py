@@ -48,7 +48,7 @@ def get_audit_logs(
 @router.get("/entity-types")
 def get_entity_types():
     """Get list of auditable entity types."""
-    return ["Member", "ProteinStock", "Invoice", "Expense", "PendingBalance", "GymSettings"]
+    return ["Member", "ProteinStock", "Invoice", "Expense", "GymSettings"]
 
 
 @router.get("/price-history/{protein_id}")
@@ -138,8 +138,8 @@ def seed_sample_data(
             weight=random.randint(50, 100),
             PlanType=random.choice(plan_types),
             PlanPeriod=chosen_period,
-            DateOfJoining=join_date.strftime("%Y-%m-%d"),
-            MembershipExpiryDate=expiry_date.strftime("%Y-%m-%d"),
+            DateOfJoining=join_date.date(),
+            MembershipExpiryDate=expiry_date.date(),
             MembershipStatus=random.choice(statuses) if expiry_date > datetime.now() else "Expired",
             LastPaymentAmount=random.choice([500, 1000, 1500, 2000, 2500, 3000, 5000]),
             Address=f"{random.randint(1, 500)}, Sector {random.randint(1, 50)}, City"
@@ -161,11 +161,11 @@ def seed_sample_data(
             ProductName=f"{brand} {product}",
             Flavour=random.choice(flavours),
             Weight=random.choice(["1kg", "2kg", "2.5kg", "5lb"]),
-            Quantity=str(random.randint(1, 20)),
+            Quantity=random.randint(1, 20),
             AvailableStock=random.randint(0, 15),
             StockThreshold=random.randint(3, 8),
-            LandingPrice=str(landing_price),
-            MRPPrice=str(landing_price + margin + 500),
+            LandingPrice=float(landing_price),
+            MRPPrice=float(landing_price + margin + 500),
             MarginPrice=float(margin),
             OfferPrice=float(offer),
             SellingPrice=float(landing_price + margin - offer),
@@ -182,7 +182,7 @@ def seed_sample_data(
             gymId=current_gym.id,
             category=random.choice(EXPENSE_CATEGORIES),
             amount=random.randint(500, 50000),
-            date=expense_date.strftime("%Y-%m-%d"),
+            date=expense_date.date(),
             paymentMode=random.choice(["Cash", "UPI", "Card", "Bank Transfer"]),
             notes=f"Sample expense #{i+1}"
         )

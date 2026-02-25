@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from core.database import get_db
 from core.dependencies import get_current_gym
+from core.date_utils import parse_date, format_date
 from models.all_models import Gym, Expense
 from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse
 
@@ -16,7 +17,11 @@ def map_expense_response(expense: Expense):
     e_dict['_id'] = expense.id
     # Remove binary data from response (separate endpoint for that)
     e_dict.pop('receiptImage', None)
+    e_dict.pop('receiptImageMimeType', None)
     e_dict.pop('_sa_instance_state', None)
+    e_dict['hasReceipt'] = getattr(expense, 'hasReceipt', False) or False
+    # Format date as DD/MM/YYYY
+    e_dict['date'] = format_date(expense.date)
     return e_dict
 
 
@@ -35,9 +40,9 @@ def get_expenses(
     if category:
         query = query.filter(Expense.category == category)
     if start_date:
-        query = query.filter(Expense.date >= start_date)
+        query = query.filter(Expense.date >= parse_date(start_date))
     if end_date:
-        query = query.filter(Expense.date <= end_date)
+        query = query.filter(Expense.date <= parse_date(end_date))
     
     expenses = query.order_by(Expense.date.desc()).all()
     return [map_expense_response(e) for e in expenses]
@@ -51,7 +56,9 @@ def create_expense(
     db: Session = Depends(get_db)
 ):
     """Create a new expense record."""
-    expense = Expense(gymId=current_gym.id, **data.model_dump())
+    expense_data = data.model_dump()
+    expense_data['date'] = parse_date(expense_data.get('date'))
+    expense = Expense(gymId=current_gym.id, **expense_data)
     db.add(expense)
     db.commit()
     db.refresh(expense)
@@ -84,7 +91,7 @@ def bulk_create_expenses(data: dict, current_gym: Gym = Depends(get_current_gym)
                 amount=float(amount),
                 category=expense_data.get("Category") or expense_data.get("category") or "Other",
                 paymentMode=expense_data.get("PaymentMode") or expense_data.get("paymentMode") or "Cash",
-                date=date_str,
+                date=parse_date(date_str),
                 notes=expense_data.get("Notes") or expense_data.get("notes"),
                 lastEditedBy=current_gym.username,
                 editReason='Bulk Import'
@@ -136,6 +143,8 @@ def update_expense(
         raise HTTPException(status_code=404, detail="Expense not found")
     
     update_data = data.model_dump(exclude_unset=True)
+    if 'date' in update_data:
+        update_data['date'] = parse_date(update_data['date'])
     for key, value in update_data.items():
         setattr(expense, key, value)
     
@@ -183,6 +192,7 @@ async def upload_receipt(
     image_data = await file.read()
     expense.receiptImage = image_data
     expense.receiptImageMimeType = file.content_type
+    expense.hasReceipt = True
     
     db.commit()
     return {"message": "Receipt uploaded successfully"}

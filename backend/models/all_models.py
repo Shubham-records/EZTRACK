@@ -1,6 +1,6 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, BigInteger, JSON, LargeBinary
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Date, ForeignKey, Text, BigInteger, JSON, LargeBinary, Index
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 from sqlalchemy.sql import func
 from core.database import Base
 import uuid
@@ -48,6 +48,12 @@ class User(Base):
 
 class Invoice(Base):
     __tablename__ = "Invoice"
+    __table_args__ = (
+        Index('ix_invoice_gym_id', 'gymId'),
+        Index('ix_invoice_gym_date', 'gymId', 'invoiceDate'),
+        Index('ix_invoice_gym_status', 'gymId', 'status'),
+        Index('ix_invoice_gym_member', 'gymId', 'memberId'),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
@@ -86,6 +92,13 @@ class Invoice(Base):
 
 class Member(Base):
     __tablename__ = "Member"
+    __table_args__ = (
+        Index('ix_member_gym_id', 'gymId'),
+        Index('ix_member_gym_status', 'gymId', 'MembershipStatus'),
+        Index('ix_member_gym_receipt', 'gymId', 'MembershipReceiptnumber'),
+        Index('ix_member_gym_expiry', 'gymId', 'MembershipExpiryDate'),
+        Index('ix_member_gym_nextdue', 'gymId', 'NextDuedate'),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
@@ -97,17 +110,17 @@ class Member(Base):
     AccessStatus = Column(String, default="no")
     height = Column(Float, nullable=True)
     weight = Column(Integer, nullable=True)
-    DateOfJoining = Column(String, nullable=True)
-    DateOfReJoin = Column(String, nullable=True)
+    DateOfJoining = Column(Date, nullable=True)
+    DateOfReJoin = Column(Date, nullable=True)
     Billtype = Column(String, nullable=True)
     Address = Column(String, nullable=True)
     Whatsapp = Column(BigInteger, nullable=True)
     PlanPeriod = Column(String, nullable=True)
     PlanType = Column(String, nullable=True)
     MembershipStatus = Column(String, default="Inactive")
-    MembershipExpiryDate = Column(String, nullable=True)
-    LastPaymentDate = Column(String, nullable=True)
-    NextDuedate = Column(String, nullable=True)
+    MembershipExpiryDate = Column(Date, nullable=True)
+    LastPaymentDate = Column(Date, nullable=True)
+    NextDuedate = Column(Date, nullable=True)
     LastPaymentAmount = Column(Integer, nullable=True)
     RenewalReceiptNumber = Column(Integer, nullable=True)
     Aadhaar = Column(BigInteger, nullable=True)
@@ -117,8 +130,9 @@ class Member(Base):
     agreeTerms = Column(Boolean, default=False)
     
     # Image storage
-    imageData = Column(LargeBinary, nullable=True)
-    imageMimeType = Column(String, nullable=True)
+    imageData = deferred(Column(LargeBinary, nullable=True))
+    imageMimeType = deferred(Column(String, nullable=True))
+    hasImage = Column(Boolean, default=False)
     
     # Multi-branch support (future-ready)
     branchId = Column(String, ForeignKey("Branch.id"), nullable=True)
@@ -135,6 +149,9 @@ class Member(Base):
 
 class ProteinStock(Base):
     __tablename__ = "ProteinStock"
+    __table_args__ = (
+        Index('ix_protein_gym_id', 'gymId'),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
@@ -145,10 +162,10 @@ class ProteinStock(Base):
     ProductName = Column(String, nullable=True)
     Flavour = Column(String, nullable=True)
     Weight = Column(String, nullable=True)
-    Quantity = Column(String, nullable=True)
-    MRPPrice = Column(String, nullable=True)
-    LandingPrice = Column(String, nullable=True)
-    TotalPrice = Column(String, nullable=True)
+    Quantity = Column(Integer, default=0)
+    MRPPrice = Column(Float, default=0)
+    LandingPrice = Column(Float, default=0)
+    # TotalPrice removed — computed field (Quantity × LandingPrice), calculated in API response
     Remark = Column(String, nullable=True)
     
     # New pricing fields
@@ -156,13 +173,14 @@ class ProteinStock(Base):
     OfferPrice = Column(Float, nullable=True)
     SellingPrice = Column(Float, nullable=True)
     ProfitAmount = Column(Float, nullable=True)  # Selling - Landing per pcs
-    ExpiryDate = Column(String, nullable=True)  # YYYY-MM-DD
+    ExpiryDate = Column(Date, nullable=True)
     AvailableStock = Column(Integer, default=0)  # Current stock count
     StockThreshold = Column(Integer, default=5)
     
     # Image storage
-    imageData = Column(LargeBinary, nullable=True)
-    imageMimeType = Column(String, nullable=True)
+    imageData = deferred(Column(LargeBinary, nullable=True))
+    imageMimeType = deferred(Column(String, nullable=True))
+    hasImage = Column(Boolean, default=False)
     
     # Multi-branch support
     branchId = Column(String, ForeignKey("Branch.id"), nullable=True)
@@ -256,18 +274,23 @@ class GymSettings(Base):
 class Expense(Base):
     """Track gym expenses by category"""
     __tablename__ = "Expense"
+    __table_args__ = (
+        Index('ix_expense_gym_date', 'gymId', 'date'),
+        Index('ix_expense_gym_category', 'gymId', 'category'),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
 
     category = Column(String, nullable=False)  # Rent, Electricity, Salaries, Maintenance, Supplies, Marketing, Other
     amount = Column(Float, nullable=False)
-    date = Column(String, nullable=False)  # YYYY-MM-DD format
+    date = Column(Date, nullable=False)
     paymentMode = Column(String, nullable=True)  # Cash, UPI, Card, Bank Transfer
     reference = Column(String, nullable=True)  # Receipt/Bill number
     notes = Column(Text, nullable=True)
-    receiptImage = Column(LargeBinary, nullable=True)
-    receiptImageMimeType = Column(String, nullable=True)
+    receiptImage = deferred(Column(LargeBinary, nullable=True))
+    receiptImageMimeType = deferred(Column(String, nullable=True))
+    hasReceipt = Column(Boolean, default=False)
     
     # Multi-branch support
     branchId = Column(String, ForeignKey("Branch.id"), nullable=True)
@@ -296,8 +319,8 @@ class ExternalContact(Base):
     isActive = Column(Boolean, default=True)
     
     # Image storage
-    imageData = Column(LargeBinary, nullable=True)
-    imageMimeType = Column(String, nullable=True)
+    imageData = deferred(Column(LargeBinary, nullable=True))
+    imageMimeType = deferred(Column(String, nullable=True))
 
     createdAt = Column(DateTime, default=func.now())
     updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -322,7 +345,7 @@ class PricingConfig(Base):
     marginValue = Column(Float, nullable=True)
     offerDiscount = Column(Float, default=0)
     
-    effectiveFrom = Column(String, nullable=True)  # YYYY-MM-DD
+    effectiveFrom = Column(Date, nullable=True)
     isActive = Column(Boolean, default=True)
 
     createdAt = Column(DateTime, default=func.now())
@@ -334,6 +357,9 @@ class PricingConfig(Base):
 class ProteinLot(Base):
     """Individual lots/batches for a protein product."""
     __tablename__ = "ProteinLot"
+    __table_args__ = (
+        Index('ix_lot_gym_protein', 'gymId', 'proteinId'),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
@@ -346,7 +372,7 @@ class ProteinLot(Base):
     marginType = Column(String, nullable=True)  # percentage or fixed
     marginValue = Column(Float, nullable=True)
     offerPrice = Column(Float, nullable=True)
-    expiryDate = Column(String, nullable=True)  # YYYY-MM-DD
+    expiryDate = Column(Date, nullable=True)
 
     createdAt = Column(DateTime, default=func.now())
     updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -391,6 +417,10 @@ class PendingBalance(Base):
 class AuditLog(Base):
     """Track all changes for audit purposes"""
     __tablename__ = "AuditLog"
+    __table_args__ = (
+        Index('ix_audit_gym_created', 'gymId', 'createdAt'),
+        Index('ix_audit_gym_entity', 'gymId', 'entityType', 'entityId'),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid)
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
@@ -451,8 +481,8 @@ class BranchDetails(Base):
     phoneCountryCode = Column(String, nullable=True, default='+91')  # Default India
 
     # Logo storage
-    logoData = Column(LargeBinary, nullable=True)
-    logoMimeType = Column(String, nullable=True)  # image/png, image/jpeg
+    logoData = deferred(Column(LargeBinary, nullable=True))
+    logoMimeType = deferred(Column(String, nullable=True))  # image/png, image/jpeg
 
     createdAt = Column(DateTime, default=func.now())
     updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())

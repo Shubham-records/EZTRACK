@@ -5,13 +5,14 @@ from typing import List, Optional
 
 from core.database import get_db
 from core.dependencies import get_current_gym
+from core.date_utils import parse_date, format_date
 from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
 from schemas.protein import ProteinCreate, ProteinUpdate, ProteinResponse
 
 router = APIRouter()
 
 
-def calculate_selling_price(landing_price: str, margin: float, offer: float) -> float:
+def calculate_selling_price(landing_price, margin: float, offer: float) -> float:
     """Calculate selling price: Landing + Margin - Offer"""
     try:
         landing = float(landing_price) if landing_price else 0
@@ -20,7 +21,7 @@ def calculate_selling_price(landing_price: str, margin: float, offer: float) -> 
         return 0
 
 
-def calculate_profit_amount(selling_price, landing_price: str) -> float:
+def calculate_profit_amount(selling_price, landing_price) -> float:
     """Calculate profit amount per pcs: Selling - Landing"""
     try:
         selling = float(selling_price) if selling_price else 0
@@ -31,12 +32,10 @@ def calculate_profit_amount(selling_price, landing_price: str) -> float:
 
 
 def recalculate_computed_fields(protein):
-    """Always recalculate TotalPrice, ProfitAmount after any edit."""
+    """Always recalculate ProfitAmount after any edit. TotalPrice is computed in response."""
     try:
-        qty = float(protein.Quantity) if protein.Quantity else 0
-        landing = float(protein.LandingPrice) if protein.LandingPrice else 0
+        landing = protein.LandingPrice or 0
         selling = float(protein.SellingPrice) if protein.SellingPrice else 0
-        protein.TotalPrice = str(round(qty * landing, 2))
         protein.ProfitAmount = round(selling - landing, 2)
     except (ValueError, TypeError):
         pass
@@ -46,25 +45,22 @@ def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
     p_dict = p.__dict__.copy()
     p_dict['_id'] = p.id
     p_dict.pop('_sa_instance_state', None)
-    p_dict.pop('imageData', None)  # Don't send binary in list
+    p_dict.pop('imageData', None)  # Don't send binary in list (deferred, but safety net)
+    p_dict.pop('imageMimeType', None)
+    p_dict['hasImage'] = getattr(p, 'hasImage', False) or False
     
     # Always recompute TotalPrice and ProfitAmount dynamically
-    try:
-        qty = float(p.Quantity) if p.Quantity else 0
-        landing = float(p.LandingPrice) if p.LandingPrice else 0
-        selling = float(p.SellingPrice) if p.SellingPrice else 0
-        p_dict['TotalPrice'] = str(round(qty * landing, 2))
-        p_dict['ProfitAmount'] = round(selling - landing, 2)
-    except (ValueError, TypeError):
-        pass
+    qty = p.Quantity or 0
+    landing = p.LandingPrice or 0
+    selling = float(p.SellingPrice) if p.SellingPrice else 0
+    p_dict['TotalPrice'] = round(qty * landing, 2)
+    p_dict['ProfitAmount'] = round(selling - landing, 2)
     
     # Calculate low stock indicator
-    try:
-        qty = int(p.Quantity) if p.Quantity else 0
-        threshold = p.StockThreshold or low_stock_threshold
-        p_dict['isLowStock'] = qty < threshold
-    except (ValueError, TypeError):
-        p_dict['isLowStock'] = False
+    threshold = p.StockThreshold or low_stock_threshold
+    p_dict['isLowStock'] = qty < threshold
+    # Format ExpiryDate for JSON response
+    p_dict['ExpiryDate'] = format_date(p.ExpiryDate)
     # Attach lots summary
     try:
         p_dict['lots'] = []
@@ -75,7 +71,7 @@ def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
                 'quantity': lot.quantity,
                 'purchasePrice': lot.purchasePrice,
                 'sellingPrice': lot.sellingPrice,
-                'expiryDate': lot.expiryDate,
+                'expiryDate': format_date(lot.expiryDate),
             }
             p_dict['lots'].append(lot_obj)
     except Exception:
@@ -84,15 +80,18 @@ def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
     return p_dict
 
 
-@router.get("", response_model=List[ProteinResponse])
-@router.get("/", response_model=List[ProteinResponse])
+@router.get("")
+@router.get("/")
 def get_proteins(
+    page: int = 1,
+    page_size: int = 30,
+    search: str = "",
     brand: Optional[str] = None,
     low_stock_only: Optional[bool] = False,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get all proteins with optional filters."""
+    """Get proteins with server-side pagination."""
     # Get gym settings for default threshold
     settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
     default_threshold = settings.lowStockThreshold if settings else 5
@@ -102,14 +101,38 @@ def get_proteins(
     if brand:
         query = query.filter(ProteinStock.Brand == brand)
     
-    proteins = query.all()
-    result = [map_protein_response(p, default_threshold) for p in proteins]
+    if search:
+        search_term = f"%{search}%"
+        from sqlalchemy import or_
+        query = query.filter(
+            or_(
+                ProteinStock.ProductName.ilike(search_term),
+                ProteinStock.Brand.ilike(search_term),
+                ProteinStock.Flavour.ilike(search_term),
+            )
+        )
     
-    # Filter low stock if requested
     if low_stock_only:
-        result = [p for p in result if p.get('isLowStock', False)]
+        query = query.filter(ProteinStock.Quantity < ProteinStock.StockThreshold)
     
-    return result
+    total = query.count()
+    
+    if page_size > 0:
+        offset = (page - 1) * page_size
+        proteins = query.order_by(ProteinStock.createdAt.desc()).offset(offset).limit(page_size).all()
+        total_pages = (total + page_size - 1) // page_size
+    else:
+        proteins = query.order_by(ProteinStock.createdAt.desc()).all()
+        total_pages = 1
+        page_size = total
+    
+    return {
+        "data": [map_protein_response(p, default_threshold) for p in proteins],
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+        "totalPages": total_pages
+    }
 
 
 @router.get("/brands")
@@ -138,13 +161,10 @@ def get_low_stock_proteins(
     
     low_stock = []
     for p in proteins:
-        try:
-            qty = int(p.Quantity) if p.Quantity else 0
-            threshold = p.StockThreshold or default_threshold
-            if qty < threshold:
-                low_stock.append(map_protein_response(p, default_threshold))
-        except (ValueError, TypeError):
-            pass
+        qty = p.Quantity or 0
+        threshold = p.StockThreshold or default_threshold
+        if qty < threshold:
+            low_stock.append(map_protein_response(p, default_threshold))
     
     return {
         "count": len(low_stock),
@@ -171,8 +191,8 @@ def get_protein_summary(
     
     for p in proteins:
         try:
-            qty = int(p.Quantity) if p.Quantity else 0
-            landing = float(p.LandingPrice) if p.LandingPrice else 0
+            qty = p.Quantity or 0
+            landing = p.LandingPrice or 0
             selling = p.SellingPrice or 0
             threshold = p.StockThreshold or default_threshold
             
@@ -240,6 +260,9 @@ def create_protein(
     landing = protein_data.get('LandingPrice')
     if selling and landing:
         protein_data['ProfitAmount'] = calculate_profit_amount(selling, landing)
+    # Parse ExpiryDate string to native Date
+    if protein_data.get('ExpiryDate'):
+        protein_data['ExpiryDate'] = parse_date(protein_data['ExpiryDate'])
     
     protein = ProteinStock(gymId=current_gym.id, **protein_data)
     db.add(protein)
@@ -277,15 +300,14 @@ def bulk_create_proteins(data: dict, current_gym: Gym = Depends(get_current_gym)
                 ProductName=stock_data.get("ProductName"),
                 Flavour=stock_data.get("Flavour"),
                 Weight=str(stock_data.get("Weight", "")),
-                Quantity=str(stock_data.get("Quantity", "0")),
-                MRPPrice=str(stock_data.get("MRPPrice", "")),
-                LandingPrice=str(stock_data.get("LandingPrice", "")),
-                TotalPrice=str(stock_data.get("TotalPrice", "")),
+                Quantity=int(stock_data.get("Quantity", 0)) if stock_data.get("Quantity") else 0,
+                MRPPrice=float(stock_data.get("MRPPrice", 0)) if stock_data.get("MRPPrice") else 0,
+                LandingPrice=float(stock_data.get("LandingPrice", 0)) if stock_data.get("LandingPrice") else 0,
                 Remark=stock_data.get("Remark"),
                 MarginPrice=margin,
                 OfferPrice=offer,
                 SellingPrice=selling,
-                ExpiryDate=stock_data.get("ExpiryDate"),
+                ExpiryDate=parse_date(stock_data.get("ExpiryDate")),
                 AvailableStock=int(stock_data.get("AvailableStock", stock_data.get("Quantity", 0))) if stock_data.get("AvailableStock") or stock_data.get("Quantity") else 0,
                 StockThreshold=int(stock_data.get("StockThreshold", 5)) if stock_data.get("StockThreshold") else 5
             )
@@ -342,6 +364,10 @@ def update_protein(
     
     update_data = data.model_dump(exclude_unset=True)
     
+    # Parse ExpiryDate string → native Date
+    if 'ExpiryDate' in update_data:
+        update_data['ExpiryDate'] = parse_date(update_data['ExpiryDate'])
+    
     for key, value in update_data.items():
         setattr(protein, key, value)
     
@@ -390,6 +416,8 @@ def update_protein_body(
     
     for key, value in updatable_data.items():
         if hasattr(protein, key):
+            if key == 'ExpiryDate':
+                value = parse_date(value)
             setattr(protein, key, value)
     
     # Only recalculate selling price if margin/offer pricing fields changed
@@ -452,6 +480,7 @@ async def upload_protein_image(
     image_data = await file.read()
     protein.imageData = image_data
     protein.imageMimeType = file.content_type
+    protein.hasImage = True
     
     db.commit()
     return {"message": "Image uploaded successfully"}
@@ -495,6 +524,7 @@ def delete_protein_image(
     
     protein.imageData = None
     protein.imageMimeType = None
+    protein.hasImage = False
     
     db.commit()
     return None
@@ -519,23 +549,19 @@ def adjust_protein_stock(
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
     
-    try:
-        current_qty = int(protein.Quantity) if protein.Quantity else 0
-    except ValueError:
-        current_qty = 0
+    current_qty = protein.Quantity or 0
     
     new_qty = current_qty + adjustment
     if new_qty < 0:
         raise HTTPException(status_code=400, detail="Stock cannot be negative")
     
-    protein.Quantity = str(new_qty)
+    protein.Quantity = new_qty
     
     # Recalculate computed fields based on new quantity
     try:
-        landing_price = float(protein.LandingPrice) if protein.LandingPrice else 0
+        landing_price = protein.LandingPrice or 0
         selling_price = float(protein.SellingPrice) if protein.SellingPrice else 0
-        protein.TotalPrice = str(round(landing_price * new_qty, 2))
-        protein.ProfitAmount = round((selling_price - landing_price) * new_qty, 2)
+        protein.ProfitAmount = round((selling_price - landing_price), 2)
     except (ValueError, TypeError):
         pass  # Keep existing values if conversion fails
     
@@ -570,7 +596,7 @@ def get_protein_lots(
         'quantity': l.quantity,
         'purchasePrice': l.purchasePrice,
         'sellingPrice': l.sellingPrice,
-        'expiryDate': l.expiryDate
+        'expiryDate': format_date(l.expiryDate)
     } for l in lots]
 
 
@@ -600,7 +626,7 @@ def create_protein_lot(
         marginType=data.get('marginType'),
         marginValue=float(data.get('marginValue')) if data.get('marginValue') else None,
         offerPrice=float(data.get('offerPrice')) if data.get('offerPrice') else None,
-        expiryDate=data.get('expiryDate')
+        expiryDate=parse_date(data.get('expiryDate'))
     )
     db.add(lot)
     protein.AvailableStock = (protein.AvailableStock or 0) + (lot.quantity or 0)
@@ -614,7 +640,7 @@ def create_protein_lot(
         'quantity': lot.quantity,
         'purchasePrice': lot.purchasePrice,
         'sellingPrice': lot.sellingPrice,
-        'expiryDate': lot.expiryDate
+        'expiryDate': format_date(lot.expiryDate)
     }
 
 
@@ -638,9 +664,11 @@ def update_protein_lot(
         new_qty = prev_qty
 
     # update fields
-    for key in ['lotNumber', 'purchasePrice', 'sellingPrice', 'marginType', 'marginValue', 'offerPrice', 'expiryDate']:
+    for key in ['lotNumber', 'purchasePrice', 'sellingPrice', 'marginType', 'marginValue', 'offerPrice']:
         if key in data:
             setattr(lot, key, data.get(key))
+    if 'expiryDate' in data:
+        lot.expiryDate = parse_date(data.get('expiryDate'))
     lot.quantity = new_qty
 
     # adjust product available stock
@@ -658,7 +686,7 @@ def update_protein_lot(
         'quantity': lot.quantity,
         'purchasePrice': lot.purchasePrice,
         'sellingPrice': lot.sellingPrice,
-        'expiryDate': lot.expiryDate
+        'expiryDate': format_date(lot.expiryDate)
     }
 
 

@@ -11,10 +11,9 @@ class ProteinBase(BaseModel):
     ProductName: Optional[str] = None
     Flavour: Optional[str] = None
     Weight: Optional[str] = None
-    Quantity: Optional[str] = None
-    MRPPrice: Optional[str] = None
-    LandingPrice: Optional[str] = None
-    TotalPrice: Optional[str] = None
+    Quantity: Optional[int] = 0
+    MRPPrice: Optional[float] = 0
+    LandingPrice: Optional[float] = 0
     Remark: Optional[str] = None
     SellingPrice: Optional[float] = None
     ProfitAmount: Optional[float] = None
@@ -40,10 +39,9 @@ class ProteinUpdate(BaseModel):
     ProductName: Optional[str] = None
     Flavour: Optional[str] = None
     Weight: Optional[str] = None
-    Quantity: Optional[str] = None
-    MRPPrice: Optional[str] = None
-    LandingPrice: Optional[str] = None
-    TotalPrice: Optional[str] = None
+    Quantity: Optional[int] = None
+    MRPPrice: Optional[float] = None
+    LandingPrice: Optional[float] = None
     Remark: Optional[str] = None
     SellingPrice: Optional[float] = None
     ProfitAmount: Optional[float] = None
@@ -62,6 +60,7 @@ class ProteinResponse(ProteinBase):
 
     # Computed field for low stock indicator
     isLowStock: Optional[bool] = None
+    TotalPrice: Optional[float] = None  # Computed: Quantity × LandingPrice
     lots: Optional[List[dict]] = []
 
     class Config:
