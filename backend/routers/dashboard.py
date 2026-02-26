@@ -17,25 +17,17 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today.weekday())
     month_start = today_start.replace(day=1)
-    
-    # 1. Active Members
-    active_members = db.query(Member).filter(
-        Member.gymId == current_gym.id,
-        Member.MembershipStatus.in_(['Active', 'active'])
-    ).count()
-    
-    # 2. Today's Expiry (members whose MembershipExpiryDate is today)
-    today_expiry = db.query(Member).filter(
-        Member.gymId == current_gym.id,
-        Member.MembershipExpiryDate == today
-    ).count()
-    
-    # 3. Today's Collection
-    today_collection = db.query(func.sum(Invoice.total)).filter(
-        Invoice.gymId == current_gym.id,
-        Invoice.invoiceDate >= today_start
-    ).scalar() or 0.0
-    
+
+    # 1. Try to fetch from GymDailySummary for today
+    summary = db.query(GymDailySummary).filter(
+        GymDailySummary.gymId == current_gym.id,
+        GymDailySummary.summaryDate == today
+    ).first()
+
+    # Need week/month stats which span multiple days, 
+    # so we still need some queries, or we aggregate summaries.
+    # For now, let's keep it simple and cache what we can, compute what we must.
+
     # 4. Week Collection
     week_collection = db.query(func.sum(Invoice.total)).filter(
         Invoice.gymId == current_gym.id,
@@ -48,32 +40,6 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
         Invoice.invoiceDate >= month_start
     ).scalar() or 0.0
     
-    # 6. Pending Balance
-    pending_balance = db.query(func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0))).filter(
-        Invoice.gymId == current_gym.id,
-        Invoice.status.in_(['PENDING', 'PARTIAL'])
-    ).scalar() or 0.0
-    
-    # 7. Low Stock Count (Lots)
-    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
-    default_threshold = settings.lowStockThreshold if settings else 5
-    
-    lots = db.query(ProteinLot).filter(ProteinLot.gymId == current_gym.id).all()
-    proteins = {p.id: p for p in db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()}
-    
-    low_stock_count = 0
-    for lot in lots:
-        protein = proteins.get(lot.proteinId)
-        if not protein:
-            continue
-        try:
-            qty = int(lot.quantity) if lot.quantity else 0
-            threshold = protein.StockThreshold or default_threshold
-            if qty < threshold:
-                low_stock_count += 1
-        except (ValueError, TypeError):
-            pass
-    
     # 8. Expiring This Week
     week_end = today + timedelta(days=7)
     expiring_this_week = db.query(Member).filter(
@@ -82,19 +48,93 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
         Member.MembershipExpiryDate <= week_end,
         Member.MembershipStatus.in_(['Active', 'active'])
     ).count()
-    
-    # 9. Today's Expenses
-    today_expenses = db.query(func.sum(Expense.amount)).filter(
-        Expense.gymId == current_gym.id,
-        Expense.date == today
-    ).scalar() or 0.0
-    
+
     # 10. Month Expenses
     month_start_date = month_start.date()
     month_expenses = db.query(func.sum(Expense.amount)).filter(
         Expense.gymId == current_gym.id,
         Expense.date >= month_start_date
     ).scalar() or 0.0
+
+
+    if summary:
+        # We have a cached summary for today, use its values
+        active_members = summary.activeMembers
+        today_expiry = summary.expiringToday
+        today_collection = summary.totalIncome
+        pending_balance = summary.pendingBalance
+        low_stock_count = summary.lowStockCount
+        today_expenses = summary.totalExpenses
+    else:
+        # Cache miss or not computed yet today, compute everything
+        # 1. Active Members
+        active_members = db.query(Member).filter(
+            Member.gymId == current_gym.id,
+            Member.MembershipStatus.in_(['Active', 'active'])
+        ).count()
+        
+        # 2. Today's Expiry (members whose MembershipExpiryDate is today)
+        today_expiry = db.query(Member).filter(
+            Member.gymId == current_gym.id,
+            Member.MembershipExpiryDate == today
+        ).count()
+        
+        # 3. Today's Collection
+        today_collection = db.query(func.sum(Invoice.total)).filter(
+            Invoice.gymId == current_gym.id,
+            Invoice.invoiceDate >= today_start
+        ).scalar() or 0.0
+        
+        # 6. Pending Balance
+        pending_balance = db.query(func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0))).filter(
+            Invoice.gymId == current_gym.id,
+            Invoice.status.in_(['PENDING', 'PARTIAL'])
+        ).scalar() or 0.0
+        
+        # 7. Low Stock Count (Lots)
+        settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+        default_threshold = settings.lowStockThreshold if settings else 5
+        
+        lots = db.query(ProteinLot).filter(ProteinLot.gymId == current_gym.id).all()
+        proteins = {p.id: p for p in db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()}
+        
+        low_stock_count = 0
+        for lot in lots:
+            protein = proteins.get(lot.proteinId)
+            if not protein:
+                continue
+            try:
+                qty = int(lot.quantity) if lot.quantity else 0
+                threshold = protein.StockThreshold or default_threshold
+                if qty < threshold:
+                    low_stock_count += 1
+            except (ValueError, TypeError):
+                pass
+
+        # 9. Today's Expenses
+        today_expenses = db.query(func.sum(Expense.amount)).filter(
+            Expense.gymId == current_gym.id,
+            Expense.date == today
+        ).scalar() or 0.0
+
+        # Save the computed summary
+        summary = GymDailySummary(
+            gymId=current_gym.id,
+            summaryDate=today,
+            activeMembers=active_members,
+            expiringToday=today_expiry,
+            totalIncome=today_collection,
+            pendingBalance=pending_balance,
+            lowStockCount=low_stock_count,
+            totalExpenses=today_expenses
+        )
+        db.add(summary)
+        try:
+            db.commit()
+        except Exception as e:
+            # If there's a unique constraint violation due to race condition, just rollback
+            db.rollback()
+
     
     return {
         "activeMembers": active_members,
