@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from core.database import get_db
 from core.dependencies import get_current_gym
 from core.date_utils import parse_date, format_date
+from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
 from models.all_models import Gym, Expense
 from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse
 
@@ -15,11 +16,8 @@ router = APIRouter()
 def map_expense_response(expense: Expense):
     e_dict = expense.__dict__.copy()
     e_dict['_id'] = expense.id
-    # Remove binary data from response (separate endpoint for that)
-    e_dict.pop('receiptImage', None)
-    e_dict.pop('receiptImageMimeType', None)
     e_dict.pop('_sa_instance_state', None)
-    e_dict['hasReceipt'] = getattr(expense, 'hasReceipt', False) or False
+    e_dict['hasReceipt'] = bool(getattr(expense, 'receiptUrl', None))
     # Format date as DD/MM/YYYY
     e_dict['date'] = format_date(expense.date)
     return e_dict
@@ -180,22 +178,36 @@ async def upload_receipt(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Upload receipt image for an expense."""
+    """Upload receipt image for an expense — stored in object storage (not DB)."""
     expense = db.query(Expense).filter(
         Expense.id == expense_id,
         Expense.gymId == current_gym.id
     ).first()
-    
+
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-    
+
+    # Delete old receipt from storage if one exists
+    if expense.receiptUrl:
+        delete_image(expense.receiptUrl)
+
     image_data = await file.read()
-    expense.receiptImage = image_data
-    expense.receiptImageMimeType = file.content_type
-    expense.hasReceipt = True
-    
+    # FIX: store in object storage, keep only the key in DB
+    storage_key = upload_image(
+        image_data,
+        folder=StorageFolder.RECEIPTS,
+        mime_type=file.content_type,
+    )
+
+    expense.receiptUrl      = storage_key
+    expense.receiptMimeType = file.content_type
+    expense.hasReceipt      = True
     db.commit()
-    return {"message": "Receipt uploaded successfully"}
+
+    return {
+        "message":    "Receipt uploaded successfully",
+        "receiptUrl": get_signed_url(storage_key),
+    }
 
 
 @router.get("/{expense_id}/receipt")
@@ -204,19 +216,22 @@ def get_receipt(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get receipt image for an expense."""
+    """
+    Get a fresh signed URL for an expense receipt.
+    Returns a redirect to the signed URL so the browser fetches the image
+    directly from object storage — no binary data passes through the API.
+    """
     expense = db.query(Expense).filter(
         Expense.id == expense_id,
         Expense.gymId == current_gym.id
     ).first()
-    
-    if not expense or not expense.receiptImage:
+
+    if not expense or not expense.receiptUrl:
         raise HTTPException(status_code=404, detail="Receipt not found")
-    
-    return Response(
-        content=expense.receiptImage,
-        media_type=expense.receiptImageMimeType or "image/jpeg"
-    )
+
+    # FIX: generate a short-lived signed URL and redirect the client to it
+    signed_url = get_signed_url(expense.receiptUrl)
+    return RedirectResponse(url=signed_url, status_code=302)
 
 
 @router.get("/summary")

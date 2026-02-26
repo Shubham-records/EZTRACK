@@ -6,7 +6,7 @@ import urllib.parse
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Invoice
+from models.all_models import Gym, Invoice, PaymentEvent
 from schemas.pending import PaymentRecord
 
 router = APIRouter()
@@ -137,46 +137,33 @@ def record_payment(
         Invoice.id == pending_id,
         Invoice.gymId == current_gym.id
     ).first()
-    
+
     if not invoice:
         raise HTTPException(status_code=404, detail="Pending balance not found")
-    
-    # Process payment
-    current_paid = getattr(invoice, "paidAmount", 0) or 0
-    new_paid = current_paid + payment.amount
-    
-    # Store payment logs
-    logs = invoice.paymentLogs or []
-    logs_copy = list(logs)
-    logs_copy.append({
-        "date": datetime.now().isoformat(),
-        "amount": payment.amount,
-        "paymentMode": payment.paymentMode,
-        "note": payment.notes or ""
-    })
-    
-    from sqlalchemy.orm.attributes import flag_modified
-    invoice.paymentLogs = logs_copy
-    flag_modified(invoice, "paymentLogs")
-    
-    if new_paid >= invoice.total:
-        invoice.status = "PAID"
-        new_balance = 0
+
+    # FIX: INSERT a PaymentEvent row instead of mutating paymentLogs JSON blob
+    payment_event = PaymentEvent(
+        invoiceId   = invoice.id,
+        gymId       = current_gym.id,
+        amount      = payment.amount,
+        paymentMode = payment.paymentMode.upper(),
+        notes       = payment.notes or "",
+        recordedBy  = current_gym.username,
+    )
+    db.add(payment_event)
+
+    new_paid = (invoice.paidAmount or 0) + payment.amount
+    total    = invoice.total or 0
+
+    if new_paid >= total:
+        invoice.status     = "PAID"
+        invoice.paidAmount = total      # cap; no overpayment drift
     else:
-        invoice.status = "PARTIAL"
-        new_balance = invoice.total - new_paid
-        
-    invoice.paidAmount = new_paid
-    
-    base_reason = invoice.editReason or "Invoice"
-    if " | Paid:" in base_reason:
-        base_reason = base_reason.split(" | Paid:")[0]
-        
-    if invoice.status == "PAID":
-        invoice.editReason = base_reason
-    else:
-        invoice.editReason = f"{base_reason} | Paid: ₹{new_paid:.0f} | Balance: ₹{new_balance:.0f}"
-        
+        invoice.status     = "PARTIAL"
+        invoice.paidAmount = new_paid
+
+    invoice.lastEditedBy = current_gym.username
+
     db.commit()
     db.refresh(invoice)
     return map_invoice_to_pending(invoice)

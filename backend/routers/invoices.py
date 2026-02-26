@@ -5,7 +5,7 @@ from datetime import datetime
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Invoice
+from models.all_models import Gym, Invoice, PaymentEvent
 from schemas.invoice import InvoiceCreate, InvoiceResponse
 
 router = APIRouter()
@@ -15,11 +15,11 @@ def map_invoice_response(invoice: Invoice):
     i_dict = invoice.__dict__.copy()
     i_dict['_id'] = invoice.id
     i_dict.pop('_sa_instance_state', None)
-    
+
+    # ── Invoice type tag ──────────────────────────────────────────────────────
     invoice_type = "Other"
-    
-    if invoice.editReason and invoice.editReason.lower() == "protein":
-        invoice_type = "Protein"
+    if invoice.editReason in ("Admission", "Renewal", "Re-Admission", "Protein"):
+        invoice_type = invoice.editReason
     elif invoice.items and len(invoice.items) > 0:
         desc = invoice.items[0].get("description", "").lower()
         if "re-admission" in desc:
@@ -28,42 +28,19 @@ def map_invoice_response(invoice: Invoice):
             invoice_type = "Admission"
         elif "renewal" in desc:
             invoice_type = "Renewal"
-        else:
-            invoice_type = "Other"
-    else:
-        invoice_type = "Other"
-            
-    # Handle backward compatibility since protein was sometimes not explicitly marked in editReason
-    if invoice_type == "Other" and invoice.items:
-        # Check if first item looks like a protein product "Brand - Name" where not admission etc
-        desc = invoice.items[0].get("description", "")
-        if " - " in desc and not any(k in desc.lower() for k in ["admission", "renewal"]):
-             # We might not be 100% sure but could be protein if it matches format
-             pass
-    
-    i_dict["invoiceType"] = invoice.editReason if (invoice.editReason in ['Admission', 'Renewal', 'Re-Admission', 'Protein']) else invoice_type
-    
-    paid_amount = getattr(invoice, "paidAmount", 0) or 0
-    balance = (invoice.total or 0) - paid_amount
-    
-    if invoice.status == "PAID":
-        paid_amount = invoice.total
-        balance = 0
-    elif invoice.status == "PARTIAL":
-        # Extract from editReason if available for backward compatibility
-        if paid_amount == 0 and invoice.editReason and "Paid: ₹" in invoice.editReason:
-            import re
-            match = re.search(r"Paid: ₹(\d+(\.\d+)?)", invoice.editReason)
-            if match:
-                paid_amount = float(match.group(1))
-        balance = (invoice.total or 0) - paid_amount
-    else:
-        paid_amount = 0
-        balance = invoice.total or 0
-        
-    i_dict["paidAmount"] = paid_amount
-    i_dict["balance"] = balance
-    
+    i_dict["invoiceType"] = invoice_type
+
+    # ── Payment amounts ───────────────────────────────────────────────────────
+    # FIX: trust Invoice.paidAmount directly — the authoritative column.
+    # Removed the regex fallback that parsed "Paid: ₹NNN" from editReason;
+    # that was a v1 workaround and could silently corrupt balances.
+    paid_amount = invoice.paidAmount or 0
+    total       = invoice.total or 0
+    balance     = max(total - paid_amount, 0)
+
+    i_dict["paidAmount"] = round(paid_amount, 2)
+    i_dict["balance"]    = round(balance, 2)
+
     return i_dict
 
 
@@ -236,57 +213,51 @@ def delete_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym),
 
 
 @router.post("/{invoice_id}/pay")
-def pay_invoice(invoice_id: str, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.gymId == current_gym.id).first()
+def pay_invoice(
+    invoice_id: str,
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    invoice = db.query(Invoice).filter(
+        Invoice.id == invoice_id,
+        Invoice.gymId == current_gym.id
+    ).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
-        
+
     amount = float(data.get("amount", 0))
-    mode = data.get("paymentMode", "CASH")
-    
+    mode   = str(data.get("paymentMode", "CASH")).upper()
+    notes  = data.get("notes", "") or ""
+
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid amount")
-        
-    from datetime import datetime
-    
-    # Store in JSON logs
-    logs = invoice.paymentLogs or []
-    new_log = {
-        "date": datetime.now().isoformat(),
-        "amount": amount,
-        "paymentMode": mode,
-        "note": data.get("notes", "")
-    }
-    
-    logs_copy = list(logs)
-    logs_copy.append(new_log)
-    
-    from sqlalchemy.orm.attributes import flag_modified
-    invoice.paymentLogs = logs_copy
-    flag_modified(invoice, "paymentLogs")
-    
-    # Recalculate invoice status
-    mapped = map_invoice_response(invoice)
-    current_paid = mapped.get("paidAmount", 0)
-    new_paid = current_paid + amount
-    
-    if new_paid >= invoice.total:
-        invoice.status = "PAID"
-        new_balance = 0
+
+    # FIX: INSERT a PaymentEvent row (append-only) instead of mutating a JSON blob.
+    # Invoice.paidAmount is the denormalized running total — kept in sync here.
+    payment_event = PaymentEvent(
+        invoiceId   = invoice.id,
+        gymId       = current_gym.id,
+        amount      = amount,
+        paymentMode = mode,
+        notes       = notes,
+        recordedBy  = current_gym.username,
+    )
+    db.add(payment_event)
+
+    new_paid = (invoice.paidAmount or 0) + amount
+    total    = invoice.total or 0
+
+    if new_paid >= total:
+        invoice.status     = "PAID"
+        invoice.paidAmount = total          # cap at total; no overpayment drift
     else:
-        invoice.status = "PARTIAL"
-        new_balance = invoice.total - new_paid
-        
-    invoice.paidAmount = new_paid
-        
-    base_reason = invoice.editReason or "Invoice"
-    if " | Paid:" in base_reason:
-        base_reason = base_reason.split(" | Paid:")[0]
-        
-    if invoice.status == "PAID":
-        invoice.editReason = base_reason
-    else:
-        invoice.editReason = f"{base_reason} | Paid: ₹{new_paid:.0f} | Balance: ₹{new_balance:.0f}"
-        
+        invoice.status     = "PARTIAL"
+        invoice.paidAmount = new_paid
+
+    # editReason is a CATEGORY TAG only — financial data lives in PaymentEvent
+    invoice.lastEditedBy = current_gym.username
+
     db.commit()
+    db.refresh(invoice)
     return map_invoice_response(invoice)

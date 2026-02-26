@@ -22,7 +22,7 @@ def get_current_gym(token: str = Depends(oauth2_scheme), db: Session = Depends(g
     except JWTError:
         raise credentials_exception
         
-    gym = db.query(Gym).filter(Gym.id == gymId).first()
+    gym = db.query(Gym).filter(Gym.id == gymId, Gym.isDeleted == False).first()
     if gym is None:
         raise credentials_exception
     return gym

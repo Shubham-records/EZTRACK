@@ -6,6 +6,7 @@ from typing import Dict, Any
 
 from core.database import get_db
 from core.dependencies import get_current_gym
+from core.cache import get_gym_settings
 from models.all_models import Gym, Member, Invoice, ProteinStock, ProteinLot, Expense, GymSettings, GymDailySummary
 
 router = APIRouter()
@@ -96,7 +97,8 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
         ).scalar() or 0.0
         
         # 7. Low Stock Count (Lots)
-        settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+        # FIX: use cache.py (10-min TTL) — not a raw DB query (25K hits/day bypassing cache)
+        settings = get_gym_settings(current_gym.id, db)
         default_threshold = settings.lowStockThreshold if settings else 5
         
         lots = db.query(ProteinLot).filter(ProteinLot.gymId == current_gym.id).all()
@@ -173,8 +175,8 @@ def get_dashboard_alerts(current_gym: Gym = Depends(get_current_gym), db: Sessio
     
     alerts = []
     
-    # Get gym settings
-    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    # FIX: use cache.py (10-min TTL) instead of raw DB query
+    settings = get_gym_settings(current_gym.id, db)
     default_stock_threshold = settings.lowStockThreshold if settings else 0
     expiry_range = settings.expiryRange if settings and settings.expiryRange else 0
     grace_period = settings.postExpiryGraceDays if settings and settings.postExpiryGraceDays else 30
@@ -309,7 +311,8 @@ def get_dashboard_stock_alerts(
     db: Session = Depends(get_db)
 ):
     """Get stock alerts including low stock lots and expiring soon lots."""
-    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    # FIX: use cache.py (10-min TTL) instead of raw DB query
+    settings = get_gym_settings(current_gym.id, db)
     default_threshold = settings.lowStockThreshold if settings else 5
     expiry_warning_days = settings.expiryWarningDays if settings and settings.expiryWarningDays else 30
     

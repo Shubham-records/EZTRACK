@@ -20,31 +20,29 @@ def get_expiring_memberships(
     """Get memberships expiring within the specified days."""
     today = datetime.now().date()
     end_date = today + timedelta(days=days)
-    
+
+    # FIX: filter using computed_status expression (DB-level CASE, not stored column)
     members = db.query(Member).filter(
         Member.gymId == current_gym.id,
-        Member.MembershipStatus == 'Active'
+        Member.computed_status == "Active",
+        Member.NextDuedate >= today,
+        Member.NextDuedate <= end_date,
     ).all()
-    
+
     expiring = []
     for m in members:
-        if m.MembershipExpiryDate:
-            try:
-                exp_date = m.MembershipExpiryDate  # Native Date
-                if today <= exp_date <= end_date:
-                    expiring.append({
-                        'id': m.id,
-                        'name': m.Name,
-                        'phone': m.Mobile or m.Whatsapp,
-                        'expiryDate': exp_date.strftime('%d/%m/%Y'),
-                        'daysLeft': (exp_date - today).days,
-                        'planType': m.PlanType,
-                        'planPeriod': m.PlanPeriod
-                    })
-            except:
-                pass
-    
-    expiring.sort(key=lambda x: x['daysLeft'])
+        exp_date = m.NextDuedate          # Native Date — no parsing
+        expiring.append({
+            "id":          m.id,
+            "name":        m.Name,
+            "phone":       m.Mobile or m.Whatsapp,
+            "expiryDate":  exp_date.strftime("%d/%m/%Y"),
+            "daysLeft":    (exp_date - today).days,
+            "planType":    m.PlanType,
+            "planPeriod":  m.PlanPeriod,
+        })
+
+    expiring.sort(key=lambda x: x["daysLeft"])
     return expiring
 
 
@@ -57,21 +55,23 @@ def get_low_stock_items(
     proteins = db.query(ProteinStock).filter(
         ProteinStock.gymId == current_gym.id
     ).all()
-    
+
     low_stock = []
     for p in proteins:
         threshold = p.StockThreshold or 5
-        if (p.AvailableStock or 0) < threshold:
+        # FIX: use p.Quantity (Integer column) — AvailableStock was removed in v2
+        current_qty = p.Quantity or 0
+        if current_qty < threshold:
             low_stock.append({
-                'id': p.id,
-                'productName': p.ProductName,
-                'brand': p.Brand,
-                'currentStock': p.AvailableStock or 0,
-                'threshold': threshold,
-                'sellingPrice': p.SellingPrice or p.LandingPrice
+                "id":           p.id,
+                "productName":  p.ProductName,
+                "brand":        p.Brand,
+                "currentStock": current_qty,
+                "threshold":    threshold,
+                "sellingPrice": p.SellingPrice or p.LandingPrice,
             })
-    
-    low_stock.sort(key=lambda x: x['currentStock'])
+
+    low_stock.sort(key=lambda x: x["currentStock"])
     return low_stock
 
 
@@ -81,21 +81,21 @@ def get_overdue_payments(
     db: Session = Depends(get_db)
 ):
     """Get overdue pending payments."""
-    today = datetime.now().date()
-    
+    today = datetime.now()
+
     pending = db.query(Invoice).filter(
         Invoice.gymId == current_gym.id,
-        Invoice.status.in_(['PENDING', 'PARTIAL']),
-        Invoice.dueDate < datetime.now()
+        Invoice.status.in_(["PENDING", "PARTIAL"]),
+        Invoice.dueDate < today,
     ).all()
-    
+
     return [{
-        'id': p.id,
-        'entityName': p.customerName,
-        'entityType': 'member' if p.memberId else 'external',
-        'phone': None,
-        'amount': (p.total or 0) - (p.paidAmount or 0),
-        'dueDate': str(p.dueDate) if p.dueDate else None
+        "id":         p.id,
+        "entityName": p.customerName,
+        "entityType": "member" if p.memberId else "external",
+        "phone":      None,
+        "amount":     (p.total or 0) - (p.paidAmount or 0),
+        "dueDate":    str(p.dueDate) if p.dueDate else None,
     } for p in pending]
 
 
@@ -106,116 +106,111 @@ def get_smart_suggestions(
 ):
     """Generate smart suggestions based on current data."""
     suggestions = []
-    
-    # Check for expiring memberships
     today = datetime.now().date()
     upcoming = today + timedelta(days=3)
-    
-    members = db.query(Member).filter(
+
+    # FIX: push expiry window filter to DB using computed_status expression
+    expiring_soon = db.query(Member).filter(
         Member.gymId == current_gym.id,
-        Member.MembershipStatus == 'Active'
-    ).all()
-    
-    expiring_soon = 0
-    for m in members:
-        if m.MembershipExpiryDate:
-            try:
-                if today <= m.MembershipExpiryDate <= upcoming:
-                    expiring_soon += 1
-            except:
-                pass
-    
+        Member.computed_status == "Active",
+        Member.NextDuedate >= today,
+        Member.NextDuedate <= upcoming,
+    ).count()
+
     if expiring_soon > 0:
         suggestions.append({
-            'type': 'warning',
-            'title': 'Memberships Expiring Soon',
-            'message': f'{expiring_soon} membership(s) expiring in the next 3 days. Send renewal reminders.',
-            'action': 'view_expiring'
+            "type":    "warning",
+            "title":   "Memberships Expiring Soon",
+            "message": f"{expiring_soon} membership(s) expiring in the next 3 days. Send renewal reminders.",
+            "action":  "view_expiring",
         })
-    
-    # Check for low stock
+
+    # FIX: use p.Quantity (AvailableStock removed in v2)
     proteins = db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()
-    low_stock_count = sum(1 for p in proteins if (p.AvailableStock or 0) < (p.StockThreshold or 5))
-    
+    low_stock_count = sum(
+        1 for p in proteins
+        if (p.Quantity or 0) < (p.StockThreshold or 5)
+    )
+
     if low_stock_count > 0:
         suggestions.append({
-            'type': 'alert',
-            'title': 'Low Stock Alert',
-            'message': f'{low_stock_count} product(s) are running low on stock. Consider restocking.',
-            'action': 'view_low_stock'
+            "type":    "alert",
+            "title":   "Low Stock Alert",
+            "message": f"{low_stock_count} product(s) are running low on stock. Consider restocking.",
+            "action":  "view_low_stock",
         })
-    
-    # Check for overdue payments
+
     overdue = db.query(Invoice).filter(
         Invoice.gymId == current_gym.id,
-        Invoice.status.in_(['PENDING', 'PARTIAL']),
-        Invoice.dueDate < today
+        Invoice.status.in_(["PENDING", "PARTIAL"]),
+        Invoice.dueDate < today,
     ).count()
-    
+
     if overdue > 0:
         suggestions.append({
-            'type': 'warning',
-            'title': 'Overdue Payments',
-            'message': f'{overdue} payment(s) are overdue. Follow up for collection.',
-            'action': 'view_overdue'
+            "type":    "warning",
+            "title":   "Overdue Payments",
+            "message": f"{overdue} payment(s) are overdue. Follow up for collection.",
+            "action":  "view_overdue",
         })
-    
+
     return suggestions
 
 
 @router.post("/bulk-whatsapp-reminder")
 def generate_bulk_whatsapp_links(
-    reminder_type: str = 'expiring',  # 'expiring', 'overdue'
+    reminder_type: str = "expiring",   # 'expiring' | 'overdue'
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
     """Generate WhatsApp links for bulk reminders."""
     links = []
-    
-    if reminder_type == 'expiring':
+
+    if reminder_type == "expiring":
         today = datetime.now().date()
         end_date = today + timedelta(days=7)
-        
+
+        # FIX: DB-level filter using computed_status + NextDuedate range
         members = db.query(Member).filter(
             Member.gymId == current_gym.id,
-            Member.MembershipStatus == 'Active'
+            Member.computed_status == "Active",
+            Member.NextDuedate >= today,
+            Member.NextDuedate <= end_date,
         ).all()
-        
+
         for m in members:
-            if m.MembershipExpiryDate:
-                try:
-                    exp_date = m.MembershipExpiryDate  # Native Date
-                    if today <= exp_date <= end_date:
-                        phone = m.Mobile or m.Whatsapp
-                        if phone:
-                            phone_clean = str(phone).replace("+", "").replace(" ", "")
-                            if not phone_clean.startswith("91"):
-                                phone_clean = "91" + phone_clean
-                            
-                            days_left = (exp_date - today).days
-                            message = f"Hi {m.Name}, your gym membership expires in {days_left} day(s) on {exp_date.strftime('%d/%m/%Y')}. Please renew to continue your fitness journey! Visit us or call for renewal."
-                            encoded = urllib.parse.quote(message)
-                            
-                            links.append({
-                                'name': m.Name,
-                                'phone': phone,
-                                'expiryDate': exp_date.strftime('%d/%m/%Y'),
-                                'daysLeft': days_left,
-                                'link': f"https://web.whatsapp.com/send?phone={phone_clean}&text={encoded}"
-                            })
-                except:
-                    pass
-    
-    elif reminder_type == 'overdue':
-        
+            exp_date = m.NextDuedate    # Native Date
+            phone = m.Mobile or m.Whatsapp
+            if phone:
+                phone_clean = str(phone).replace("+", "").replace(" ", "")
+                if not phone_clean.startswith("91"):
+                    phone_clean = "91" + phone_clean
+
+                days_left = (exp_date - today).days
+                message = (
+                    f"Hi {m.Name}, your gym membership expires in {days_left} day(s) "
+                    f"on {exp_date.strftime('%d/%m/%Y')}. "
+                    "Please renew to continue your fitness journey! "
+                    "Visit us or call for renewal."
+                )
+                encoded = urllib.parse.quote(message)
+
+                links.append({
+                    "name":       m.Name,
+                    "phone":      str(phone),
+                    "expiryDate": exp_date.strftime("%d/%m/%Y"),
+                    "daysLeft":   days_left,
+                    "link":       f"https://web.whatsapp.com/send?phone={phone_clean}&text={encoded}",
+                })
+
+    elif reminder_type == "overdue":
         pending = db.query(Invoice).filter(
             Invoice.gymId == current_gym.id,
-            Invoice.status.in_(['PENDING', 'PARTIAL']),
-            Invoice.dueDate < datetime.now()
+            Invoice.status.in_(["PENDING", "PARTIAL"]),
+            Invoice.dueDate < datetime.now(),
         ).all()
-        
+
         for p in pending:
-            # Try to get phone from linked member
             phone = None
             if p.member:
                 phone = p.member.Mobile or p.member.Whatsapp
@@ -223,17 +218,21 @@ def generate_bulk_whatsapp_links(
                 phone_clean = str(phone).replace("+", "").replace(" ", "")
                 if not phone_clean.startswith("91"):
                     phone_clean = "91" + phone_clean
-                
+
                 remaining = (p.total or 0) - (p.paidAmount or 0)
-                message = f"Hi {p.customerName}, this is a reminder about your pending payment of ₹{remaining:.2f}. The due date was {p.dueDate}. Please clear at your earliest convenience. Thank you!"
+                message = (
+                    f"Hi {p.customerName}, this is a reminder about your pending payment "
+                    f"of ₹{remaining:.2f}. The due date was {p.dueDate}. "
+                    "Please clear at your earliest convenience. Thank you!"
+                )
                 encoded = urllib.parse.quote(message)
-                
+
                 links.append({
-                    'name': p.customerName,
-                    'phone': str(phone),
-                    'amount': remaining,
-                    'dueDate': str(p.dueDate) if p.dueDate else None,
-                    'link': f"https://web.whatsapp.com/send?phone={phone_clean}&text={encoded}"
+                    "name":    p.customerName,
+                    "phone":   str(phone),
+                    "amount":  remaining,
+                    "dueDate": str(p.dueDate) if p.dueDate else None,
+                    "link":    f"https://web.whatsapp.com/send?phone={phone_clean}&text={encoded}",
                 })
-    
+
     return links
