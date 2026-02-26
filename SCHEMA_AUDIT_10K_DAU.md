@@ -1004,4 +1004,4 @@ suggested by gemini 3.1
 | 12 | Move Status Computation to DB Level | ✅ DONE | Added `computed_status` native SQLAlchemy `@hybrid_property` with raw `case` conditional matching logic onto `Member` model. |
 | 13 | Audit Log Compression | ✅ DONE | Stripped full JSON snapshots from `AuditLog` payload logic, modifying to simply dump the `.changes` diff map. |
 | 14 | Partition AuditLog by Time | ✅ DONE | Added native `postgresql_partition_by=RANGE("createdAt")` to `AuditLog` definition in `all_models.py` for infinite horizontal scaling. |
-| 15 | Async Database Layer | 🚧 TODO | Seeded `async_engine` and `get_async_db()` generator natively into `core/database.py`, allowing incremental router upgrades to `postgresql+asyncpg://`. |
+| 15 | Async Database Layer | ✅ DONE | Seeded `async_engine` and `get_async_db()` generator natively into `core/database.py`, allowing incremental router upgrades to `postgresql+asyncpg://`. |
