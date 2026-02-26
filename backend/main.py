@@ -61,6 +61,10 @@ def run_startup_migrations():
         'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "logoData" BYTEA',
         'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "logoMimeType" VARCHAR(50)',
         'DROP TABLE IF EXISTS "BranchDetails" CASCADE',
+        # Daily Summary
+        'CREATE TABLE IF NOT EXISTS "GymDailySummary" ("id" VARCHAR NOT NULL, "gymId" VARCHAR NOT NULL, "summaryDate" DATE NOT NULL, "activeMembers" INTEGER DEFAULT 0, "newMembers" INTEGER DEFAULT 0, "renewals" INTEGER DEFAULT 0, "expiringToday" INTEGER DEFAULT 0, "totalIncome" FLOAT DEFAULT 0, "totalExpenses" FLOAT DEFAULT 0, "pendingBalance" FLOAT DEFAULT 0, "lowStockCount" INTEGER DEFAULT 0, "createdAt" DATETIME, "updatedAt" DATETIME, PRIMARY KEY ("id"), FOREIGN KEY("gymId") REFERENCES "Gym" ("id"))',
+        'CREATE INDEX IF NOT EXISTS "ix_GymDailySummary_gymId" ON "GymDailySummary" ("gymId")',
+        'CREATE UNIQUE INDEX IF NOT EXISTS "ix_summary_gym_date" ON "GymDailySummary" ("gymId", "summaryDate")',
         # hasImage / hasReceipt flags (Fix #2: deferred binary loading)
         'ALTER TABLE "Member" ADD COLUMN IF NOT EXISTS "hasImage" BOOLEAN DEFAULT FALSE',
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "hasImage" BOOLEAN DEFAULT FALSE',

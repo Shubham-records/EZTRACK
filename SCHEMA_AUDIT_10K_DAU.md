@@ -1000,7 +1000,7 @@ suggested by gemini 3.1
 
 | 9 | Merge Branch and BranchDetails | ✅ DONE | Merged BranchDetails into Branch model, moved fields, updated auth router signup and branch_details endpoints to query Branch with isDefault. Dropped old BranchDetails table in migrations. |
 | 10 | Single Source of Truth for Stock Quantity | ✅ DONE | Removed redundant Quantity tracking, updated `/adjust-stock` and inline routines to compute from `ProteinLot` sums dynamically. |
-| 11 | Pre-Computed Dashboard Aggregates | 🚧 TODO | Added `GymDailySummary` schema; updated `dashboard.py` to cache calculations with a TTL to prevent repeated DB scans. |
+| 11 | Pre-Computed Dashboard Aggregates | ✅ DONE | Added `GymDailySummary` schema; updated `dashboard.py` to cache calculations with a TTL to prevent repeated DB scans. |
 | 12 | Move Status Computation to DB Level | ✅ DONE | Added `computed_status` native SQLAlchemy `@hybrid_property` with raw `case` conditional matching logic onto `Member` model. |
 | 13 | Audit Log Compression | ✅ DONE | Stripped full JSON snapshots from `AuditLog` payload logic, modifying to simply dump the `.changes` diff map. |
 | 14 | Partition AuditLog by Time | ✅ DONE | Added native `postgresql_partition_by=RANGE("createdAt")` to `AuditLog` definition in `all_models.py` for infinite horizontal scaling. |

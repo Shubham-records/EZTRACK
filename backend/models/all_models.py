@@ -246,6 +246,34 @@ class Branch(Base):
     proteinStocks = relationship("ProteinStock", back_populates="branch")
 
 
+class GymDailySummary(Base):
+    """Pre-computed daily dashboard aggregates"""
+    __tablename__ = "GymDailySummary"
+    __table_args__ = (
+        Index('ix_summary_gym_date', 'gymId', 'summaryDate', unique=True),
+    )
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    gymId = Column(String, ForeignKey("Gym.id"), nullable=False, index=True)
+    summaryDate = Column(Date, nullable=False)
+    
+    activeMembers = Column(Integer, default=0)
+    newMembers = Column(Integer, default=0)
+    renewals = Column(Integer, default=0)
+    expiringToday = Column(Integer, default=0)
+    
+    totalIncome = Column(Float, default=0)
+    totalExpenses = Column(Float, default=0)
+    pendingBalance = Column(Float, default=0)
+    
+    lowStockCount = Column(Integer, default=0)
+    
+    createdAt = Column(DateTime, default=func.now())
+    updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    gym = relationship("Gym", backref="dailySummaries")
+
+
 class GymSettings(Base):
     """Gym-wide configuration settings"""
     __tablename__ = "GymSettings"

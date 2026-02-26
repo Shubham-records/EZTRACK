@@ -6,7 +6,7 @@ from typing import Dict, Any
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Member, Invoice, ProteinStock, ProteinLot, Expense, GymSettings
+from models.all_models import Gym, Member, Invoice, ProteinStock, ProteinLot, Expense, GymSettings, GymDailySummary
 
 router = APIRouter()
 
