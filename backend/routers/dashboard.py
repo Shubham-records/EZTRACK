@@ -57,8 +57,12 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
     ).scalar() or 0.0
 
 
-    if summary:
-        # We have a cached summary for today, use its values
+    # Define a TTL (e.g., 15 minutes)
+    cache_ttl = timedelta(minutes=15)
+    now = datetime.now()
+
+    if summary and summary.updatedAt and (now - summary.updatedAt) < cache_ttl:
+        # We have a cached summary for today that is fresh, use its values
         active_members = summary.activeMembers
         today_expiry = summary.expiringToday
         today_collection = summary.totalIncome
@@ -66,7 +70,7 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
         low_stock_count = summary.lowStockCount
         today_expenses = summary.totalExpenses
     else:
-        # Cache miss or not computed yet today, compute everything
+        # Cache miss or expired, compute everything
         # 1. Active Members
         active_members = db.query(Member).filter(
             Member.gymId == current_gym.id,
@@ -117,18 +121,29 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
             Expense.date == today
         ).scalar() or 0.0
 
-        # Save the computed summary
-        summary = GymDailySummary(
-            gymId=current_gym.id,
-            summaryDate=today,
-            activeMembers=active_members,
-            expiringToday=today_expiry,
-            totalIncome=today_collection,
-            pendingBalance=pending_balance,
-            lowStockCount=low_stock_count,
-            totalExpenses=today_expenses
-        )
-        db.add(summary)
+        if summary:
+            # Update existing summary record
+            summary.activeMembers = active_members
+            summary.expiringToday = today_expiry
+            summary.totalIncome = today_collection
+            summary.pendingBalance = pending_balance
+            summary.lowStockCount = low_stock_count
+            summary.totalExpenses = today_expenses
+            summary.updatedAt = now
+        else:
+            # Save the computed summary
+            summary = GymDailySummary(
+                gymId=current_gym.id,
+                summaryDate=today,
+                activeMembers=active_members,
+                expiringToday=today_expiry,
+                totalIncome=today_collection,
+                pendingBalance=pending_balance,
+                lowStockCount=low_stock_count,
+                totalExpenses=today_expenses
+            )
+            db.add(summary)
+            
         try:
             db.commit()
         except Exception as e:
