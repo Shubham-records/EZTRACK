@@ -7,6 +7,7 @@ from core.database import get_db
 from core.dependencies import get_current_gym
 from models.all_models import Gym, Invoice, PaymentEvent
 from schemas.invoice import InvoiceCreate, InvoiceResponse
+from core.audit_utils import log_audit
 
 router = APIRouter()
 
@@ -87,6 +88,10 @@ def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_g
     )
     
     db.add(new_invoice)
+    db.flush()
+    log_audit(db, current_gym.id, "Invoice", new_invoice.id, "CREATE",
+              {"customerName": data.customerName, "total": total, "status": data.status},
+              current_gym.username)
     db.commit()
     db.refresh(new_invoice)
     
@@ -137,6 +142,18 @@ def bulk_create_invoices(data: dict, current_gym: Gym = Depends(get_current_gym)
                 editReason='Bulk Import'
             )
             db.add(new_invoice)
+
+            # DATA-1: Insert PaymentEvent if paidAmount > 0
+            if new_invoice.paidAmount and new_invoice.paidAmount > 0:
+                db.add(PaymentEvent(
+                    invoiceId=new_invoice.id,
+                    gymId=current_gym.id,
+                    amount=new_invoice.paidAmount,
+                    paymentMode=new_invoice.paymentMode or "CASH",
+                    notes="Bulk import",
+                    recordedBy=current_gym.username,
+                ))
+
             created_count += 1
         except Exception as e:
             print(f"Error creating invoice: {e}")
@@ -184,11 +201,16 @@ def update_invoice(data: dict, current_gym: Gym = Depends(get_current_gym), db: 
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     
-    # Update allowed fields
-    updatable_fields = ['status', 'paymentMode', 'dueDate', 'customerName', 'items', 'subTotal', 'tax', 'discount', 'total']
+    # Update allowed fields (paidAmount removed — use pay_invoice endpoint;
+    # items handled separately to avoid unnecessary TOAST rewrites)
+    updatable_fields = ['status', 'paymentMode', 'dueDate', 'customerName', 'subTotal', 'tax', 'discount', 'total']
     for key in updatable_fields:
         if key in data and data[key] is not None:
             setattr(invoice, key, data[key])
+    
+    # PERF-3: Only update items JSON if explicitly changed
+    if 'items' in data and data['items'] is not None:
+        invoice.items = data['items']
     
     invoice.lastEditedBy = current_gym.username
     invoice.editReason = data.get('editReason', 'Invoice Updated')
@@ -209,6 +231,32 @@ def delete_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym),
     return None
 
 
+# MISSING-2: Payment history endpoint
+@router.get("/{invoice_id}/payment-history")
+def get_payment_history(
+    invoice_id: str,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    invoice = db.query(Invoice).filter(
+        Invoice.id == invoice_id,
+        Invoice.gymId == current_gym.id
+    ).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    events = db.query(PaymentEvent).filter(
+        PaymentEvent.invoiceId == invoice_id
+    ).order_by(PaymentEvent.createdAt.asc()).all()
+
+    return [{
+        "id": e.id,
+        "amount": e.amount,
+        "paymentMode": e.paymentMode,
+        "notes": e.notes,
+        "recordedBy": e.recordedBy,
+        "createdAt": e.createdAt.isoformat() if e.createdAt else None,
+    } for e in events]
 
 
 
@@ -257,6 +305,10 @@ def pay_invoice(
 
     # editReason is a CATEGORY TAG only — financial data lives in PaymentEvent
     invoice.lastEditedBy = current_gym.username
+
+    log_audit(db, current_gym.id, "Invoice", invoice.id, "UPDATE",
+              {"action": "Payment", "amount": amount, "paymentMode": mode, "newStatus": invoice.status},
+              current_gym.username)
 
     db.commit()
     db.refresh(invoice)

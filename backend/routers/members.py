@@ -8,8 +8,9 @@ from core.database import get_db
 from core.dependencies import get_current_gym
 from core.date_utils import parse_date, format_date
 from core.cache import get_gym_settings
-from models.all_models import Gym, Member, Invoice, GymSettings
+from models.all_models import Gym, Member, Invoice, GymSettings, PaymentEvent
 from schemas.member import MemberCreate, MemberResponse, MemberUpdate
+from core.audit_utils import log_audit
 
 router = APIRouter()
 
@@ -161,20 +162,11 @@ def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), d
     if name:
         conditions.append(Member.Name == name)
     if mobile:
-        try:
-            conditions.append(Member.Mobile == int(mobile))
-        except:
-            pass
+        conditions.append(Member.Mobile == str(mobile))
     if whatsapp:
-        try:
-            conditions.append(Member.Whatsapp == int(whatsapp))
-        except:
-            pass
+        conditions.append(Member.Whatsapp == str(whatsapp))
     if aadhaar:
-        try:
-            conditions.append(Member.Aadhaar == int(aadhaar))
-        except:
-            pass
+        conditions.append(Member.Aadhaar == str(aadhaar))
             
     if not conditions:
         return []
@@ -206,15 +198,9 @@ def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db
         if name:
             conditions.append(Member.Name == name)
         if mobile:
-            try:
-                conditions.append(Member.Mobile == int(mobile))
-            except:
-                pass
+            conditions.append(Member.Mobile == str(mobile))
         if whatsapp:
-            try:
-                conditions.append(Member.Whatsapp == int(whatsapp))
-            except:
-                pass
+            conditions.append(Member.Whatsapp == str(whatsapp))
         
         existing = None
         if conditions:
@@ -334,8 +320,10 @@ def bulk_update_members(data: dict, current_gym: Gym = Depends(get_current_gym),
                 continue
             if hasattr(member, key) and value is not None:
                 try:
-                    if key in ['Mobile', 'Whatsapp', 'Aadhaar', 'Age', 'weight', 'LastPaymentAmount']:
+                    if key in ['Age', 'weight', 'LastPaymentAmount']:
                         value = int(value) if value else None
+                    elif key in ['Mobile', 'Whatsapp', 'Aadhaar']:
+                        value = str(value) if value else None
                     elif key == 'height':
                         value = float(value) if value else None
                     setattr(member, key, value)
@@ -465,8 +453,23 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
         )
         db.add(new_invoice)
 
+        # DATA-1: Insert PaymentEvent for invoice paidAmount sync
+        if paid_amount > 0:
+            db.add(PaymentEvent(
+                invoiceId=new_invoice.id,
+                gymId=current_gym.id,
+                amount=paid_amount,
+                paymentMode=data.paymentMode or "CASH",
+                notes="Re-Admission",
+                recordedBy=current_gym.username,
+            ))
+
     # ONE commit for both member update + invoice (atomic)
     try:
+        db.flush()  # populate IDs for audit
+        log_audit(db, current_gym.id, "Member", member.id, "UPDATE",
+                  {"action": "Re-Admission", "PlanType": data.PlanType, "PlanPeriod": data.PlanPeriod},
+                  current_gym.username)
         db.commit()
     except Exception:
         db.rollback()
@@ -571,8 +574,23 @@ def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
             new_invoice.editReason = f"Renewal Invoice | Paid: ₹{paid_amount:.0f} | Balance: ₹{balance:.0f}"
         db.add(new_invoice)
 
+        # DATA-1: Insert PaymentEvent for invoice paidAmount sync
+        if paid_amount > 0:
+            db.add(PaymentEvent(
+                invoiceId=new_invoice.id,
+                gymId=current_gym.id,
+                amount=paid_amount,
+                paymentMode=data.paymentMode or "CASH",
+                notes="Renewal",
+                recordedBy=current_gym.username,
+            ))
+
     # ONE commit for both member update + invoice (atomic)
     try:
+        db.flush()
+        log_audit(db, current_gym.id, "Member", member.id, "UPDATE",
+                  {"action": "Renewal", "PlanType": data.PlanType, "PlanPeriod": data.PlanPeriod},
+                  current_gym.username)
         db.commit()
     except Exception:
         db.rollback()
@@ -616,7 +634,7 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
         Whatsapp=data.Whatsapp,
         PlanPeriod=data.PlanPeriod,
         PlanType=data.PlanType,
-        MembershipStatus=data.MembershipStatus,
+        # MembershipStatus is computed dynamically — do NOT set it
         MembershipExpiryDate=parse_date(data.MembershipExpiryDate),
         LastPaymentDate=parse_date(data.LastPaymentDate),
         NextDuedate=parse_date(data.NextDuedate),
@@ -706,6 +724,21 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
             editReason=f"New Admission | Paid: ₹{paid_amount:.0f} | Balance: ₹{balance:.0f}" if payment_status != 'PAID' else "New Admission"
         )
         db.add(new_invoice)
+
+        # DATA-1: Insert PaymentEvent for invoice paidAmount sync
+        if paid_amount > 0:
+            db.add(PaymentEvent(
+                invoiceId=new_invoice.id,
+                gymId=current_gym.id,
+                amount=paid_amount,
+                paymentMode=data.paymentMode or "CASH",
+                notes="New Admission",
+                recordedBy=current_gym.username,
+            ))
+    
+    log_audit(db, current_gym.id, "Member", new_member.id, "CREATE",
+              {"Name": data.Name, "PlanType": data.PlanType, "PlanPeriod": data.PlanPeriod},
+              current_gym.username)
     
     db.commit()
     db.refresh(new_member)
@@ -726,26 +759,34 @@ def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_curren
         raise HTTPException(status_code=404, detail="Member not found")
         
     date_keys = {'DateOfJoining', 'DateOfReJoin', 'MembershipExpiryDate', 'LastPaymentDate', 'NextDuedate'}
+    changed = {}
     
     for key, value in data.items():
         if key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'tableData']:
              continue
         if hasattr(member, key):
-             # Type conversion checks
              try:
-                 if key in ['Mobile', 'Whatsapp', 'Aadhaar', 'Age', 'weight', 'LastPaymentAmount', 'MembershipReceiptnumber', 'RenewalReceiptNumber']:
+                 if key in ['Age', 'weight', 'LastPaymentAmount', 'MembershipReceiptnumber', 'RenewalReceiptNumber']:
                      value = int(value) if value is not None and value != '' else None
+                 elif key in ['Mobile', 'Whatsapp', 'Aadhaar']:
+                     value = str(value) if value is not None and value != '' else None
                  elif key in ['height']:
                      value = float(value) if value is not None and value != '' else None
                  elif key in date_keys:
                      value = parse_date(value)
+                 old_val = getattr(member, key, None)
+                 if old_val != value:
+                     changed[key] = {"from": str(old_val) if hasattr(old_val, 'isoformat') else old_val,
+                                     "to": str(value) if hasattr(value, 'isoformat') else value}
                  setattr(member, key, value)
              except Exception:
-                 pass # Ignore conversion errors, keep original or skip
+                 pass
              
     member.lastEditedBy = current_gym.username
     member.editReason = 'Update via Web'
     
+    if changed:
+        log_audit(db, current_gym.id, "Member", member.id, "UPDATE", changed, current_gym.username)
     db.commit()
     db.refresh(member)
     return map_member_response(member)
@@ -763,9 +804,8 @@ def update_member(data: MemberUpdate, id: str, current_gym: Gym = Depends(get_cu
     pass
 
 # Redefining PATCH to match Next.js exactly (ID in body)
-@router.patch("/update", response_model=MemberResponse) # Using different path to avoid collision if needed, but Next.js usage was PATCH /api/members
+@router.patch("/update", response_model=MemberResponse)
 def update_member_body(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    # Using generic dict to extract ID then parse via Pydantic
     member_id = data.get("id")
     if not member_id:
         raise HTTPException(status_code=400, detail="Member ID required")
@@ -774,23 +814,37 @@ def update_member_body(data: dict, current_gym: Gym = Depends(get_current_gym), 
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
         
-    # Update fields
-    # We should iterate safely.
-    # Remove metadata
     updatable_data = data.copy()
-    updatable_data.pop('id', None)
-    updatable_data.pop('lastEditedBy', None)
-    updatable_data.pop('editReason', None)
+    for k in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'lastEditedBy', 'editReason', 'tableData']:
+        updatable_data.pop(k, None)
     
-    # Manually update
+    date_keys = {'DateOfJoining', 'DateOfReJoin', 'MembershipExpiryDate', 'LastPaymentDate', 'NextDuedate'}
+    changed = {}
+    
     for key, value in updatable_data.items():
         if hasattr(member, key):
-             # Handle constraints or types if needed
-             setattr(member, key, value)
+            try:
+                if key in ['Age', 'weight', 'LastPaymentAmount', 'MembershipReceiptnumber', 'RenewalReceiptNumber']:
+                    value = int(value) if value is not None and value != '' else None
+                elif key in ['Mobile', 'Whatsapp', 'Aadhaar']:
+                    value = str(value) if value is not None and value != '' else None
+                elif key in ['height']:
+                    value = float(value) if value is not None and value != '' else None
+                elif key in date_keys:
+                    value = parse_date(value)
+                old_val = getattr(member, key, None)
+                if old_val != value:
+                    changed[key] = {"from": str(old_val) if hasattr(old_val, 'isoformat') else old_val,
+                                    "to": str(value) if hasattr(value, 'isoformat') else value}
+                setattr(member, key, value)
+            except Exception:
+                pass
     
     member.lastEditedBy = current_gym.username
     member.editReason = data.get('editReason', 'Updated Member Details')
     
+    if changed:
+        log_audit(db, current_gym.id, "Member", member.id, "UPDATE", changed, current_gym.username)
     db.commit()
     db.refresh(member)
     

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
@@ -47,7 +48,7 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
         Member.gymId == current_gym.id,
         Member.MembershipExpiryDate >= today,
         Member.MembershipExpiryDate <= week_end,
-        Member.MembershipStatus.in_(['Active', 'active'])
+        Member.computed_status == "Active",
     ).count()
 
     # 10. Month Expenses
@@ -75,7 +76,7 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
         # 1. Active Members
         active_members = db.query(Member).filter(
             Member.gymId == current_gym.id,
-            Member.MembershipStatus.in_(['Active', 'active'])
+            Member.computed_status == "Active"
         ).count()
         
         # 2. Today's Expiry (members whose MembershipExpiryDate is today)
@@ -123,34 +124,31 @@ def get_dashboard_stats(current_gym: Gym = Depends(get_current_gym), db: Session
             Expense.date == today
         ).scalar() or 0.0
 
-        if summary:
-            # Update existing summary record
-            summary.activeMembers = active_members
-            summary.expiringToday = today_expiry
-            summary.totalIncome = today_collection
-            summary.pendingBalance = pending_balance
-            summary.lowStockCount = low_stock_count
-            summary.totalExpenses = today_expenses
-            summary.updatedAt = now
-        else:
-            # Save the computed summary
-            summary = GymDailySummary(
-                gymId=current_gym.id,
-                summaryDate=today,
+        # Atomic upsert — INSERT ... ON CONFLICT DO UPDATE
+        # Eliminates race condition between APScheduler + live request
+        stmt = pg_insert(GymDailySummary).values(
+            gymId=current_gym.id,
+            summaryDate=today,
+            activeMembers=active_members,
+            expiringToday=today_expiry,
+            totalIncome=today_collection,
+            pendingBalance=pending_balance,
+            lowStockCount=low_stock_count,
+            totalExpenses=today_expenses,
+        ).on_conflict_do_update(
+            index_elements=["gymId", "summaryDate"],
+            set_=dict(
                 activeMembers=active_members,
                 expiringToday=today_expiry,
                 totalIncome=today_collection,
                 pendingBalance=pending_balance,
                 lowStockCount=low_stock_count,
-                totalExpenses=today_expenses
+                totalExpenses=today_expenses,
+                updatedAt=func.now(),
             )
-            db.add(summary)
-            
-        try:
-            db.commit()
-        except Exception as e:
-            # If there's a unique constraint violation due to race condition, just rollback
-            db.rollback()
+        )
+        db.execute(stmt)
+        db.commit()
 
     
     return {
@@ -181,8 +179,15 @@ def get_dashboard_alerts(current_gym: Gym = Depends(get_current_gym), db: Sessio
     expiry_range = settings.expiryRange if settings and settings.expiryRange else 0
     grace_period = settings.postExpiryGraceDays if settings and settings.postExpiryGraceDays else 30
     
-    # 1. Members Alerts
-    members = db.query(Member).filter(Member.gymId == current_gym.id).all()
+    # 1. Members Alerts — push filter to SQL (PERF-2)
+    grace_cutoff = today - timedelta(days=grace_period)
+    alert_end    = today + timedelta(days=expiry_range)
+    members = db.query(Member).filter(
+        Member.gymId == current_gym.id,
+        Member.NextDuedate.isnot(None),
+        Member.NextDuedate >= grace_cutoff,
+        Member.NextDuedate <= alert_end,
+    ).all()
     
     for m in members:
         if not m.NextDuedate:

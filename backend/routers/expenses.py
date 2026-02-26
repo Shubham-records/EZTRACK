@@ -9,6 +9,7 @@ from core.date_utils import parse_date, format_date
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
 from models.all_models import Gym, Expense
 from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse
+from core.audit_utils import log_audit
 
 router = APIRouter()
 
@@ -58,6 +59,10 @@ def create_expense(
     expense_data['date'] = parse_date(expense_data.get('date'))
     expense = Expense(gymId=current_gym.id, **expense_data)
     db.add(expense)
+    db.flush()
+    log_audit(db, current_gym.id, "Expense", expense.id, "CREATE",
+              {"category": expense.category, "amount": expense.amount},
+              current_gym.username)
     db.commit()
     db.refresh(expense)
     return map_expense_response(expense)
@@ -146,6 +151,8 @@ def update_expense(
     for key, value in update_data.items():
         setattr(expense, key, value)
     
+    log_audit(db, current_gym.id, "Expense", expense.id, "UPDATE",
+              update_data, current_gym.username)
     db.commit()
     db.refresh(expense)
     return map_expense_response(expense)
@@ -166,6 +173,9 @@ def delete_expense(
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
     
+    log_audit(db, current_gym.id, "Expense", expense.id, "DELETE",
+              {"category": expense.category, "amount": expense.amount},
+              current_gym.username)
     db.delete(expense)
     db.commit()
     return None

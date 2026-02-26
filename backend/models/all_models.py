@@ -61,6 +61,17 @@ class Gym(Base):
     termsAndConditions = relationship("TermsAndConditions", back_populates="gym", cascade="all, delete-orphan")
 
 
+# SEC-1: Prevent hard deletes of Gym — must soft-delete instead
+from sqlalchemy import event
+
+@event.listens_for(Gym, "before_delete")
+def prevent_gym_hard_delete(mapper, connection, target):
+    raise RuntimeError(
+        f"Hard delete of Gym {target.id} is not allowed. "
+        "Set isDeleted=True and deletedAt=datetime.utcnow() instead."
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GymSubscription  (SaaS plan/limits — stubbed for future billing)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -267,6 +278,10 @@ class Member(Base):
         Index("ix_member_gym_receipt", "gymId", "MembershipReceiptnumber"),
         Index("ix_member_gym_expiry",  "gymId", "MembershipExpiryDate"),
         Index("ix_member_gym_nextdue", "gymId", "NextDuedate"),
+        # PERF-1: partial index for computed_status == "Active" queries
+        # Covers the majority of dashboard/member-list filters at fraction of full-table cost
+        Index("ix_member_gym_active", "gymId", "NextDuedate",
+              postgresql_where=Column("NextDuedate").isnot(None)),
     )
 
     id    = Column(String, primary_key=True, default=generate_uuid)

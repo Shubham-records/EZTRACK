@@ -9,6 +9,7 @@ from core.date_utils import parse_date, format_date
 from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
 from schemas.protein import ProteinCreate, ProteinUpdate, ProteinResponse
 from sqlalchemy.sql import func
+from core.audit_utils import log_audit, compute_diff
 
 router = APIRouter()
 
@@ -53,7 +54,7 @@ def sync_protein_quantity(protein_id: str, current_gym_id: str, db: Session):
             ProteinLot.gymId == current_gym_id
         ).scalar() or 0
         protein.Quantity = total_lots
-        db.commit()
+        db.commit()  # separate commit — lot write is already committed by caller
 
 
 
@@ -379,6 +380,9 @@ def update_protein(
     
     update_data = data.model_dump(exclude_unset=True)
     
+    # Capture old prices before mutation for audit diff
+    old_prices = {k: getattr(protein, k, None) for k in ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']}
+    
     # Parse ExpiryDate string → native Date
     if 'ExpiryDate' in update_data:
         update_data['ExpiryDate'] = parse_date(update_data['ExpiryDate'])
@@ -398,6 +402,16 @@ def update_protein(
     # Recalculate computed fields only if relevant fields changed
     if any(k in update_data for k in ['Quantity', 'LandingPrice', 'SellingPrice', 'MarginPrice', 'OfferPrice']):
         recalculate_computed_fields(protein)
+    
+    # Audit log for price changes (powers price history endpoint)
+    price_fields = ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']
+    price_diff = {}
+    for k in price_fields:
+        if k in update_data and update_data[k] != old_prices.get(k):
+            price_diff[k] = {"from": old_prices.get(k), "to": update_data[k]}
+    if price_diff:
+        log_audit(db, current_gym.id, "ProteinStock", protein_id, "UPDATE",
+                  price_diff, current_gym.username)
     
     db.commit()
     db.refresh(protein)
@@ -424,6 +438,9 @@ def update_protein_body(
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
     
+    # Capture old prices before mutation for audit diff
+    old_prices = {k: getattr(protein, k, None) for k in ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']}
+    
     # Remove metadata and computed fields that should not be overwritten directly
     updatable_data = data.copy()
     for key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'isLowStock', 'lots', 'TotalPrice', 'ProfitAmount']:
@@ -447,6 +464,16 @@ def update_protein_body(
     # Recalculate computed fields only if relevant fields changed
     if any(k in updatable_data for k in ['Quantity', 'LandingPrice', 'SellingPrice', 'MarginPrice', 'OfferPrice']):
         recalculate_computed_fields(protein)
+    
+    # Audit log for price changes (powers price history endpoint)
+    price_fields = ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']
+    price_diff = {}
+    for k in price_fields:
+        if k in updatable_data and updatable_data[k] != old_prices.get(k):
+            price_diff[k] = {"from": old_prices.get(k), "to": updatable_data[k]}
+    if price_diff:
+        log_audit(db, current_gym.id, "ProteinStock", protein_id, "UPDATE",
+                  price_diff, current_gym.username)
     
     db.commit()
     db.refresh(protein)

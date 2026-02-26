@@ -21,6 +21,13 @@ DEFAULT_TEMPLATES = {
 
 def ensure_default_templates(gym_id: str, db: Session):
     """Create default templates for a gym if they don't exist."""
+    # DATA-5: Early exit — skip all work if templates already initialised
+    count = db.query(WhatsAppTemplate).filter(
+        WhatsAppTemplate.gymId == gym_id
+    ).count()
+    if count >= len(DEFAULT_TEMPLATES):
+        return  # Already initialised, skip all work
+
     existing = db.query(WhatsAppTemplate).filter(
         WhatsAppTemplate.gymId == gym_id
     ).all()

@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime, timedelta
 import random
+import os
 
 from core.database import get_db
 from core.dependencies import get_current_gym
@@ -108,6 +109,10 @@ def seed_sample_data(
     db: Session = Depends(get_db)
 ):
     """Generate sample data for testing."""
+    # SEC-2: Gate behind ALLOW_SEED_DATA env var
+    if not os.getenv("ALLOW_SEED_DATA", "false").lower() == "true":
+        raise HTTPException(status_code=403, detail="Seed data not available in production")
+
     created = {"members": 0, "proteins": 0, "expenses": 0}
     
     # Generate members
@@ -127,15 +132,15 @@ def seed_sample_data(
             Name=name,
             Gender=random.choice(["M", "F"]),
             Age=random.randint(18, 55),
-            Mobile=9000000000 + random.randint(100000000, 999999999),
-            Whatsapp=9000000000 + random.randint(100000000, 999999999),
+            Mobile=str(9000000000 + random.randint(100000000, 999999999)),
+            Whatsapp=str(9000000000 + random.randint(100000000, 999999999)),
             height=round(random.uniform(150, 190), 1),
             weight=random.randint(50, 100),
             PlanType=random.choice(plan_types),
             PlanPeriod=chosen_period,
             DateOfJoining=join_date.date(),
             MembershipExpiryDate=expiry_date.date(),
-            MembershipStatus=random.choice(statuses) if expiry_date > datetime.now() else "Expired",
+            NextDuedate=expiry_date.date(),  # computed_status reads NextDuedate
             LastPaymentAmount=random.choice([500, 1000, 1500, 2000, 2500, 3000, 5000]),
             Address=f"{random.randint(1, 500)}, Sector {random.randint(1, 50)}, City"
         )
@@ -157,7 +162,6 @@ def seed_sample_data(
             Flavour=random.choice(flavours),
             Weight=random.choice(["1kg", "2kg", "2.5kg", "5lb"]),
             Quantity=random.randint(1, 20),
-            AvailableStock=random.randint(0, 15),
             StockThreshold=random.randint(3, 8),
             LandingPrice=float(landing_price),
             MRPPrice=float(landing_price + margin + 500),

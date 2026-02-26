@@ -693,51 +693,67 @@ if (response.status === 401) {
 
 ### Backend Fixes — Ordered by Priority
 
-| # | File | Issue | Effort |
+| # | File | Issue | Status |
 |---|------|--------|--------|
-| BUG-1 | `routers/dashboard.py` | Replace `MembershipStatus` filter with `computed_status` | 15 min |
-| BUG-2 | `routers/members.py` | Remove `MembershipStatus=` from `Member()` constructor in `create_member()` | 5 min |
-| BUG-3 | `routers/members.py` | Fix `bulk_update_members()` and `update_member_put()` phone field casting | 10 min |
-| BUG-4 | `routers/members.py` | Fix `search_duplicates()` and `check_duplicates()` phone comparison | 10 min |
-| DATA-1 | `routers/invoices.py`, `routers/members.py` | Sync `PaymentEvent` with all `paidAmount` write paths | 1 hr |
-| DATA-2 | `routers/proteins.py` | Add `sync_protein_quantity()` after every lot write | 1 hr |
-| DATA-3 | `routers/proteins.py` | Add gym ownership check before lot INSERT | 15 min |
-| DATA-4 | `routers/dashboard.py` | Replace try/except upsert with `INSERT ... ON CONFLICT DO UPDATE` | 1 hr |
-| DATA-5 | `routers/whatsapp_templates.py` | Add early-exit count check in `ensure_default_templates()` | 15 min |
-| MISSING-1 | All routers | Wire `AuditLog` writes for members, invoices, expenses, protein price changes | 3 hrs |
-| MISSING-2 | `routers/invoices.py` | Add `GET /{invoice_id}/payment-history` endpoint | 30 min |
-| PERF-1 | Alembic migration | Add partial index for `computed_status` queries | 30 min + mig |
-| PERF-2 | `routers/dashboard.py` | Push alerts member filter to SQL WHERE clause | 30 min |
-| PERF-3 | `routers/invoices.py` | Only update `items` JSON if explicitly changed | 15 min |
-| SCHEMA-1 | `models/all_models.py` + Alembic | `Float` → `Numeric(10,2)` for all monetary columns | 1 day + mig |
-| SCHEMA-2 | `models/all_models.py` + Alembic | `Invoice.dueDate` DateTime → Date | 1 hr + mig |
-| SCHEMA-3 | `models/all_models.py` + Alembic | `User.branchIds` JSON → `UserBranchAccess` table | 3 hrs + mig |
-| SCHEMA-4 | `models/all_models.py` + Alembic | Add missing `gymId` index on `Branch` | 15 min + mig |
-| SCHEMA-5 | `routers/members.py`, `staff.py`, `branch_details.py` | Enforce `GymSubscription` plan limits | 1 hr |
-| SEC-1 | `models/all_models.py` | Add SQLAlchemy event listener to block `Gym` hard deletes | 30 min |
-| SEC-2 | `routers/audit.py` | Gate `seed-sample-data` behind `ALLOW_SEED_DATA` env var | 10 min |
+| BUG-1 | `routers/dashboard.py` | Replace `MembershipStatus` filter with `computed_status` | ✅ Done (27 Feb 2026) |
+| BUG-2 | `routers/members.py` | Remove `MembershipStatus=` from `Member()` constructor in `create_member()` | ✅ Done (27 Feb 2026) |
+| BUG-3 | `routers/members.py` | Fix `bulk_update_members()` and `update_member_put()` phone field casting | ✅ Done (27 Feb 2026) |
+| BUG-4 | `routers/members.py` | Fix `search_duplicates()` and `check_duplicates()` phone comparison | ✅ Done (27 Feb 2026) |
+| DATA-1 | `routers/invoices.py`, `routers/members.py` | Sync `PaymentEvent` with all `paidAmount` write paths | ✅ Done (27 Feb 2026) |
+| DATA-2 | `routers/proteins.py` | Add `sync_protein_quantity()` after every lot write | ✅ Already implemented |
+| DATA-3 | `routers/proteins.py` | Add gym ownership check before lot INSERT | ✅ Already implemented |
+| DATA-4 | `routers/dashboard.py` | Replace try/except upsert with `INSERT ... ON CONFLICT DO UPDATE` | ✅ Done (27 Feb 2026) |
+| DATA-5 | `routers/whatsapp_templates.py` | Add early-exit count check in `ensure_default_templates()` | ✅ Done (27 Feb 2026) |
+| MISSING-1 | All routers + `core/audit_utils.py` | Wire `AuditLog` writes for members, invoices, expenses, protein price changes | ✅ Done (27 Feb 2026) — member UPDATE diff audit added |
+| MISSING-2 | `routers/invoices.py` | Add `GET /{invoice_id}/payment-history` endpoint | ✅ Done (27 Feb 2026) |
+| PERF-1 | `models/all_models.py` + `migration.py` | Add partial index `ix_member_gym_active` for `computed_status` queries | ✅ Done + migrated (27 Feb 2026) |
+| PERF-2 | `routers/dashboard.py` | Push alerts member filter to SQL WHERE clause | ✅ Done (27 Feb 2026) |
+| PERF-3 | `routers/invoices.py` | Only update `items` JSON if explicitly changed | ✅ Done (27 Feb 2026) |
+| SCHEMA-1 | `models/all_models.py` + Alembic | `Float` → `Numeric(10,2)` for all monetary columns | ⏳ Pending (needs Alembic) |
+| SCHEMA-2 | `models/all_models.py` + Alembic | `Invoice.dueDate` DateTime → Date | ⏳ Pending (needs Alembic) |
+| SCHEMA-3 | `models/all_models.py` + Alembic | `User.branchIds` JSON → `UserBranchAccess` table | ⏳ Pending (needs Alembic) |
+| SCHEMA-4 | `models/all_models.py` + Alembic | Add missing `gymId` index on `Branch` | ⏳ Pending (needs Alembic) |
+| SCHEMA-5 | `routers/members.py`, `staff.py`, `branch_details.py` | Enforce `GymSubscription` plan limits | ⏳ Pending |
+| SEC-1 | `models/all_models.py` | Add SQLAlchemy event listener to block `Gym` hard deletes | ✅ Done (27 Feb 2026) |
+| SEC-2 | `routers/audit.py` | Gate `seed-sample-data` behind `ALLOW_SEED_DATA` env var | ✅ Done (27 Feb 2026) |
 
 ### Frontend Fixes — Ordered by Severity
 
-| # | Severity | Change |
-|---|----------|--------|
-| FE-1 | **BREAKING** | Members list: read array from `res.data`, add pagination params |
-| FE-2 | **BREAKING** | Status filter: use `Active` / `Expired` / `Inactive` (not lowercase) |
-| FE-3 | **BREAKING** | Remove `paymentLogs` from invoice UI; add payment-history API call |
-| FE-4 | Minor | Receipt `fetch()`: add `redirect: 'follow'` |
-| FE-5 | Additive | Receipt upload: use `receiptUrl` from response for preview |
-| FE-6 | Safe | `extraDays`: no `parseInt()` needed on reads |
-| FE-7 | Safe | Don't send `MembershipStatus` in request bodies |
-| FE-8 | Minor | Handle `409` on WhatsApp template update |
-| FE-9 | Minor | Handle `401` for deleted gym in auth interceptor |
-| FE-10 | None | Automation endpoints: no changes needed |
+| # | Severity | Change | Status |
+|---|----------|--------|--------|
+| FE-1 | **BREAKING** | Members list: read array from `res.data`, add pagination params | ⏳ Pending |
+| FE-2 | **BREAKING** | Status filter: use `Active` / `Expired` / `Inactive` (not lowercase) | ⏳ Pending |
+| FE-3 | **BREAKING** | Remove `paymentLogs` from invoice UI; add payment-history API call | ⏳ Pending (backend ✅) |
+| FE-4 | Minor | Receipt `fetch()`: add `redirect: 'follow'` | ⏳ Pending |
+| FE-5 | Additive | Receipt upload: use `receiptUrl` from response for preview | ⏳ Pending |
+| FE-6 | Safe | `extraDays`: no `parseInt()` needed on reads | ⏳ Pending |
+| FE-7 | Safe | Don't send `MembershipStatus` in request bodies | ⏳ Pending |
+| FE-8 | Minor | Handle `409` on WhatsApp template update | ⏳ Pending |
+| FE-9 | Minor | Handle `401` for deleted gym in auth interceptor | ⏳ Pending |
+| FE-10 | None | Automation endpoints: no changes needed | ✅ N/A |
+
+### Files Created (27 Feb 2026)
+
+- `core/audit_utils.py` — Centralized audit logging with `log_audit()` and `compute_diff()` helpers
+
+### Files Modified (27 Feb 2026)
+
+- `models/all_models.py` — SEC-1 (Gym hard-delete prevention), PERF-1 (partial index)
+- `routers/dashboard.py` — BUG-1 (computed_status), DATA-4 (atomic upsert), PERF-2 (SQL-level alerts filter)
+- `routers/members.py` — BUG-2, BUG-3, BUG-4, DATA-1 (PaymentEvent), MISSING-1 (audit logging incl. UPDATE diff in `update_member_put` + `update_member_body`), type-safe field conversion in PATCH `/update`
+- `routers/invoices.py` — DATA-1 (PaymentEvent in bulk), PERF-3 (items field), MISSING-1 (audit), MISSING-2 (payment-history)
+- `routers/proteins.py` — MISSING-1 (price change audit logging with from→to diff), `sync_protein_quantity` clarified commit pattern
+- `routers/expenses.py` — MISSING-1 (CRUD audit logging)
+- `routers/whatsapp_templates.py` — DATA-5 (early-exit count check)
+- `routers/audit.py` — SEC-2 (env var guard), seed data fixes
+- `migration.py` — PERF-1 (partial index migration, executed successfully)
 
 ---
 
 ## DEPLOYMENT ORDER
 
-1. Run Alembic migrations for SCHEMA-1 through SCHEMA-4 **before** deploying new backend code
-2. Deploy backend with all BUG-* and DATA-* fixes
+1. ~~Run Alembic migrations for SCHEMA-1 through SCHEMA-4 before deploying new backend code~~ → Deferred (no Alembic setup yet; PERF-1 index done via `migration.py`)
+2. ✅ Backend BUG-\*, DATA-\*, MISSING-\*, PERF-\*, SEC-\* fixes — **all applied (27 Feb 2026)** — post-audit fixes applied (member UPDATE audit, PATCH type safety, protein price diff logging)
 3. Deploy frontend with FE-1, FE-2, FE-3 (these are breaking — must go together with backend)
 4. Monitor: GymSettings cache hit rate, dashboard error rate for new gyms
-5. In following sprint: MISSING-1 (audit writes), SCHEMA-3 (branch access table), SCHEMA-5 (plan limits)
+5. In following sprint: SCHEMA-1–4 (Alembic setup + migrations), SCHEMA-5 (plan limits), FE-\* frontend changes
