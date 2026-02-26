@@ -48,12 +48,28 @@ def run_startup_migrations():
         # User table — branch access columns
         'ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "branchIds" JSON',
         'ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "activeBranchId" VARCHAR(255)',
-        # BranchDetails — phone country code
-        'ALTER TABLE "BranchDetails" ADD COLUMN IF NOT EXISTS "phoneCountryCode" VARCHAR(10) DEFAULT \'+91\'',
+        # Branch table merged columns from old BranchDetails
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "displayName" VARCHAR(255)',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "whatsapp" VARCHAR(255)',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "email" VARCHAR(255)',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "slogan" VARCHAR(255)',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "website" VARCHAR(255)',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "city" VARCHAR(255)',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "state" VARCHAR(255)',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "pincode" VARCHAR(255)',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "phoneCountryCode" VARCHAR(10) DEFAULT \'+91\'',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "logoData" BYTEA',
+        'ALTER TABLE "Branch" ADD COLUMN IF NOT EXISTS "logoMimeType" VARCHAR(50)',
+        'DROP TABLE IF EXISTS "BranchDetails" CASCADE',
         # hasImage / hasReceipt flags (Fix #2: deferred binary loading)
         'ALTER TABLE "Member" ADD COLUMN IF NOT EXISTS "hasImage" BOOLEAN DEFAULT FALSE',
         'ALTER TABLE "ProteinStock" ADD COLUMN IF NOT EXISTS "hasImage" BOOLEAN DEFAULT FALSE',
         'ALTER TABLE "Expense" ADD COLUMN IF NOT EXISTS "hasReceipt" BOOLEAN DEFAULT FALSE',
+        # AuditLog compression
+        'ALTER TABLE "AuditLog" ADD COLUMN IF NOT EXISTS "changes" JSON',
+        'ALTER TABLE "AuditLog" DROP COLUMN IF EXISTS "beforeData"',
+        'ALTER TABLE "AuditLog" DROP COLUMN IF EXISTS "afterData"',
+        'ALTER TABLE "AuditLog" DROP COLUMN IF EXISTS "changedFields"',
     ]
     
     try:

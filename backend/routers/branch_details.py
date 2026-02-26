@@ -5,31 +5,59 @@ import base64
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from models.all_models import Gym, BranchDetails, Branch
+from models.all_models import Gym, Branch
 from schemas.branch_details import BranchDetailsCreate, BranchDetailsUpdate, BranchDetailsResponse
 
 router = APIRouter()
 
 
-def _to_response(bd: BranchDetails) -> dict:
-    """Convert BranchDetails ORM object to response dict."""
+def _to_response(b: Branch) -> dict:
+    """Convert Branch ORM object to response dict."""
     return {
-        "id": bd.id,
-        "gymId": bd.gymId,
-        "branchId": bd.branchId,
-        "gymName": bd.gymName,
-        "phone": bd.phone,
-        "whatsapp": bd.whatsapp,
-        "email": bd.email,
-        "slogan": bd.slogan,
-        "website": bd.website,
-        "address": bd.address,
-        "city": bd.city,
-        "state": bd.state,
-        "pincode": bd.pincode,
-        "phoneCountryCode": bd.phoneCountryCode or '+91',
-        "hasLogo": bd.logoData is not None,
+        "id": b.id,
+        "gymId": b.gymId,
+        "branchId": b.id,
+        "gymName": b.displayName or b.name,
+        "phone": b.phone,
+        "whatsapp": b.whatsapp,
+        "email": b.email,
+        "slogan": b.slogan,
+        "website": b.website,
+        "address": b.address,
+        "city": b.city,
+        "state": b.state,
+        "pincode": b.pincode,
+        "phoneCountryCode": b.phoneCountryCode or '+91',
+        "hasLogo": b.logoData is not None,
     }
+
+def get_default_branch(current_gym_id: str, db: Session) -> Branch:
+    branch = db.query(Branch).filter(
+        Branch.gymId == current_gym_id,
+        Branch.isDefault == True
+    ).first()
+    
+    # Fallback to any branch if no default exists
+    if not branch:
+        branch = db.query(Branch).filter(
+            Branch.gymId == current_gym_id
+        ).first()
+
+    if not branch:
+        # Create a default branch
+        gym = db.query(Gym).filter(Gym.id == current_gym_id).first()
+        branch = Branch(
+            gymId=current_gym_id,
+            name=gym.gymname,
+            displayName=gym.gymname,
+            isActive=True,
+            isDefault=True
+        )
+        db.add(branch)
+        db.commit()
+        db.refresh(branch)
+        
+    return branch
 
 
 @router.get("")
@@ -37,24 +65,9 @@ def get_gym_details(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get gym-level details (branchId = NULL)."""
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId.is_(None)
-    ).first()
-
-    if not bd:
-        # Auto-create with gym name
-        bd = BranchDetails(
-            gymId=current_gym.id,
-            branchId=None,
-            gymName=current_gym.gymname,
-        )
-        db.add(bd)
-        db.commit()
-        db.refresh(bd)
-
-    return _to_response(bd)
+    """Get gym-level details (default branch)."""
+    branch = get_default_branch(current_gym.id, db)
+    return _to_response(branch)
 
 
 @router.get("/all")
@@ -62,11 +75,13 @@ def get_all_branch_details(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get all branch details for this gym (gym-level + per-branch)."""
-    details = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id
+    """Get all branch details for this gym."""
+    branches = db.query(Branch).filter(
+        Branch.gymId == current_gym.id
     ).all()
-    return [_to_response(bd) for bd in details]
+    if not branches:
+        branches = [get_default_branch(current_gym.id, db)]
+    return [_to_response(b) for b in branches]
 
 
 @router.get("/for-invoice")
@@ -77,30 +92,16 @@ def get_details_for_invoice(
 ):
     """Smart endpoint: returns branch-specific details if available, else gym-level fallback."""
     if branch_id:
-        bd = db.query(BranchDetails).filter(
-            BranchDetails.gymId == current_gym.id,
-            BranchDetails.branchId == branch_id
+        branch = db.query(Branch).filter(
+            Branch.gymId == current_gym.id,
+            Branch.id == branch_id
         ).first()
-        if bd:
-            return _to_response(bd)
+        if branch:
+            return _to_response(branch)
 
-    # Fallback to gym-level
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId.is_(None)
-    ).first()
-
-    if not bd:
-        bd = BranchDetails(
-            gymId=current_gym.id,
-            branchId=None,
-            gymName=current_gym.gymname,
-        )
-        db.add(bd)
-        db.commit()
-        db.refresh(bd)
-
-    return _to_response(bd)
+    # Fallback to default branch
+    branch = get_default_branch(current_gym.id, db)
+    return _to_response(branch)
 
 
 @router.get("/branch/{branch_id}")
@@ -110,15 +111,15 @@ def get_branch_details(
     db: Session = Depends(get_db)
 ):
     """Get details for a specific branch."""
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId == branch_id
+    branch = db.query(Branch).filter(
+        Branch.gymId == current_gym.id,
+        Branch.id == branch_id
     ).first()
 
-    if not bd:
+    if not branch:
         raise HTTPException(status_code=404, detail="Branch details not found")
 
-    return _to_response(bd)
+    return _to_response(branch)
 
 
 @router.put("")
@@ -127,23 +128,20 @@ def update_gym_details(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Create or update gym-level details."""
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId.is_(None)
-    ).first()
-
-    if not bd:
-        bd = BranchDetails(gymId=current_gym.id, branchId=None)
-        db.add(bd)
+    """Create or update gym-level details (default branch)."""
+    branch = get_default_branch(current_gym.id, db)
 
     update_data = data.model_dump(exclude_unset=True)
+    if "gymName" in update_data:
+        update_data["displayName"] = update_data.pop("gymName")
+    
     for key, value in update_data.items():
-        setattr(bd, key, value)
+        if hasattr(branch, key):
+            setattr(branch, key, value)
 
     db.commit()
-    db.refresh(bd)
-    return _to_response(bd)
+    db.refresh(branch)
+    return _to_response(branch)
 
 
 @router.put("/branch/{branch_id}")
@@ -154,30 +152,25 @@ def update_branch_details(
     db: Session = Depends(get_db)
 ):
     """Create or update branch-specific details."""
-    # Verify branch exists
     branch = db.query(Branch).filter(
         Branch.id == branch_id,
         Branch.gymId == current_gym.id
     ).first()
+    
     if not branch:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId == branch_id
-    ).first()
-
-    if not bd:
-        bd = BranchDetails(gymId=current_gym.id, branchId=branch_id)
-        db.add(bd)
-
     update_data = data.model_dump(exclude_unset=True)
+    if "gymName" in update_data:
+        update_data["displayName"] = update_data.pop("gymName")
+
     for key, value in update_data.items():
-        setattr(bd, key, value)
+        if hasattr(branch, key):
+            setattr(branch, key, value)
 
     db.commit()
-    db.refresh(bd)
-    return _to_response(bd)
+    db.refresh(branch)
+    return _to_response(branch)
 
 
 @router.post("/logo")
@@ -186,21 +179,14 @@ async def upload_gym_logo(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Upload gym-level logo."""
+    """Upload gym-level logo (default branch)."""
     if file.content_type not in ["image/png", "image/jpeg", "image/webp"]:
         raise HTTPException(status_code=400, detail="Only PNG, JPEG, or WebP images are allowed")
 
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId.is_(None)
-    ).first()
+    branch = get_default_branch(current_gym.id, db)
 
-    if not bd:
-        bd = BranchDetails(gymId=current_gym.id, branchId=None, gymName=current_gym.gymname)
-        db.add(bd)
-
-    bd.logoData = await file.read()
-    bd.logoMimeType = file.content_type
+    branch.logoData = await file.read()
+    branch.logoMimeType = file.content_type
     db.commit()
 
     return {"message": "Logo uploaded successfully"}
@@ -217,17 +203,16 @@ async def upload_branch_logo(
     if file.content_type not in ["image/png", "image/jpeg", "image/webp"]:
         raise HTTPException(status_code=400, detail="Only PNG, JPEG, or WebP images are allowed")
 
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId == branch_id
+    branch = db.query(Branch).filter(
+        Branch.gymId == current_gym.id,
+        Branch.id == branch_id
     ).first()
 
-    if not bd:
-        bd = BranchDetails(gymId=current_gym.id, branchId=branch_id)
-        db.add(bd)
+    if not branch:
+         raise HTTPException(status_code=404, detail="Branch not found")
 
-    bd.logoData = await file.read()
-    bd.logoMimeType = file.content_type
+    branch.logoData = await file.read()
+    branch.logoMimeType = file.content_type
     db.commit()
 
     return {"message": "Branch logo uploaded successfully"}
@@ -239,17 +224,14 @@ def get_gym_logo(
     db: Session = Depends(get_db)
 ):
     """Get gym-level logo image."""
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId.is_(None)
-    ).first()
+    branch = get_default_branch(current_gym.id, db)
 
-    if not bd or not bd.logoData:
+    if not branch.logoData:
         raise HTTPException(status_code=404, detail="No logo found")
 
     return Response(
-        content=bd.logoData,
-        media_type=bd.logoMimeType or "image/png"
+        content=branch.logoData,
+        media_type=branch.logoMimeType or "image/png"
     )
 
 
@@ -259,17 +241,14 @@ def get_gym_logo_base64(
     db: Session = Depends(get_db)
 ):
     """Get gym-level logo as base64 string (for PDF embedding)."""
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId.is_(None)
-    ).first()
+    branch = get_default_branch(current_gym.id, db)
 
-    if not bd or not bd.logoData:
+    if not branch.logoData:
         return {"logo": None}
 
-    b64 = base64.b64encode(bd.logoData).decode("utf-8")
+    b64 = base64.b64encode(branch.logoData).decode("utf-8")
     return {
-        "logo": f"data:{bd.logoMimeType or 'image/png'};base64,{b64}"
+        "logo": f"data:{branch.logoMimeType or 'image/png'};base64,{b64}"
     }
 
 
@@ -280,15 +259,15 @@ def get_branch_logo(
     db: Session = Depends(get_db)
 ):
     """Get branch-specific logo image."""
-    bd = db.query(BranchDetails).filter(
-        BranchDetails.gymId == current_gym.id,
-        BranchDetails.branchId == branch_id
+    branch = db.query(Branch).filter(
+        Branch.gymId == current_gym.id,
+        Branch.id == branch_id
     ).first()
 
-    if not bd or not bd.logoData:
+    if not branch or not branch.logoData:
         raise HTTPException(status_code=404, detail="No logo found for this branch")
 
     return Response(
-        content=bd.logoData,
-        media_type=bd.logoMimeType or "image/png"
+        content=branch.logoData,
+        media_type=branch.logoMimeType or "image/png"
     )

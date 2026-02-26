@@ -2,6 +2,8 @@ from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Date, 
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import relationship, deferred
 from sqlalchemy.sql import func
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy import case
 from core.database import Base
 import uuid
 
@@ -147,6 +149,24 @@ class Member(Base):
     Invoice = relationship("Invoice", back_populates="member")
     branch = relationship("Branch", back_populates="members")
 
+    @hybrid_property
+    def computed_status(self):
+        from datetime import datetime
+        today = datetime.now().date()
+        if not self.NextDuedate:
+            return 'Inactive'
+        if self.NextDuedate >= today:
+            return 'Active'
+        return 'Expired'
+
+    @computed_status.expression
+    def computed_status(cls):
+        return case(
+            (cls.NextDuedate.is_(None), 'Inactive'),
+            (cls.NextDuedate >= func.current_date(), 'Active'),
+            else_='Expired'
+        )
+
 class ProteinStock(Base):
     __tablename__ = "ProteinStock"
     __table_args__ = (
@@ -174,7 +194,6 @@ class ProteinStock(Base):
     SellingPrice = Column(Float, nullable=True)
     ProfitAmount = Column(Float, nullable=True)  # Selling - Landing per pcs
     ExpiryDate = Column(Date, nullable=True)
-    AvailableStock = Column(Integer, default=0)  # Current stock count
     StockThreshold = Column(Integer, default=5)
     
     # Image storage
@@ -201,10 +220,22 @@ class Branch(Base):
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
     
     name = Column(String, nullable=False)
+    displayName = Column(String, nullable=True)
     address = Column(Text, nullable=True)
+    city = Column(String, nullable=True)
+    state = Column(String, nullable=True)
+    pincode = Column(String, nullable=True)
     phone = Column(String, nullable=True)
+    phoneCountryCode = Column(String, nullable=True, default='+91')
+    whatsapp = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    slogan = Column(String, nullable=True)
+    website = Column(String, nullable=True)
     isActive = Column(Boolean, default=True)
     isDefault = Column(Boolean, default=False)
+
+    logoData = deferred(Column(LargeBinary, nullable=True))
+    logoMimeType = deferred(Column(String, nullable=True))
 
     createdAt = Column(DateTime, default=func.now())
     updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -420,6 +451,7 @@ class AuditLog(Base):
     __table_args__ = (
         Index('ix_audit_gym_created', 'gymId', 'createdAt'),
         Index('ix_audit_gym_entity', 'gymId', 'entityType', 'entityId'),
+        {'postgresql_partition_by': 'RANGE ("createdAt")'}
     )
 
     id = Column(String, primary_key=True, default=generate_uuid)
@@ -429,9 +461,7 @@ class AuditLog(Base):
     entityId = Column(String, nullable=False)
     action = Column(String, nullable=False)  # CREATE, UPDATE, DELETE
     
-    beforeData = Column(JSON, nullable=True)
-    afterData = Column(JSON, nullable=True)
-    changedFields = Column(JSON, nullable=True)  # List of field names that changed
+    changes = Column(JSON, nullable=True)  # Only the diff: {"field": {"from": X, "to": Y}}
     
     userId = Column(String, nullable=True)
     userName = Column(String, nullable=True)
@@ -458,37 +488,6 @@ class TermsAndConditions(Base):
     updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
 
     gym = relationship("Gym", back_populates="termsAndConditions")
-
-
-class BranchDetails(Base):
-    """Rich branding/details for gym or specific branch — used in invoices, sidebar, WhatsApp"""
-    __tablename__ = "BranchDetails"
-
-    id = Column(String, primary_key=True, default=generate_uuid)
-    gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
-    branchId = Column(String, ForeignKey("Branch.id"), nullable=True)  # NULL = gym-level default
-
-    gymName = Column(String, nullable=True)  # Display name (pre-filled from registration)
-    phone = Column(String, nullable=True)
-    whatsapp = Column(String, nullable=True)
-    email = Column(String, nullable=True)
-    slogan = Column(String, nullable=True)  # Short tagline
-    website = Column(String, nullable=True)
-    address = Column(Text, nullable=True)
-    city = Column(String, nullable=True)
-    state = Column(String, nullable=True)
-    pincode = Column(String, nullable=True)
-    phoneCountryCode = Column(String, nullable=True, default='+91')  # Default India
-
-    # Logo storage
-    logoData = deferred(Column(LargeBinary, nullable=True))
-    logoMimeType = deferred(Column(String, nullable=True))  # image/png, image/jpeg
-
-    createdAt = Column(DateTime, default=func.now())
-    updatedAt = Column(DateTime, default=func.now(), onupdate=func.now())
-
-    gym = relationship("Gym", backref="branchDetails")
-    branch = relationship("Branch", backref="details")
 
 
 class WhatsAppTemplate(Base):

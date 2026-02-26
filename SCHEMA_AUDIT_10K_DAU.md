@@ -958,6 +958,7 @@ These five changes alone will take EZTRACK from "breaks at 200 concurrent users"
 | 7 | Convert date strings → `Date` columns | ✅ DONE | All 9 date fields converted to native Date. `date_utils.py` created. All routers (members, proteins, expenses, dashboard, automation) updated. DD/MM/YYYY output format. |
 | 8 | Add pagination to list endpoints | ✅ DONE | Members + Proteins endpoints return `{ data, total, page, pageSize, totalPages }`. Frontend `table.jsx` uses server-side pagination with debounced search. `webappmain.jsx` no longer fetches all records on mount. Page size selector (15/30/50/100) added. |
 
+
 ---
 
 ## Post-Implementation Verification Audit (26-Feb-2026)
@@ -991,3 +992,16 @@ Full DB ↔ Backend ↔ Frontend data-flow audit completed. All files pass Pytho
 - ✅ Frontend: no `table.nextPage()`/`table.previousPage()` calls remaining
 - ✅ Frontend: no recursive fetch-all-on-mount in `webappmain.jsx`
 - ✅ Migration SQL types match model column types
+
+
+
+
+suggested by gemini 3.1
+
+| 9 | Merge Branch and BranchDetails | ✅ DONE | Merged BranchDetails into Branch model, moved fields, updated auth router signup and branch_details endpoints to query Branch with isDefault. Dropped old BranchDetails table in migrations. |
+| 10 | Single Source of Truth for Stock Quantity | ✅ DONE | Removed redundant Quantity tracking, updated `/adjust-stock` and inline routines to compute from `ProteinLot` sums dynamically. |
+| 11 | Pre-Computed Dashboard Aggregates | 🚧 TODO | Added `GymDailySummary` schema; updated `dashboard.py` to cache calculations with a TTL to prevent repeated DB scans. |
+| 12 | Move Status Computation to DB Level | ✅ DONE | Added `computed_status` native SQLAlchemy `@hybrid_property` with raw `case` conditional matching logic onto `Member` model. |
+| 13 | Audit Log Compression | ✅ DONE | Stripped full JSON snapshots from `AuditLog` payload logic, modifying to simply dump the `.changes` diff map. |
+| 14 | Partition AuditLog by Time | ✅ DONE | Added native `postgresql_partition_by=RANGE("createdAt")` to `AuditLog` definition in `all_models.py` for infinite horizontal scaling. |
+| 15 | Async Database Layer | 🚧 TODO | Seeded `async_engine` and `get_async_db()` generator natively into `core/database.py`, allowing incremental router upgrades to `postgresql+asyncpg://`. |

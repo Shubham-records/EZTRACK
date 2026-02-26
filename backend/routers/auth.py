@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from core.security import verify_password, create_access_token, get_password_hash
 from core.dependencies import get_current_gym
-from models.all_models import Gym, Branch, BranchDetails, WhatsAppTemplate
+from models.all_models import Gym, Branch, WhatsAppTemplate
 from schemas.auth import LoginRequest, LoginResponse, SignupRequest
 from routers.whatsapp_templates import DEFAULT_TEMPLATES
 import uuid
@@ -71,19 +71,12 @@ def signup(request: SignupRequest, db: Session = Depends(get_db)):
         id=str(uuid.uuid4()),
         gymId=new_gym.id,
         name=request.GYMNAME,
+        displayName=request.GYMNAME,
         isActive=True,
         isDefault=True,
-    )
-    db.add(default_branch)
-
-    # Auto-create BranchDetails (gym-level, no branchId)
-    gym_details = BranchDetails(
-        gymId=new_gym.id,
-        branchId=None,
-        gymName=request.GYMNAME,
         email=request.EMAILID,
     )
-    db.add(gym_details)
+    db.add(default_branch)
 
     # Auto-create default WhatsApp templates
     for t_type, t_msg in DEFAULT_TEMPLATES.items():

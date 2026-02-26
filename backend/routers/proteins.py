@@ -8,6 +8,7 @@ from core.dependencies import get_current_gym
 from core.date_utils import parse_date, format_date
 from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
 from schemas.protein import ProteinCreate, ProteinUpdate, ProteinResponse
+from sqlalchemy.sql import func
 
 router = APIRouter()
 
@@ -39,6 +40,21 @@ def recalculate_computed_fields(protein):
         protein.ProfitAmount = round(selling - landing, 2)
     except (ValueError, TypeError):
         pass
+
+def sync_protein_quantity(protein_id: str, current_gym_id: str, db: Session):
+    """Sync the Quantity field of a protein to the sum of its lots."""
+    protein = db.query(ProteinStock).filter(
+        ProteinStock.id == protein_id,
+        ProteinStock.gymId == current_gym_id
+    ).first()
+    if protein:
+        total_lots = db.query(func.sum(ProteinLot.quantity)).filter(
+            ProteinLot.proteinId == protein_id,
+            ProteinLot.gymId == current_gym_id
+        ).scalar() or 0
+        protein.Quantity = total_lots
+        db.commit()
+
 
 
 def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
@@ -308,7 +324,6 @@ def bulk_create_proteins(data: dict, current_gym: Gym = Depends(get_current_gym)
                 OfferPrice=offer,
                 SellingPrice=selling,
                 ExpiryDate=parse_date(stock_data.get("ExpiryDate")),
-                AvailableStock=int(stock_data.get("AvailableStock", stock_data.get("Quantity", 0))) if stock_data.get("AvailableStock") or stock_data.get("Quantity") else 0,
                 StockThreshold=int(stock_data.get("StockThreshold", 5)) if stock_data.get("StockThreshold") else 5
             )
             
@@ -540,7 +555,7 @@ def adjust_protein_stock(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Adjust protein stock quantity (positive to add, negative to subtract)."""
+    """Adjust protein stock quantity by creating an adjustment lot."""
     protein = db.query(ProteinStock).filter(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id
@@ -550,28 +565,32 @@ def adjust_protein_stock(
         raise HTTPException(status_code=404, detail="Protein not found")
     
     current_qty = protein.Quantity or 0
-    
     new_qty = current_qty + adjustment
+    
     if new_qty < 0:
         raise HTTPException(status_code=400, detail="Stock cannot be negative")
     
-    protein.Quantity = new_qty
-    
-    # Recalculate computed fields based on new quantity
-    try:
-        landing_price = protein.LandingPrice or 0
-        selling_price = float(protein.SellingPrice) if protein.SellingPrice else 0
-        protein.ProfitAmount = round((selling_price - landing_price), 2)
-    except (ValueError, TypeError):
-        pass  # Keep existing values if conversion fails
-    
+    # Create an adjustment lot
+    lot = ProteinLot(
+        gymId=current_gym.id,
+        proteinId=protein.id,
+        lotNumber=f"ADJ-{reason or 'Manual'}",
+        quantity=adjustment,
+        purchasePrice=protein.LandingPrice,
+        sellingPrice=protein.SellingPrice,
+        expiryDate=protein.ExpiryDate
+    )
+    db.add(lot)
     db.commit()
+    
+    # Sync quantity
+    sync_protein_quantity(protein.id, current_gym.id, db)
     db.refresh(protein)
     
     return {
         "message": f"Stock adjusted by {adjustment}",
         "previousQuantity": current_qty,
-        "newQuantity": new_qty,
+        "newQuantity": protein.Quantity,
         "reason": reason
     }
 
@@ -629,8 +648,9 @@ def create_protein_lot(
         expiryDate=parse_date(data.get('expiryDate'))
     )
     db.add(lot)
-    protein.AvailableStock = (protein.AvailableStock or 0) + (lot.quantity or 0)
     db.commit()
+    
+    sync_protein_quantity(protein_id, current_gym.id, db)
     db.refresh(lot)
     db.refresh(protein)
 
@@ -671,11 +691,11 @@ def update_protein_lot(
         lot.expiryDate = parse_date(data.get('expiryDate'))
     lot.quantity = new_qty
 
-    # adjust product available stock
-    if protein:
-        protein.AvailableStock = (protein.AvailableStock or 0) - prev_qty + (lot.quantity or 0)
-
     db.commit()
+    
+    if protein:
+        sync_protein_quantity(protein.id, current_gym.id, db)
+        
     db.refresh(lot)
     if protein:
         db.refresh(protein)
@@ -701,9 +721,10 @@ def delete_protein_lot(
         raise HTTPException(status_code=404, detail="Lot not found")
 
     protein = db.query(ProteinStock).filter(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id).first()
-    qty = lot.quantity or 0
     db.delete(lot)
-    if protein:
-        protein.AvailableStock = max(0, (protein.AvailableStock or 0) - qty)
     db.commit()
+    
+    if protein:
+        sync_protein_quantity(protein.id, current_gym.id, db)
+        
     return None

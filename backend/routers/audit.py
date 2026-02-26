@@ -37,9 +37,7 @@ def get_audit_logs(
         'entityType': log.entityType,
         'entityId': log.entityId,
         'action': log.action,
-        'beforeData': log.beforeData,
-        'afterData': log.afterData,
-        'changedFields': log.changedFields,
+        'changes': log.changes,
         'userName': log.userName,
         'createdAt': log.createdAt.isoformat() if log.createdAt else None
     } for log in logs]
@@ -67,17 +65,14 @@ def get_price_history(
     
     price_changes = []
     for log in logs:
-        if log.changedFields:
+        if log.changes:
             price_fields = ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']
-            changed_prices = [f for f in price_fields if f in log.changedFields]
+            changed_prices = [f for f in price_fields if f in log.changes]
             if changed_prices:
-                before = log.beforeData or {}
-                after = log.afterData or {}
                 price_changes.append({
                     'date': log.createdAt.isoformat() if log.createdAt else None,
                     'changedFields': changed_prices,
-                    'before': {k: before.get(k) for k in changed_prices},
-                    'after': {k: after.get(k) for k in changed_prices},
+                    'changes': {k: log.changes[k] for k in changed_prices},
                     'userName': log.userName
                 })
     
