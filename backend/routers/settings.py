@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from core.database import get_db
-from core.dependencies import get_current_gym
+from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, GymSettings, PricingConfig
 from schemas.settings import GymSettingsCreate, GymSettingsUpdate, GymSettingsResponse
 from schemas.pricing import PricingConfigCreate, PricingConfigUpdate, PricingConfigResponse
@@ -34,7 +34,8 @@ def get_settings(current_gym: Gym = Depends(get_current_gym), db: Session = Depe
 def update_settings(
     data: GymSettingsUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Update gym settings."""
     settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
@@ -74,7 +75,8 @@ def get_pricing_configs(
 def create_pricing_config(
     data: PricingConfigCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Create a new pricing configuration."""
     config = PricingConfig(gymId=current_gym.id, **data.model_dump())
@@ -89,7 +91,8 @@ def update_pricing_config(
     config_id: str,
     data: PricingConfigUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Update a pricing configuration."""
     config = db.query(PricingConfig).filter(
@@ -113,7 +116,8 @@ def update_pricing_config(
 def delete_pricing_config(
     config_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Soft delete a pricing configuration."""
     config = db.query(PricingConfig).filter(
@@ -161,7 +165,8 @@ def get_member_pricing_matrix(
 def update_member_pricing_bulk(
     data: dict,  # { "Strength": { "Monthly": 1000, "Quarterly": 2700 }, ... }
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Bulk update member pricing matrix."""
     for plan_type, periods in data.items():
@@ -194,7 +199,8 @@ def update_member_pricing_bulk(
 def delete_member_plan(
     plan_type: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Soft delete all pricing configs for a specific plan type."""
     configs = db.query(PricingConfig).filter(
@@ -245,7 +251,8 @@ def get_protein_pricing_defaults(
 def update_protein_pricing_bulk(
     data: dict,  # { "ON": { "marginType": "percentage", "marginValue": 15 }, ... }
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Bulk update protein pricing defaults by brand."""
     for brand_name, config_data in data.items():
@@ -307,7 +314,8 @@ def get_pt_pricing_matrix(
 def update_pt_pricing_bulk(
     data: dict,  # { "1-on-1": { "Monthly": 3000 }, ... }
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Bulk update personal training pricing matrix."""
     for plan_type, periods in data.items():
@@ -339,7 +347,8 @@ def update_pt_pricing_bulk(
 def delete_pt_plan(
     plan_type: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Soft delete all PT pricing configs for a specific plan type."""
     configs = db.query(PricingConfig).filter(

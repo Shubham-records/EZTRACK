@@ -76,6 +76,71 @@ STORAGE_SIGNED_URL_EXPIRY = int(os.getenv("STORAGE_SIGNED_URL_EXPIRY", "3600")) 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB hard cap
 
+# SEC-10: Magic byte signatures for each allowed image type
+# These are the actual byte patterns at the start of valid image files.
+# MIME headers are client-controlled and easily spoofed — these are not.
+_MAGIC_SIGNATURES: dict[str, list[bytes]] = {
+    "image/jpeg": [b"\xff\xd8\xff"],
+    "image/png":  [b"\x89PNG\r\n\x1a\n"],
+    "image/webp": [b"RIFF"],   # RIFF....WEBP (checked more thoroughly below)
+}
+
+
+def _validate_magic_bytes(data: bytes, mime_type: str) -> None:
+    """
+    SEC-10: Verify the file's actual magic bytes match the declared MIME type.
+    Raises HTTPException 400 if they don't match.
+    """
+    signatures = _MAGIC_SIGNATURES.get(mime_type, [])
+    if not any(data.startswith(sig) for sig in signatures):
+        raise HTTPException(
+            status_code=400,
+            detail="File content does not match declared type. Upload a real JPEG, PNG, or WebP image.",
+        )
+    # Extra check for WebP: RIFF header must be followed by WEBP at offset 8
+    if mime_type == "image/webp" and len(data) >= 12:
+        if data[8:12] != b"WEBP":
+            raise HTTPException(
+                status_code=400,
+                detail="File content does not match declared type (invalid WebP).",
+            )
+
+
+def _reencode_image(data: bytes, mime_type: str) -> tuple[bytes, str]:
+    """
+    SEC-10: Re-encode the image through Pillow to strip any embedded payloads,
+    metadata (EXIF GPS data), or decompression bombs.
+    Returns (clean_bytes, safe_mime_type).
+    Falls back to original bytes if Pillow is not installed.
+    """
+    try:
+        from PIL import Image, UnidentifiedImageError
+        import io
+
+        # Pillow has built-in decompression bomb protection (Image.MAX_IMAGE_PIXELS)
+        # Additional dimension limit
+        Image.MAX_IMAGE_PIXELS = 4000 * 4000  # 16 MP max
+
+        with Image.open(io.BytesIO(data)) as img:
+            # Convert RGBA to RGB for JPEG compatibility
+            if img.mode in ("RGBA", "P") and mime_type == "image/jpeg":
+                img = img.convert("RGB")
+
+            output = io.BytesIO()
+            fmt = {"image/jpeg": "JPEG", "image/png": "PNG", "image/webp": "WEBP"}.get(mime_type, "JPEG")
+            img.save(output, format=fmt, optimize=True)
+            return output.getvalue(), mime_type
+
+    except ImportError:
+        logger.warning("SEC-10: Pillow not installed — skipping image re-encoding. Run: pip install Pillow")
+        return data, mime_type
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid or corrupt image file: {type(exc).__name__}",
+        )
+
+
 
 # ─── S3 Client (shared across all backends) ───────────────────────────────────
 
@@ -133,6 +198,19 @@ def upload_image(
         raise HTTPException(
             status_code=400,
             detail=f"File too large ({len(data) // 1024} KB). Maximum allowed: 5 MB.",
+        )
+
+    # SEC-10: Validate actual file bytes (not just client-supplied MIME header)
+    _validate_magic_bytes(data, mime_type)
+
+    # SEC-10: Re-encode through Pillow to strip embedded payloads + EXIF GPS
+    data, mime_type = _reencode_image(data, mime_type)
+
+    # Post-re-encode size check (re-encoding can increase size for some PNGs)
+    if len(data) > MAX_IMAGE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="Image is too large after processing. Please compress before uploading.",
         )
 
     filename = filename_override or str(uuid.uuid4())

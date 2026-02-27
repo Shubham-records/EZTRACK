@@ -7,11 +7,13 @@ from core.config import settings
 SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 ASYNC_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
-# Sync engine (legacy)
+# Sync engine
+# ARCH-01: Increased pool_size 20→50, max_overflow 30→100 for 10K DAU.
+#          Use PgBouncer in front of PostgreSQL in production for best results.
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    pool_size=20,           # Base connections (handles normal load)
-    max_overflow=30,        # Burst connections (handles peak load)
+    pool_size=50,           # ARCH-01: raised from 20 — handles sustained 10K DAU
+    max_overflow=100,       # ARCH-01: raised from 30 — burst headroom
     pool_timeout=30,        # Seconds to wait for a connection from pool
     pool_recycle=3600,      # Recycle connections after 1 hour (prevents stale connections)
     pool_pre_ping=True,     # Validate connections before use (handles dropped connections)
@@ -21,8 +23,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Async engine (new)
 async_engine = create_async_engine(
     ASYNC_DATABASE_URL,
-    pool_size=20,
-    max_overflow=30,
+    pool_size=50,           # ARCH-01: matches sync pool sizing
+    max_overflow=100,
     pool_recycle=3600,
     pool_pre_ping=True,
 )

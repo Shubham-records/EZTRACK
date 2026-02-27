@@ -1,16 +1,18 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from core.database import get_db
-from core.dependencies import get_current_gym
+from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
 from models.all_models import Gym, Expense
 from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse
 from core.audit_utils import log_audit
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -30,21 +32,30 @@ def get_expenses(
     category: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Get all expenses with optional filters."""
+    """ARCH-06: Paginated expenses. max limit=500."""
+    limit = min(limit, 500)
     query = db.query(Expense).filter(Expense.gymId == current_gym.id)
-    
+
     if category:
         query = query.filter(Expense.category == category)
     if start_date:
         query = query.filter(Expense.date >= parse_date(start_date))
     if end_date:
         query = query.filter(Expense.date <= parse_date(end_date))
-    
-    expenses = query.order_by(Expense.date.desc()).all()
-    return [map_expense_response(e) for e in expenses]
+
+    total = query.count()
+    expenses = query.order_by(Expense.date.desc()).offset(offset).limit(limit).all()
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": [map_expense_response(e) for e in expenses],
+    }
 
 
 @router.post("", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
@@ -102,7 +113,7 @@ def bulk_create_expenses(data: dict, current_gym: Gym = Depends(get_current_gym)
             db.add(new_expense)
             created_count += 1
         except Exception as e:
-            print(f"Error creating expense: {e}")
+            logger.error("Bulk expense create error: %s", type(e).__name__, exc_info=False)
             continue
     
     db.commit()
@@ -110,7 +121,12 @@ def bulk_create_expenses(data: dict, current_gym: Gym = Depends(get_current_gym)
 
 
 @router.post("/bulk-delete")
-def bulk_delete_expenses(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+def bulk_delete_expenses(
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
+):
     """Bulk delete expenses"""
     ids = data.get("ids", [])
     if not ids:
@@ -162,7 +178,8 @@ def update_expense(
 def delete_expense(
     expense_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Delete an expense record."""
     expense = db.query(Expense).filter(

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from core.database import get_db
-from core.dependencies import get_current_gym
+from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, TermsAndConditions
 from schemas.terms import TermsCreate, TermsUpdate, TermsResponse
 
@@ -79,7 +79,8 @@ def update_term(
 def delete_term(
     term_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     term = db.query(TermsAndConditions).filter(
         TermsAndConditions.id == term_id,

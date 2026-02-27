@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from core.database import get_db
-from core.dependencies import get_current_gym
+from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, ExternalContact
 from schemas.pending import ExternalContactCreate, ExternalContactUpdate, ExternalContactResponse
 
@@ -105,7 +105,8 @@ def update_contact(
 def delete_contact(
     contact_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Soft delete an external contact."""
     contact = db.query(ExternalContact).filter(

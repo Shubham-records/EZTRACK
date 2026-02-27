@@ -1,8 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
-from sqlalchemy.dialects.postgresql import ARRAY 
-# Wait, pydantic doesn't use sqlalchemy types. Just List[str].
 
 class UserBase(BaseModel):
     username: str

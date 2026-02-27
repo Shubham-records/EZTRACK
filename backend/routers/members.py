@@ -1,17 +1,20 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func, String
-from typing import List
+from typing import List, Optional
 from datetime import datetime, date, timedelta
 
 from core.database import get_db
-from core.dependencies import get_current_gym
+from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from core.cache import get_gym_settings
-from models.all_models import Gym, Member, Invoice, GymSettings, PaymentEvent
+from core.aadhaar_crypto import encrypt_aadhaar, decrypt_aadhaar, hash_aadhaar, mask_aadhaar
+from models.all_models import Gym, Member, Invoice, GymSettings, PaymentEvent, GymSubscription
 from schemas.member import MemberCreate, MemberResponse, MemberUpdate
 from core.audit_utils import log_audit
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -47,10 +50,21 @@ def map_member_response(member: Member, admission_expiry_days: int = 365):
     m_dict = member.__dict__.copy()
     m_dict['_id'] = member.id
 
-    # Phone/Aadhaar are String(15/12) in v2 — cast to str for safety
-    for field in ('Mobile', 'Whatsapp', 'Aadhaar'):
+    # Phone are String(15) in v2 — cast to str for safety
+    for field in ('Mobile', 'Whatsapp'):
         val = m_dict.get(field)
         m_dict[field] = str(val) if val is not None else None
+
+    # SEC-05 / SCH-07: Decrypt Fernet ciphertext, then mask for API response.
+    # The plaintext is NEVER sent — only XXXX-XXXX-NNNN.
+    raw_aadhaar = m_dict.get('Aadhaar')
+    if raw_aadhaar:
+        plaintext = decrypt_aadhaar(raw_aadhaar)   # decrypt encrypted DB value
+        m_dict['Aadhaar'] = mask_aadhaar(plaintext)  # mask to XXXX-XXXX-NNNN
+    else:
+        m_dict['Aadhaar'] = None
+    # Never return the HMAC hash to clients
+    m_dict.pop('AadhaarHash', None)
 
     # v1 leftovers — remove silently if still in __dict__
     m_dict.pop('AccessStatus',        None)
@@ -103,6 +117,9 @@ def get_members(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
+    # ARCH-06: Enforce max page_size=500 (page_size=0 is allowed for exports only)
+    if page_size > 0:
+        page_size = min(page_size, 500)
     # FIX: use cache.py (10-min TTL) instead of raw DB query for GymSettings
     settings = get_gym_settings(current_gym.id, db)
     admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
@@ -264,7 +281,7 @@ def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym),
             db.add(new_member)
             created_count += 1
         except Exception as e:
-            print(f"Error creating member: {e}")
+            logger.error("Bulk member create failed for row: %s", type(e).__name__, exc_info=False)
             continue
     
     db.commit()
@@ -272,8 +289,13 @@ def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym),
 
 
 @router.post("/bulk-delete")
-def bulk_delete_members(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Bulk delete members"""
+def bulk_delete_members(
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
+):
+    """Bulk delete members (soft-delete)"""
     ids = data.get("ids", [])
     if not ids:
         raise HTTPException(status_code=400, detail="No IDs provided")
@@ -281,16 +303,14 @@ def bulk_delete_members(data: dict, current_gym: Gym = Depends(get_current_gym),
     # Check if all members belong to current gym
     # We can delete in one query for efficiency
     try:
-        # Unlink invoices first to avoid foreign key violations
-        db.query(Invoice).filter(
-            Invoice.memberId.in_(ids),
-            Invoice.gymId == current_gym.id
-        ).update({Invoice.memberId: None}, synchronize_session=False)
-
-        stmt = Member.__table__.delete().where(
+        from datetime import datetime
+        
+        # Soft delete instead of hard delete
+        stmt = Member.__table__.update().where(
             Member.id.in_(ids),
             Member.gymId == current_gym.id
-        )
+        ).values(isDeleted=True, deletedAt=datetime.utcnow())
+        
         result = db.execute(stmt)
         db.commit()
         return {"message": f"Deleted {result.rowcount} members", "count": result.rowcount}
@@ -607,16 +627,40 @@ def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    # Basic validation logic mirrored from Next.js
-    # (Pydantic handles required fields)
+    """Create a new member (admission). SEC-14: Enforces subscription maxMembers limit."""
+    # SEC-14: Enforce subscription maxMembers limit
+    subscription = db.query(GymSubscription).filter(
+        GymSubscription.gymId == current_gym.id
+    ).first()
+    if subscription and subscription.maxMembers and subscription.maxMembers > 0:
+        current_count = db.query(func.count(Member.id)).filter(
+            Member.gymId == current_gym.id,
+            Member.isDeleted == False,
+        ).scalar() or 0
+        if current_count >= subscription.maxMembers:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Member limit reached ({subscription.maxMembers}). Upgrade your plan to add more members.",
+            )
 
-    # Check duplicates?
-    # Next.js: Check Name OR Mobile
-    # existing = db.query(Member).filter(Member.gymId == current_gym.id).filter(
-    #     or_(Member.Name == data.Name, Member.Mobile == data.Mobile)
-    # ).first()
-    # if existing:
-    #      pass # Logic was commented out/simplified in Next.js snippet slightly
+    # SCH-07: Encrypt Aadhaar before storing; compute HMAC for dedup search
+    aadhaar_encrypted = None
+    aadhaar_hash = None
+    if data.Aadhaar:
+        raw_aadhar = str(data.Aadhaar).strip()
+        # Dedup: check if this Aadhaar is already in this gym
+        aadhaar_hash = hash_aadhaar(raw_aadhar)
+        existing_aadhaar = db.query(Member).filter(
+            Member.gymId == current_gym.id,
+            Member.AadhaarHash == aadhaar_hash,
+            Member.isDeleted == False,
+        ).first()
+        if existing_aadhaar:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A member with this Aadhaar number already exists in this gym.",
+            )
+        aadhaar_encrypted = encrypt_aadhaar(raw_aadhar)
 
     new_member = Member(
         gymId=current_gym.id,
@@ -624,7 +668,6 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
         MembershipReceiptnumber=data.MembershipReceiptnumber,
         Gender=data.Gender,
         Age=data.Age,
-        # AccessStatus is deprecated, no longer set from data
         height=data.height,
         weight=data.weight,
         DateOfJoining=parse_date(data.DateOfJoining),
@@ -634,23 +677,23 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
         Whatsapp=data.Whatsapp,
         PlanPeriod=data.PlanPeriod,
         PlanType=data.PlanType,
-        # MembershipStatus is computed dynamically — do NOT set it
         MembershipExpiryDate=parse_date(data.MembershipExpiryDate),
         LastPaymentDate=parse_date(data.LastPaymentDate),
         NextDuedate=parse_date(data.NextDuedate),
         LastPaymentAmount=data.LastPaymentAmount,
         RenewalReceiptNumber=data.RenewalReceiptNumber,
-        Aadhaar=data.Aadhaar,
+        Aadhaar=aadhaar_encrypted,        # SCH-07: encrypted ciphertext
+        AadhaarHash=aadhaar_hash,          # SCH-07: HMAC for dedup
         Remark=data.Remark,
         Mobile=data.Mobile,
         extraDays=data.extraDays,
         agreeTerms=data.agreeTerms,
-        lastEditedBy=current_gym.username, # simplified
-        editReason='New Admission'
+        lastEditedBy=current_gym.username,
+        editReason='New Admission',
     )
-    
+
     db.add(new_member)
-    db.flush() # Populate ID
+    db.flush()  # Populate ID
 
     # Create Invoice with breakdown
     if data.LastPaymentAmount and data.LastPaymentAmount > 0:

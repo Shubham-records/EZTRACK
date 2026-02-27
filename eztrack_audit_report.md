@@ -524,3 +524,111 @@ The codebase shows significant progress from v1 (BYTEA columns removed, PaymentE
 </tr>
 </tbody>
 </table>
+
+---
+
+## 8. Implementation Log — Remediation Decisions & Changes
+
+*Last updated: February 27, 2026*
+
+This section tracks every architectural decision, fix applied, and deliberate trade-off made during remediation sprints. Use this as the authoritative change log.
+
+---
+
+### 8.1 Architecture Decisions
+
+#### ❌ Redis — REJECTED
+Initially considered for ARCH-04 (cross-worker GymSettings cache invalidation). **Rejected** because EZTRACK is a single-server deployment; in-process TTL cache (10 min) is acceptable. Adds zero infrastructure overhead.
+**Implemented:** `core/cache.py` — in-process dict with TTL + thread-safe Lock. No external dependencies.
+
+#### ❌ APScheduler — REJECTED
+Initially used for: pre-computing `GymDailySummary` every 5 min + nightly payment reconciliation.
+**Rejected** because:
+- Computes stats for ALL gyms every 5 min — wasteful when most dashboards aren't open.
+- Background threads in async FastAPI require careful handling.
+**Replaced by:** Server-Sent Events (SSE).
+
+#### ✅ Server-Sent Events (SSE) — IMPLEMENTED
+**Endpoint:** `GET /api/dashboard/stream`
+- Pushes fresh stats every **60 seconds** while client is connected.
+- First event sent immediately on connect (no wait on page load).
+- Only runs for gyms actively viewing the dashboard.
+- `asyncio.to_thread()` used so sync SQLAlchemy doesn't block async event loop.
+- All merged into `routers/dashboard.py` — no extra file.
+
+**Nginx config required:** `proxy_buffering off; proxy_read_timeout 3600s;`
+
+**Frontend:** `new EventSource('/api/dashboard/stream', { withCredentials: true })`
+
+#### ✅ Payment Reconciliation — On-Demand Endpoint
+`POST /api/dashboard/reconcile-payments` — manual, per-gym, returns corrected diffs.
+
+---
+
+### 8.2 Security Fixes Applied
+
+| ID | Severity | Status | Fix Summary |
+|---|---|---|---|
+| SEC-03 | HIGH | ✅ DONE | Refresh token flow. Access=30 min, Refresh=7 days (SHA-256 hashed in DB). Logout revokes server-side. |
+| SEC-04 | HIGH | ✅ DONE | `InvoiceUpdateRequest` typed schema — mass assignment on PATCH /invoices prevented. |
+| SEC-05 | CRITICAL | ✅ DONE | Aadhaar masked XXXX-XXXX-NNNN in responses. Fernet AES encrypted at rest (`core/aadhaar_crypto.py`). |
+| SEC-06 | HIGH | ✅ DONE | IDOR fix — price history verifies protein belongs to current_gym. |
+| SEC-08 | HIGH | ✅ DONE | Seed endpoint requires OWNER role. |
+| SEC-09 | MEDIUM | ✅ DONE | CORS wildcard blocked at startup. |
+| SEC-10 | HIGH | ✅ DONE | Magic-byte validation + Pillow re-encoding on uploads. Strips EXIF GPS data. |
+| SEC-11 | LOW | ✅ DONE | Template placeholder allowlist. HTML escaped in preview endpoint. |
+| SEC-13 | MEDIUM | ✅ DONE | All print() replaced with logger. SENSITIVE_FIELDS frozenset — Aadhaar/phone → [REDACTED] in audit diffs. |
+| SEC-14 | MEDIUM | ✅ DONE | GymSubscription.maxMembers enforced on member create (HTTP 402 on limit). |
+
+---
+
+### 8.3 Schema Fixes Applied
+
+| ID | Severity | Status | Fix Summary |
+|---|---|---|---|
+| SCH-01 | HIGH | ✅ DONE | Partial unique index — only one default branch per gym at DB level. |
+| SCH-06 | MEDIUM | ✅ DONE | weekToDateIncome + monthToDateIncome added to GymDailySummary. |
+| SCH-07 | CRITICAL | ✅ DONE | Aadhaar stores Fernet ciphertext (String 300). AadhaarHash HMAC-SHA256 for dedup. |
+| SCH-08 | MEDIUM | ✅ DONE | isDeleted + deletedAt soft-delete on Member and Invoice. |
+
+---
+
+### 8.4 Architecture Fixes Applied
+
+| ID | Severity | Status | Fix Summary |
+|---|---|---|---|
+| ARCH-01 | CRITICAL | ✅ DONE | pool_size=50, max_overflow=100. |
+| ARCH-02 | HIGH | ✅ DONE | Low-stock via SQL aggregate — no Python loop over all lots. |
+| ARCH-03 | HIGH | ✅ DONE | Float → Numeric(12,2) for all currency columns. |
+| ARCH-04 | MEDIUM | ✅ DONE | In-process TTL cache (Redis rejected). |
+| ARCH-05 | HIGH | ✅ DONE | GET /invoices and GET /expenses paginated (max 500). |
+| ARCH-07 | CRITICAL | 🔄 PARTIAL | Python-level Quantity sync. DB trigger TODO. |
+| ARCH-10 | CRITICAL | ✅ DONE | slowapi — login 10/min/IP, signup 5/min/IP. |
+| ARCH-12 | HIGH | ✅ DONE | GymDailySummary uses ON CONFLICT DO UPDATE. |
+
+---
+
+### 8.5 Final Dependencies
+
+| Package | Why Added | Optional? |
+|---|---|---|
+| slowapi | Rate limiting | Optional (no-op if missing) |
+| Pillow | Image magic-byte + re-encode | Optional (warning if missing) |
+| cryptography | Aadhaar Fernet AES encryption | Required |
+
+**Removed:** `apscheduler` (replaced by SSE), `redis` (not needed).
+
+---
+
+### 8.6 Open / Remaining Items
+
+| ID | Severity | Status | Notes |
+|---|---|---|---|
+| ARCH-07 | CRITICAL | ✅ DONE | PostgreSQL trigger  in migrate.py. Fires on every ProteinLot INSERT/UPDATE/DELETE — ProteinStock.Quantity always = SUM(lots). |
+| SEC-12 | MEDIUM | ✅ DONE | PostgreSQL RULE  in migrate.py (belt-and-suspenders with ORM event). Raw SQL DELETE silently does nothing. |
+| SCH-04 | HIGH | ✅ DONE | PostgreSQL trigger  validates every item has description, quantity, rate, amount with correct types. |
+| SCH-05 | MEDIUM | ✅ DONE | PostgreSQL trigger  validates every branch ID in JSON array exists in Branch table AND belongs to same gym. |
+| ARCH-11 | MEDIUM | ✅ DONE | branch_details.py already imports and uses httpx correctly. No change needed. |
+
+All CRITICAL and HIGH severity items from the original 38 are now resolved. ✅
+

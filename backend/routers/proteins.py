@@ -1,16 +1,18 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from core.database import get_db
-from core.dependencies import get_current_gym
+from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
 from schemas.protein import ProteinCreate, ProteinUpdate, ProteinResponse
 from sqlalchemy.sql import func
 from core.audit_utils import log_audit, compute_diff
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -334,7 +336,7 @@ def bulk_create_proteins(data: dict, current_gym: Gym = Depends(get_current_gym)
             db.add(protein)
             created_count += 1
         except Exception as e:
-            print(f"Error creating protein: {e}")
+            logger.error("Bulk protein create error: %s", type(e).__name__, exc_info=False)
             continue
     
     db.commit()
@@ -342,9 +344,12 @@ def bulk_create_proteins(data: dict, current_gym: Gym = Depends(get_current_gym)
 
 
 @router.post("/bulk-delete")
-def bulk_delete_proteins(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Bulk delete proteins"""
-    ids = data.get("ids", [])
+def bulk_delete_proteins(
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
+):
     if not ids:
         raise HTTPException(status_code=400, detail="No IDs provided")
     
@@ -485,7 +490,8 @@ def update_protein_body(
 def delete_protein(
     protein_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Delete a protein stock entry."""
     protein = db.query(ProteinStock).filter(
@@ -553,7 +559,8 @@ def get_protein_image(
 def delete_protein_image(
     protein_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Delete image for a protein product."""
     protein = db.query(ProteinStock).filter(
@@ -741,7 +748,8 @@ def update_protein_lot(
 def delete_protein_lot(
     lot_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     lot = db.query(ProteinLot).filter(ProteinLot.id == lot_id, ProteinLot.gymId == current_gym.id).first()
     if not lot:

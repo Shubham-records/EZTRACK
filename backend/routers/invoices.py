@@ -1,15 +1,30 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import datetime
+from pydantic import BaseModel
 
 from core.database import get_db
-from core.dependencies import get_current_gym
+from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, Invoice, PaymentEvent
 from schemas.invoice import InvoiceCreate, InvoiceResponse
 from core.audit_utils import log_audit
 
-router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# SEC-04: Strongly-typed update schema — prevents mass assignment of total/gymId
+class InvoiceUpdateRequest(BaseModel):
+    id: Optional[str] = None
+    status: Optional[str] = None
+    paymentMode: Optional[str] = None
+    dueDate: Optional[datetime] = None
+    customerName: Optional[str] = None
+    editReason: Optional[str] = None
+    items: Optional[list] = None
+    # NOTE: total, subTotal, tax, discount, paidAmount, gymId are NOT accepted here.
+    # Financial recalculation must happen through create_invoice or pay_invoice.
+
 
 
 def map_invoice_response(invoice: Invoice):
@@ -47,9 +62,33 @@ def map_invoice_response(invoice: Invoice):
 
 @router.get("")
 @router.get("/")
-def get_invoices(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    invoices = db.query(Invoice).filter(Invoice.gymId == current_gym.id).order_by(Invoice.invoiceDate.desc()).all()
-    return [map_invoice_response(i) for i in invoices]
+def get_invoices(
+    limit: int = 100,
+    offset: int = 0,
+    status_filter: Optional[str] = None,   # PENDING | PARTIAL | PAID
+    member_id: Optional[str] = None,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+):
+    """ARCH-06: Paginated invoice list. max limit=500."""
+    limit = min(limit, 500)
+    q = db.query(Invoice).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.isDeleted == False,   # SCH-08: soft-delete
+    )
+    if status_filter:
+        q = q.filter(Invoice.status == status_filter.upper())
+    if member_id:
+        q = q.filter(Invoice.memberId == member_id)
+    total = q.count()
+    invoices = q.order_by(Invoice.invoiceDate.desc()).offset(offset).limit(limit).all()
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": [map_invoice_response(i) for i in invoices],
+    }
+
 
 
 @router.post("", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
@@ -156,7 +195,7 @@ def bulk_create_invoices(data: dict, current_gym: Gym = Depends(get_current_gym)
 
             created_count += 1
         except Exception as e:
-            print(f"Error creating invoice: {e}")
+            logger.error("Bulk invoice create error: %s", type(e).__name__, exc_info=False)
             continue
     
     db.commit()
@@ -164,17 +203,24 @@ def bulk_create_invoices(data: dict, current_gym: Gym = Depends(get_current_gym)
 
 
 @router.post("/bulk-delete")
-def bulk_delete_invoices(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Bulk delete invoices"""
+def bulk_delete_invoices(
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
+):
+    """Bulk delete invoices (soft-delete)"""
     ids = data.get("ids", [])
     if not ids:
         raise HTTPException(status_code=400, detail="No IDs provided")
     
     try:
-        stmt = Invoice.__table__.delete().where(
+        from datetime import datetime
+        stmt = Invoice.__table__.update().where(
             Invoice.id.in_(ids),
             Invoice.gymId == current_gym.id
-        )
+        ).values(isDeleted=True, deletedAt=datetime.utcnow())
+        
         result = db.execute(stmt)
         db.commit()
         return {"message": f"Deleted {result.rowcount} invoices", "count": result.rowcount}
@@ -192,8 +238,12 @@ def get_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym), db
 
 
 @router.patch("/update")
-def update_invoice(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    invoice_id = data.get("id") or data.get("_id")
+def update_invoice(
+    data: InvoiceUpdateRequest,   # SEC-04: typed schema, not raw dict
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    invoice_id = data.id
     if not invoice_id:
         raise HTTPException(status_code=400, detail="Invoice ID required")
     
@@ -201,19 +251,21 @@ def update_invoice(data: dict, current_gym: Gym = Depends(get_current_gym), db: 
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     
-    # Update allowed fields (paidAmount removed — use pay_invoice endpoint;
-    # items handled separately to avoid unnecessary TOAST rewrites)
-    updatable_fields = ['status', 'paymentMode', 'dueDate', 'customerName', 'subTotal', 'tax', 'discount', 'total']
-    for key in updatable_fields:
-        if key in data and data[key] is not None:
-            setattr(invoice, key, data[key])
-    
-    # PERF-3: Only update items JSON if explicitly changed
-    if 'items' in data and data['items'] is not None:
-        invoice.items = data['items']
+    # SEC-04: Only safe, explicitly listed fields can be changed.
+    # Financial fields (total, subTotal, tax, discount, paidAmount, gymId) are NOT here.
+    if data.status is not None:
+        invoice.status = data.status
+    if data.paymentMode is not None:
+        invoice.paymentMode = data.paymentMode
+    if data.dueDate is not None:
+        invoice.dueDate = data.dueDate
+    if data.customerName is not None:
+        invoice.customerName = data.customerName
+    if data.items is not None:
+        invoice.items = data.items
     
     invoice.lastEditedBy = current_gym.username
-    invoice.editReason = data.get('editReason', 'Invoice Updated')
+    invoice.editReason = data.editReason or 'Invoice Updated'
     
     db.commit()
     db.refresh(invoice)
@@ -221,12 +273,20 @@ def update_invoice(data: dict, current_gym: Gym = Depends(get_current_gym), db: 
 
 
 @router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+def delete_invoice(
+    invoice_id: str,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),   # SEC-02: MANAGER+ only
+):
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.gymId == current_gym.id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    
-    db.delete(invoice)
+
+    # SCH-08: Soft-delete — preserves PaymentEvent history and audit trail
+    from datetime import datetime
+    invoice.isDeleted = True
+    invoice.deletedAt = datetime.utcnow()
     db.commit()
     return None
 

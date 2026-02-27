@@ -17,8 +17,12 @@ Changes from v1:
 
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, Date, ForeignKey,
-    Text, JSON, Index, DateTime
+    Text, JSON, Index, DateTime, Numeric
 )
+# ARCH-03: Numeric(12,2) used for ALL currency fields — Float silently drops precision
+# e.g. 1999.99 stored as Float can become 1999.9899999... causing balance drift.
+# Float is still used for non-currency measurements (e.g. Member.height).
+MONEY = Numeric(12, 2)  # up to ₹999,999,999,999.99 — sufficient for any gym
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -135,16 +139,57 @@ class User(Base):
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
+
     gym = relationship("Gym", back_populates="users")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# RefreshToken  (SEC-03: short-lived access tokens + revocable refresh tokens)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RefreshToken(Base):
+    """
+    Stores refresh tokens for gym owners and staff.
+    Access tokens are short-lived (30 min). Refresh tokens live 7 days.
+    On logout, the refresh token is revoked (isRevoked=True).
+    The token stored here is the SHA-256 hash of the actual token string
+    so raw token values never appear in the database.
+    """
+    __tablename__ = "RefreshToken"
+    __table_args__ = (
+        Index("ix_refresh_gym",  "gymId"),
+        Index("ix_refresh_token", "tokenHash", unique=True),
+    )
+
+    id         = Column(String, primary_key=True, default=generate_uuid)
+    gymId      = Column(String, ForeignKey("Gym.id"), nullable=False)
+    userId     = Column(String, ForeignKey("User.id"), nullable=True)  # null = gym owner
+
+    tokenHash  = Column(String(64), nullable=False)   # SHA-256 hex of the raw token
+    isRevoked  = Column(Boolean, default=False)
+    expiresAt  = Column(DateTime(timezone=True), nullable=False)
+
+    createdAt  = Column(DateTime(timezone=True), default=func.now())
+
+    gym  = relationship("Gym")
+    user = relationship("User")
+
+
 # Branch  (physical location within a Gym)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Branch(Base):
     __tablename__ = "Branch"
-
+    __table_args__ = (
+        # SCH-01: Only ONE default branch per gym.
+        # This partial unique index enforces the constraint at the DB level.
+        Index(
+            "uq_branch_gym_default",
+            "gymId",
+            unique=True,
+            postgresql_where="\"isDefault\" = TRUE",
+        ),
+    )
     id      = Column(String, primary_key=True, default=generate_uuid)
     gymId   = Column(String, ForeignKey("Gym.id"), nullable=False)
 
@@ -202,14 +247,14 @@ class Invoice(Base):
     # Each item: { description, quantity, rate, amount }
     items    = Column(JSON, nullable=False)
 
-    subTotal = Column(Float, nullable=False)
-    tax      = Column(Float, default=0)
-    discount = Column(Float, default=0)
-    total    = Column(Float, nullable=False)
+    subTotal = Column(MONEY, nullable=False)  # ARCH-03: was Float
+    tax      = Column(MONEY, default=0)
+    discount = Column(MONEY, default=0)
+    total    = Column(MONEY, nullable=False)
 
     # FIX: paidAmount is now the ONLY source of truth for payment state.
     # editReason must NEVER encode financial data (e.g. "Paid: ₹500").
-    paidAmount = Column(Float, default=0)
+    paidAmount = Column(MONEY, default=0)  # ARCH-03: was Float
 
     status      = Column(String, default="PENDING")   # PENDING | PARTIAL | PAID
     paymentMode = Column(String, nullable=True)        # CASH | UPI | CARD | BANK
@@ -220,6 +265,10 @@ class Invoice(Base):
     termsAndConditions = Column(JSON, nullable=True)    # snapshot of T&C at invoice time
 
     branchId = Column(String, ForeignKey("Branch.id"), nullable=True)
+
+    # SCH-08: Soft-delete — never hard-delete invoices (financial audit trail)
+    isDeleted = Column(Boolean, default=False, index=True)
+    deletedAt = Column(DateTime(timezone=True), nullable=True)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
@@ -254,7 +303,7 @@ class PaymentEvent(Base):
     invoiceId = Column(String, ForeignKey("Invoice.id"), nullable=False)
     gymId     = Column(String, ForeignKey("Gym.id"),     nullable=False)
 
-    amount      = Column(Float, nullable=False)
+    amount      = Column(MONEY, nullable=False)          # ARCH-03: was Float
     paymentMode = Column(String(20), nullable=False)   # CASH | UPI | CARD | BANK
     notes       = Column(Text, nullable=True)
     recordedBy  = Column(String, nullable=True)        # username of staff recording payment
@@ -307,7 +356,14 @@ class Member(Base):
     # and cannot store international numbers.
     Whatsapp = Column(String(15), nullable=True)
     Mobile   = Column(String(15), nullable=True)
-    Aadhaar  = Column(String(12), nullable=True)
+
+    # SCH-07: Aadhaar ENCRYPTED at rest using Fernet AES-128 (core/aadhaar_crypto.py).
+    # The column stores Fernet ciphertext (base64 ~200 chars), never plaintext.
+    # API responses return 'XXXX-XXXX-NNNN' via mask_aadhaar().
+    Aadhaar     = Column(String(300), nullable=True)   # Fernet ciphertext
+    # AadhaarHash: HMAC-SHA256 for duplicate detection (WHERE AadhaarHash = ?).
+    # Cannot be reversed — used only for dedup, never returned to clients.
+    AadhaarHash = Column(String(64), nullable=True, index=True)
 
     PlanPeriod = Column(String, nullable=True)
     PlanType   = Column(String, nullable=True)
@@ -335,6 +391,10 @@ class Member(Base):
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+    # SCH-08: Soft-delete — never hard-delete members (audit trail, unpaid invoices)
+    isDeleted = Column(Boolean, default=False, index=True)
+    deletedAt = Column(DateTime(timezone=True), nullable=True)
 
     gym     = relationship("Gym",    back_populates="members")
     invoices = relationship("Invoice", back_populates="member")
@@ -381,14 +441,14 @@ class ProteinStock(Base):
     Flavour     = Column(String, nullable=True)
     Weight      = Column(String, nullable=True)
     Quantity    = Column(Integer, default=0)   # synced from sum of ProteinLot.quantity
-    MRPPrice    = Column(Float, default=0)
-    LandingPrice = Column(Float, default=0)
+    MRPPrice    = Column(MONEY, default=0)     # ARCH-03: was Float
+    LandingPrice = Column(MONEY, default=0)
     Remark      = Column(String, nullable=True)
 
-    MarginPrice  = Column(Float, nullable=True)
-    OfferPrice   = Column(Float, nullable=True)
-    SellingPrice = Column(Float, nullable=True)
-    ProfitAmount = Column(Float, nullable=True)   # SellingPrice - LandingPrice per unit
+    MarginPrice  = Column(MONEY, nullable=True)
+    OfferPrice   = Column(MONEY, nullable=True)
+    SellingPrice = Column(MONEY, nullable=True)
+    ProfitAmount = Column(MONEY, nullable=True)   # SellingPrice - LandingPrice per unit
     ExpiryDate   = Column(Date, nullable=True)
     StockThreshold = Column(Integer, default=5)
 
@@ -426,11 +486,11 @@ class ProteinLot(Base):
 
     lotNumber     = Column(String, nullable=True)
     quantity      = Column(Integer, default=0)
-    purchasePrice = Column(Float, nullable=True)
-    sellingPrice  = Column(Float, nullable=True)
+    purchasePrice = Column(MONEY, nullable=True)   # ARCH-03: was Float
+    sellingPrice  = Column(MONEY, nullable=True)
     marginType    = Column(String, nullable=True)   # percentage | fixed
-    marginValue   = Column(Float, nullable=True)
-    offerPrice    = Column(Float, nullable=True)
+    marginValue   = Column(MONEY, nullable=True)
+    offerPrice    = Column(MONEY, nullable=True)
     expiryDate    = Column(Date, nullable=True)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
@@ -459,10 +519,14 @@ class GymDailySummary(Base):
     renewals       = Column(Integer, default=0)
     expiringToday  = Column(Integer, default=0)
 
-    totalIncome    = Column(Float, default=0)
-    totalExpenses  = Column(Float, default=0)
-    pendingBalance = Column(Float, default=0)
+    totalIncome    = Column(MONEY, default=0)   # ARCH-03
+    totalExpenses  = Column(MONEY, default=0)
+    pendingBalance = Column(MONEY, default=0)
     lowStockCount  = Column(Integer, default=0)
+
+    # SCH-06: Week/month aggregates so dashboard doesn't run live SUM queries
+    weekToDateIncome  = Column(MONEY, default=0)   # Mon–today income
+    monthToDateIncome = Column(MONEY, default=0)   # 1st–today income
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
@@ -488,8 +552,8 @@ class GymSettings(Base):
 
     # GST
     enableGST        = Column(Boolean, default=False)
-    memberGSTPercent = Column(Float, default=18.0)
-    proteinGSTPercent = Column(Float, default=18.0)
+    memberGSTPercent = Column(MONEY, default=18.0)   # ARCH-03
+    proteinGSTPercent = Column(MONEY, default=18.0)
     gstin            = Column(String, nullable=True)
     showGSTBreakup   = Column(Boolean, default=True)
     hsnService       = Column(String, default="99979")
@@ -511,8 +575,8 @@ class GymSettings(Base):
     postExpiryGraceDays = Column(Integer, default=30)
     admissionExpiryDays = Column(Integer, default=365)
     readmissionDiscount = Column(Integer, default=50)
-    admissionFee        = Column(Float, default=0.0)
-    reAdmissionFee      = Column(Float, default=0.0)
+    admissionFee        = Column(MONEY, default=0.0)   # ARCH-03
+    reAdmissionFee      = Column(MONEY, default=0.0)
 
     # Personal Training
     enablePersonalTraining = Column(Boolean, default=False)
@@ -542,7 +606,7 @@ class Expense(Base):
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
 
     category    = Column(String, nullable=False)
-    amount      = Column(Float, nullable=False)
+    amount      = Column(MONEY, nullable=False)   # ARCH-03: was Float
     date        = Column(Date, nullable=False)
     paymentMode = Column(String, nullable=True)
     reference   = Column(String, nullable=True)
@@ -614,9 +678,9 @@ class PricingConfig(Base):
         # The bulk-upsert endpoint uses SELECT+INSERT in Python; without this
         # constraint two concurrent bulk updates can create conflicting rows.
         Index("uq_pricing_member",  "gymId", "configType", "planType",  "periodType",
-              unique=True, postgresql_where="configType = 'member'"),
+              unique=True, postgresql_where="\"configType\" = 'member'"),
         Index("uq_pricing_protein", "gymId", "configType", "brandName",
-              unique=True, postgresql_where="configType = 'protein'"),
+              unique=True, postgresql_where="\"configType\" = 'protein'"),
     )
 
     id    = Column(String, primary_key=True, default=generate_uuid)
@@ -627,10 +691,10 @@ class PricingConfig(Base):
     periodType  = Column(String, nullable=True)     # Monthly, Quarterly, etc.
     brandName   = Column(String, nullable=True)     # for protein pricing
 
-    basePrice    = Column(Float, nullable=False)
+    basePrice    = Column(MONEY, nullable=False)   # ARCH-03: was Float
     marginType   = Column(String, nullable=True)   # percentage | fixed
-    marginValue  = Column(Float, nullable=True)
-    offerDiscount = Column(Float, default=0)
+    marginValue  = Column(MONEY, nullable=True)
+    offerDiscount = Column(MONEY, default=0)
 
     effectiveFrom = Column(Date, nullable=True)
     isActive      = Column(Boolean, default=True)

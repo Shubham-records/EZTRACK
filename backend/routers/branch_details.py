@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from core.database import get_db
-from core.dependencies import get_current_gym
+from core.dependencies import get_current_gym, require_owner_or_manager
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
 from models.all_models import Gym, Branch
 from schemas.branch_details import BranchDetailsUpdate
@@ -312,6 +312,7 @@ def get_branch_logo_url(
 def delete_gym_logo(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Delete the gym logo from object storage."""
     branch = _get_default_branch(current_gym.id, db)

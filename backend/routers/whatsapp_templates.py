@@ -1,3 +1,5 @@
+import html
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -10,6 +12,26 @@ from schemas.whatsapp import WhatsAppTemplateCreate, WhatsAppTemplateUpdate, Wha
 router = APIRouter()
 
 VALID_TYPES = ["Admission", "Re-Admission", "Renewal", "Protein"]
+
+# SEC-11: Allowlist of supported template placeholder names.
+# Any {unknown_var} in a template is rejected at save time to prevent injection.
+ALLOWED_PLACEHOLDERS = frozenset({
+    "customerName", "gymName", "total", "paidAmount", "balance",
+    "planType", "planPeriod", "date", "paymentMode", "branchName",
+    "expiryDate", "receiptNumber",
+})
+
+
+def _validate_template_placeholders(template_text: str) -> None:
+    """Raise HTTPException if template contains any non-allowlisted {placeholder}."""
+    found = re.findall(r"\{(\w+)\}", template_text)
+    invalid = [p for p in found if p not in ALLOWED_PLACEHOLDERS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid template placeholders: {invalid}. Allowed: {sorted(ALLOWED_PLACEHOLDERS)}",
+        )
+
 
 DEFAULT_TEMPLATES = {
     "Admission": "Hi {customerName}! 🙏 Welcome to {gymName}! Your membership is now active. Please find your invoice attached. Stay fit! 💪",
@@ -111,6 +133,8 @@ def update_template(
     ).first()
 
     if not template:
+        if data.messageTemplate:
+            _validate_template_placeholders(data.messageTemplate)  # SEC-11
         template = WhatsAppTemplate(
             gymId=current_gym.id,
             templateType=template_type,
@@ -120,6 +144,7 @@ def update_template(
         db.add(template)
     else:
         if data.messageTemplate is not None:
+            _validate_template_placeholders(data.messageTemplate)  # SEC-11
             template.messageTemplate = data.messageTemplate
         if data.isActive is not None:
             template.isActive = data.isActive
@@ -139,13 +164,14 @@ def update_template(
 def preview_template(
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Preview a rendered template with sample or provided data."""
+    """Preview a rendered template. Returns PLAIN TEXT — never HTML.
+    SEC-11: All substitution values are HTML-escaped before insertion.
+    """
     template_text = data.get("messageTemplate", "")
     sample_data = data.get("sampleData", {})
 
-    # Default sample values
     defaults = {
         "customerName": "John Doe",
         "gymName": current_gym.gymname or "Your Gym",
@@ -162,6 +188,11 @@ def preview_template(
 
     rendered = template_text
     for key, value in defaults.items():
-        rendered = rendered.replace("{" + key + "}", str(value))
+        # SEC-11: Escape HTML special chars in user-supplied values
+        safe_value = html.escape(str(value))
+        rendered = rendered.replace("{" + key + "}", safe_value)
 
-    return {"rendered": rendered}
+    # Strip any residual HTML tags from the template body itself
+    rendered = re.sub(r"<[^>]+>", "", rendered)
+
+    return {"rendered": rendered, "format": "plain_text"}

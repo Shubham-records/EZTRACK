@@ -6,7 +6,10 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     ENCRYPTION_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 720  # 12 hours
+    # SEC-03: Reduced from 720 (12 hours) → 30 minutes.
+    # Short-lived tokens limit exposure of stolen tokens.
+    # TODO Sprint 2: implement refresh tokens (SEC-03) so frontend can silently renew.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     model_config = SettingsConfigDict(
         env_file=(".env", "fastapi_app/.env"),

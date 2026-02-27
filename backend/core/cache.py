@@ -1,36 +1,26 @@
 """
-core/cache.py — In-Process TTL Cache
-=====================================
-Eliminates the GymSettings-fetched-on-every-request problem.
-GymSettings has a unique constraint on gymId (one row per gym) and almost
-never changes — a 10-minute in-memory cache is perfectly safe.
+core/cache.py — In-Process TTL Cache for GymSettings
+======================================================
+Simple in-process dict cache — no Redis needed.
 
 At 10K DAU this reduces GymSettings DB queries from ~100,000/day to ~144/day
-(one refresh per gym per 10-minute window across all instances).
+(one refresh per gym per 10-minute window on each worker process).
+
+Multi-worker note: Each gunicorn/uvicorn worker has its own cache. A settings
+update will take up to TTL_SECONDS to propagate to other workers (max 10 min).
+This is acceptable for GymSettings — gym owners change settings infrequently.
 
 Usage
 -----
     from core.cache import get_gym_settings, invalidate_gym_settings
 
-    # In any router:
-    settings = get_gym_settings(current_gym.id, db)
-
-    # After PUT /settings (call this to bust the cache immediately):
-    invalidate_gym_settings(current_gym.id)
-
-Multi-instance note
--------------------
-This is an in-process dict — each gunicorn/uvicorn worker has its own cache.
-In a multi-worker deployment a settings update will take up to TTL_SECONDS
-to propagate to other workers. This is acceptable for GymSettings (gym owners
-change settings rarely). For anything that requires instant cross-worker
-consistency, use Redis instead.
+    settings = get_gym_settings(current_gym.id, db)   # in any router
+    invalidate_gym_settings(current_gym.id)            # after PUT /settings
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from threading import Lock
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -53,13 +43,6 @@ def get_gym_settings(gym_id: str, db: Session):
     Return GymSettings for the given gym_id.
     Serves from cache if the entry is fresher than TTL_SECONDS.
     Creates default settings if none exist for this gym.
-
-    Args:
-        gym_id: The gym's primary key.
-        db:     SQLAlchemy session (only used on cache miss).
-
-    Returns:
-        GymSettings ORM object.
     """
     with _lock:
         cached = _settings_cache.get(gym_id)
@@ -69,7 +52,7 @@ def get_gym_settings(gym_id: str, db: Session):
                 return cached["data"]
 
     # Cache miss — hit the database
-    from models.all_models import GymSettings   # local import to avoid circular
+    from models.all_models import GymSettings
     settings = db.query(GymSettings).filter(GymSettings.gymId == gym_id).first()
 
     if not settings:
@@ -95,9 +78,6 @@ def invalidate_gym_settings(gym_id: str) -> None:
     """
     Remove the cached GymSettings for a gym.
     Call this immediately after a successful PUT /settings.
-
-    Args:
-        gym_id: The gym whose settings were just updated.
     """
     with _lock:
         dropped = _settings_cache.pop(gym_id, None)
@@ -106,18 +86,14 @@ def invalidate_gym_settings(gym_id: str) -> None:
 
 
 def invalidate_all() -> None:
-    """
-    Clear the entire cache.  Useful after bulk admin operations.
-    """
+    """Clear the entire cache. Useful after bulk admin operations."""
     with _lock:
         _settings_cache.clear()
     logger.info("GymSettings cache fully cleared")
 
 
 def cache_stats() -> dict:
-    """
-    Return cache diagnostics — call from an internal /admin/cache-stats endpoint.
-    """
+    """Return cache diagnostics — call from an internal /admin/cache-stats endpoint."""
     with _lock:
         now = datetime.now()
         entries = [
@@ -129,6 +105,7 @@ def cache_stats() -> dict:
             for gym_id, v in _settings_cache.items()
         ]
     return {
+        "backend": "in-process",
         "totalEntries": len(entries),
         "ttlSeconds": TTL_SECONDS,
         "entries": entries,

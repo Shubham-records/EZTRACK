@@ -1,25 +1,30 @@
 """
 main.py  (v2 — clean slate)
 ============================
-Changes from v1:
-  - run_startup_migrations() REMOVED — use Base.metadata.create_all() only.
-    Future schema changes go through Alembic (see README).
-  - APScheduler added for dashboard summary background job (every 5 min).
-  - CORS wildcard '*' removed — set ALLOWED_ORIGINS in .env.
+Architecture decisions:
+  - APScheduler REMOVED — dashboard updates delivered via SSE (GET /api/dashboard/stream).
+    Pushes fresh stats every 60s only for gyms actively on the dashboard.
+  - Payment reconciliation is on-demand: POST /api/dashboard/reconcile-payments.
+  - Redis REMOVED — in-process GymSettings cache is sufficient (core/cache.py).
+  - CORS wildcard '*' blocked — set ALLOWED_ORIGINS in .env.
   - redirect_slashes=False kept (all routers register both '' and '/' variants).
+  - SEC-09: CORS startup validation — refuse to start if '*' + allow_credentials.
+  - ARCH-10: slowapi rate limiting middleware added.
+  - SEC-13: Structured logging throughout (no print() calls).
 
 Environment variables required:
-    DATABASE_URL         — PostgreSQL connection string
-    JWT_SECRET_KEY       — secret for JWT signing
-    STORAGE_BACKEND      — supabase | r2 | s3
-    STORAGE_ENDPOINT_URL — storage endpoint
-    STORAGE_ACCESS_KEY   — storage access key
-    STORAGE_SECRET_KEY   — storage secret key
-    STORAGE_BUCKET       — bucket name (default: eztrack)
-    STORAGE_REGION       — region (default: ap-south-1)
+    DATABASE_URL              — PostgreSQL connection string
+    JWT_SECRET_KEY            — secret for JWT signing
+    ENCRYPTION_KEY            — 64 hex chars (32 bytes) for Aadhaar Fernet encryption
+    STORAGE_BACKEND           — supabase | r2 | s3
+    STORAGE_ENDPOINT_URL      — storage endpoint
+    STORAGE_ACCESS_KEY        — storage access key
+    STORAGE_SECRET_KEY        — storage secret key
+    STORAGE_BUCKET            — bucket name (default: eztrack)
+    STORAGE_REGION            — region (default: ap-south-1)
     STORAGE_SIGNED_URL_EXPIRY — signed URL TTL in seconds (default: 3600)
-    ALLOWED_ORIGINS      — comma-separated list of allowed CORS origins
-                           e.g. "https://app.yourdomain.com,http://localhost:3000"
+    ALLOWED_ORIGINS           — comma-separated allowed CORS origins
+                                e.g. "https://app.yourdomain.com,http://localhost:3000"
 """
 
 import os
@@ -34,7 +39,7 @@ from routers import (
     settings, expenses, contacts, pending, automation, audit,
     terms, branch_details, whatsapp_templates,
 )
-from core.database import Base, engine, SessionLocal
+from core.database import Base, engine
 
 logger = logging.getLogger(__name__)
 
@@ -44,156 +49,32 @@ logger = logging.getLogger(__name__)
 def init_db():
     """
     Create all tables that do not yet exist.
-    This is safe to run on every startup — SQLAlchemy checks IF NOT EXISTS.
-
-    DO NOT add ALTER TABLE statements here.  For schema changes after initial
-    deployment, use Alembic:
-        alembic revision --autogenerate -m "describe_your_change"
-        alembic upgrade head   ← run as a pre-deployment step, never at startup
+    Safe to run on every startup — SQLAlchemy checks IF NOT EXISTS.
+    For schema changes after initial deployment, use migrate.py.
     """
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables verified / created.")
 
 
-# ─── Background Dashboard Refresh ─────────────────────────────────────────────
-
-def _refresh_dashboard_summaries():
-    """
-    Recompute GymDailySummary for all active gyms.
-    Runs on a schedule — the dashboard endpoint only ever reads this table.
-    This eliminates the cache race condition (50+ simultaneous cache-miss queries).
-    """
-    from datetime import date
-    from sqlalchemy import func
-    from models.all_models import (
-        Gym, Member, Invoice, ProteinStock, ProteinLot,
-        Expense, GymSettings, GymDailySummary
-    )
-
-    db = SessionLocal()
-    today = date.today()
-
-    try:
-        gyms = db.query(Gym).filter(Gym.isDeleted == False).all()
-        for gym in gyms:
-            try:
-                # Active members (using computed_status expression)
-                active_members = db.query(Member).filter(
-                    Member.gymId == gym.id,
-                    Member.computed_status == "Active"
-                ).count()
-
-                # Expiring today
-                expiring_today = db.query(Member).filter(
-                    Member.gymId == gym.id,
-                    Member.NextDuedate == today,
-                ).count()
-
-                # Today's income
-                from datetime import datetime
-                today_start = datetime.combine(today, datetime.min.time())
-                today_income = db.query(func.sum(Invoice.total)).filter(
-                    Invoice.gymId == gym.id,
-                    Invoice.invoiceDate >= today_start,
-                ).scalar() or 0.0
-
-                # Pending balance
-                pending_balance = db.query(
-                    func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0))
-                ).filter(
-                    Invoice.gymId == gym.id,
-                    Invoice.status.in_(["PENDING", "PARTIAL"]),
-                ).scalar() or 0.0
-
-                # Today's expenses
-                today_expenses = db.query(func.sum(Expense.amount)).filter(
-                    Expense.gymId == gym.id,
-                    Expense.date == today,
-                ).scalar() or 0.0
-
-                # Low stock count (via lots)
-                settings = db.query(GymSettings).filter(GymSettings.gymId == gym.id).first()
-                default_threshold = settings.lowStockThreshold if settings else 5
-
-                lots = db.query(ProteinLot).filter(ProteinLot.gymId == gym.id).all()
-                proteins = {
-                    p.id: p for p in
-                    db.query(ProteinStock).filter(ProteinStock.gymId == gym.id).all()
-                }
-                low_stock_count = sum(
-                    1 for lot in lots
-                    if (lot.quantity or 0) < (proteins.get(lot.proteinId, ProteinStock()).StockThreshold or default_threshold)
-                )
-
-                # Upsert summary
-                summary = db.query(GymDailySummary).filter(
-                    GymDailySummary.gymId == gym.id,
-                    GymDailySummary.summaryDate == today,
-                ).first()
-
-                if summary:
-                    summary.activeMembers  = active_members
-                    summary.expiringToday  = expiring_today
-                    summary.totalIncome    = today_income
-                    summary.pendingBalance = pending_balance
-                    summary.totalExpenses  = today_expenses
-                    summary.lowStockCount  = low_stock_count
-                else:
-                    summary = GymDailySummary(
-                        gymId=gym.id,
-                        summaryDate=today,
-                        activeMembers=active_members,
-                        expiringToday=expiring_today,
-                        totalIncome=today_income,
-                        pendingBalance=pending_balance,
-                        totalExpenses=today_expenses,
-                        lowStockCount=low_stock_count,
-                    )
-                    db.add(summary)
-
-                db.commit()
-            except Exception as e:
-                db.rollback()
-                logger.warning("Dashboard refresh failed for gym %s: %s", gym.id, e)
-    finally:
-        db.close()
-
-
-def _start_scheduler():
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        scheduler = BackgroundScheduler()
-        scheduler.add_job(
-            _refresh_dashboard_summaries,
-            trigger="interval",
-            minutes=5,
-            id="dashboard_refresh",
-            replace_existing=True,
-        )
-        scheduler.start()
-        logger.info("APScheduler started — dashboard refresh every 5 minutes.")
-        return scheduler
-    except ImportError:
-        logger.warning(
-            "APScheduler not installed. Dashboard refresh disabled. "
-            "Run: pip install apscheduler"
-        )
-        return None
-
-
-# ─── Lifespan ────────────────────────────────────────────────────────────────
-
-_scheduler = None
+# ─── Lifespan ─────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _scheduler
+    """Startup: verify DB tables. No background jobs — SSE handles live data."""
     init_db()
-    _scheduler = _start_scheduler()
+
+    # SEC-08: Ensure seed data is NEVER enabled in production
+    allow_seed = os.getenv("ALLOW_SEED_DATA", "false").lower() == "true"
+    if allow_seed:
+        env_name = os.getenv("VERCEL_ENV", "development").lower()
+        db_url = os.getenv("DATABASE_URL", "")
+        is_prod_env = env_name == "production" or ("localhost" not in db_url and "127.0.0.1" not in db_url and "sqlite" not in db_url)
+        if is_prod_env:
+            raise RuntimeError("CRITICAL SEC-08: ALLOW_SEED_DATA is True in a production environment. Failing fast to prevent data corruption.")
+        logger.warning("🚨 SEC-08: SEED DATA ENDPOINT ENABLED. DO NOT USE IN PRODUCTION.")
+
     yield
-    if _scheduler:
-        _scheduler.shutdown(wait=False)
-        logger.info("APScheduler stopped.")
+    # SSE connections clean up automatically on client disconnect — nothing to shut down
 
 
 # ─── App ─────────────────────────────────────────────────────────────────────
@@ -206,19 +87,41 @@ app = FastAPI(
 )
 
 
-# ─── CORS ────────────────────────────────────────────────────────────────────
-# FIX: removed wildcard '*'.  Set ALLOWED_ORIGINS in .env for production.
-# Example: ALLOWED_ORIGINS=https://app.yourgym.com,https://yourgym.com
+# ─── Rate Limiting (ARCH-10) ──────────────────────────────────────────────────
+
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.middleware import SlowAPIMiddleware
+
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+    logger.info("slowapi rate limiting enabled.")
+except ImportError:
+    limiter = None
+    logger.warning("slowapi not installed — rate limiting DISABLED. Run: pip install slowapi")
+
+
+# ─── CORS (SEC-09) ───────────────────────────────────────────────────────────
 
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001")
 origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
+if "*" in origins:
+    raise RuntimeError(
+        "SEC-09: ALLOWED_ORIGINS='*' is incompatible with allow_credentials=True. "
+        "Set explicit origins, e.g. ALLOWED_ORIGINS=https://app.yourgym.com"
+    )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 
@@ -246,7 +149,6 @@ app.include_router(whatsapp_templates.router, prefix="/api/whatsapp-templates", 
 @app.get("/")
 def read_root():
     return {"message": "EZTRACK API v2", "status": "ok"}
-
 
 @app.get("/health")
 def health_check():
