@@ -17,7 +17,6 @@ class MemberBase(BaseModel):
     Whatsapp: Optional[int] = None # ORM is BigInt, Pydantic handles int
     PlanPeriod: Optional[str] = None
     PlanType: Optional[str] = None
-    MembershipStatus: Optional[str] = ""
     MembershipExpiryDate: Optional[str] = None
     LastPaymentDate: Optional[str] = None
     NextDuedate: Optional[str] = None

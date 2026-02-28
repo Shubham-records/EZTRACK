@@ -222,7 +222,7 @@ function InvoiceDetailModal({ invoice, onClose, onNavigateToMember, onRefresh })
                                     <Field icon={<Calendar size={14} />} label="Next Due Date" value={member.NextDuedate} />
                                     <Field icon={<Hash size={14} />} label="Extra Days" value={member.extraDays !== '0' && member.extraDays ? `+${member.extraDays} days` : null} />
                                     <Field icon={<Hash size={14} />} label="Renewal Receipt #" value={member.RenewalReceiptNumber} mono />
-                                    <Field icon={<Activity size={14} />} label="Membership Status" value={member.MembershipStatus} highlight />
+                                    <Field icon={<Activity size={14} />} label="Membership Status" value={member.computed_status} highlight />
                                 </div>
                             </div>
                         </div>

@@ -170,7 +170,7 @@ export function NewAdmission() {
     Whatsapp: null,
     PlanPeriod: '',
     PlanType: '',
-    MembershipStatus: '',
+    computed_status: '',
     MembershipExpiryDate: '',
     LastPaymentDate: '',
     NextDuedate: '',
@@ -744,7 +744,7 @@ export function ReAdmission() {
   const [formData, setFormData] = useState({
     Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', height: '', weight: '',
     DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
-    PlanPeriod: '', PlanType: '', MembershipStatus: '', MembershipExpiryDate: '', LastPaymentDate: '',
+    PlanPeriod: '', PlanType: '', computed_status: '', MembershipExpiryDate: '', LastPaymentDate: '',
     NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
     extraDays: '0', agreeTerms: false,
     admissionPrice: 0, extraAmount: 0,
@@ -838,7 +838,7 @@ export function ReAdmission() {
           setFormData({
             Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', height: '', weight: '',
             DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
-            PlanPeriod: '', PlanType: '', MembershipStatus: '', MembershipExpiryDate: '', LastPaymentDate: '',
+            PlanPeriod: '', PlanType: '', computed_status: '', MembershipExpiryDate: '', LastPaymentDate: '',
             NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
             extraDays: '0', agreeTerms: false,
             admissionPrice: gymSettings?.reAdmissionFee || 0, extraAmount: 0,
@@ -909,7 +909,7 @@ export function ReAdmission() {
       setFormData({
         Name: '', MembershipReceiptnumber: '', Gender: '', Age: '', height: '', weight: '',
         DateOfJoining: '', DateOfReJoin: format(new Date(), 'yyyy-MM-dd'), Billtype: '', Address: '', Whatsapp: '',
-        PlanPeriod: '', PlanType: '', MembershipStatus: '', MembershipExpiryDate: '', LastPaymentDate: '',
+        PlanPeriod: '', PlanType: '', computed_status: '', MembershipExpiryDate: '', LastPaymentDate: '',
         NextDuedate: '', LastPaymentAmount: '', RenewalReceiptNumber: '', Aadhaar: '', Remark: '', Mobile: '',
         extraDays: '0', agreeTerms: false,
         admissionPrice: gymSettings?.reAdmissionFee || 0, extraAmount: 0,

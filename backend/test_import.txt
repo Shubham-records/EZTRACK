@@ -1,0 +1,28 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import routers.members
+  File "D:\EZTRACK\backend\routers\members.py", line 2, in <module>
+    from fastapi import APIRouter, Depends, HTTPException, status
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\fastapi\__init__.py", line 7, in <module>
+    from .applications import FastAPI as FastAPI
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\fastapi\applications.py", line 13, in <module>
+    from fastapi import routing
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\fastapi\routing.py", line 24, in <module>
+    from fastapi import params
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\fastapi\params.py", line 7, in <module>
+    from fastapi.exceptions import FastAPIDeprecationWarning
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\fastapi\exceptions.py", line 5, in <module>
+    from pydantic import BaseModel, create_model
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\pydantic\__init__.py", line 5, in <module>
+    from ._migration import getattr_migration
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\pydantic\_migration.py", line 4, in <module>
+    from pydantic.warnings import PydanticDeprecatedSince20
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\pydantic\warnings.py", line 5, in <module>
+    from .version import version_short
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\pydantic\version.py", line 7, in <module>
+    from pydantic_core import __version__ as __pydantic_core_version__
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\pydantic_core\__init__.py", line 8, in <module>
+    from ._pydantic_core import (
+    ...<21 lines>...
+    )
+ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'

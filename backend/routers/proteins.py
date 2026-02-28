@@ -44,20 +44,6 @@ def recalculate_computed_fields(protein):
     except (ValueError, TypeError):
         pass
 
-def sync_protein_quantity(protein_id: str, current_gym_id: str, db: Session):
-    """Sync the Quantity field of a protein to the sum of its lots."""
-    protein = db.query(ProteinStock).filter(
-        ProteinStock.id == protein_id,
-        ProteinStock.gymId == current_gym_id
-    ).first()
-    if protein:
-        total_lots = db.query(func.sum(ProteinLot.quantity)).filter(
-            ProteinLot.proteinId == protein_id,
-            ProteinLot.gymId == current_gym_id
-        ).scalar() or 0
-        protein.Quantity = total_lots
-        db.commit()  # separate commit — lot write is already committed by caller
-
 
 
 def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
@@ -617,8 +603,6 @@ def adjust_protein_stock(
     db.add(lot)
     db.commit()
     
-    # Sync quantity
-    sync_protein_quantity(protein.id, current_gym.id, db)
     db.refresh(protein)
     
     return {
@@ -684,7 +668,6 @@ def create_protein_lot(
     db.add(lot)
     db.commit()
     
-    sync_protein_quantity(protein_id, current_gym.id, db)
     db.refresh(lot)
     db.refresh(protein)
 
@@ -727,9 +710,6 @@ def update_protein_lot(
 
     db.commit()
     
-    if protein:
-        sync_protein_quantity(protein.id, current_gym.id, db)
-        
     db.refresh(lot)
     if protein:
         db.refresh(protein)
@@ -759,7 +739,4 @@ def delete_protein_lot(
     db.delete(lot)
     db.commit()
     
-    if protein:
-        sync_protein_quantity(protein.id, current_gym.id, db)
-        
     return None

@@ -5,7 +5,7 @@ from typing import List, Optional
 from core.database import get_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, ExternalContact
-from schemas.pending import ExternalContactCreate, ExternalContactUpdate, ExternalContactResponse
+from schemas.contact import ExternalContactCreate, ExternalContactUpdate, ExternalContactResponse
 
 router = APIRouter()
 

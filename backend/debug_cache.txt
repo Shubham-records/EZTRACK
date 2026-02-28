@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import logging; logging.basicConfig(level=logging.DEBUG); from core.cache import get_gym_settings; from core.database import SessionLocal; db = SessionLocal(); settings = get_gym_settings('541315b7-7eb7-40b9-858a-a43b679b3ee4', db); print(type(settings)); print(settings.lowStockThreshold)
+                                                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\EZTRACK\backend\core\database.py", line 24, in <module>
+    async_engine = create_async_engine(
+        ASYNC_DATABASE_URL,
+    ...<3 lines>...
+        pool_pre_ping=True,
+    )
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\sqlalchemy\ext\asyncio\engine.py", line 120, in create_async_engine
+    sync_engine = _create_engine(url, **kw)
+  File "<string>", line 2, in create_engine
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\sqlalchemy\util\deprecations.py", line 281, in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\sqlalchemy\engine\create.py", line 617, in create_engine
+    dbapi = dbapi_meth(**dbapi_args)
+  File "D:\EZTRACK\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 1094, in import_dbapi
+    return AsyncAdapt_asyncpg_dbapi(__import__("asyncpg"))
+                                    ~~~~~~~~~~^^^^^^^^^^^
+ModuleNotFoundError: No module named 'asyncpg'

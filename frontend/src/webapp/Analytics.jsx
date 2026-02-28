@@ -60,7 +60,7 @@ export default function Analytics() {
                 Name: m.Name || '',
                 Phone: m.Phone || '',
                 Email: m.Email || '',
-                Status: m.MembershipStatus || '',
+                Status: m.computed_status || '',
                 Plan: m.PlanType || '',
                 JoinDate: m.DateOfJoining || '',
                 ExpiryDate: m.MembershipExpiryDate || m.NextDuedate || ''
@@ -161,9 +161,9 @@ export default function Analytics() {
             const monthlyGrowth = [];
 
             members.forEach(m => {
-                if (m.MembershipStatus === 'Active' || m.MembershipStatus === 'active') activeCount++;
-                else if (m.MembershipStatus === 'Inactive' || m.MembershipStatus === 'inactive') inactiveCount++;
-                else if (m.MembershipStatus === 'Expired' || m.MembershipStatus === 'expired') expiredCount++;
+                if (m.computed_status === 'Active' || m.computed_status === 'active') activeCount++;
+                else if (m.computed_status === 'Inactive' || m.computed_status === 'inactive') inactiveCount++;
+                else if (m.computed_status === 'Expired' || m.computed_status === 'expired') expiredCount++;
 
                 const age = parseInt(m.Age) || 25;
                 if (age <= 25) ageGroups['16-25']++;

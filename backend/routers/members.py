@@ -6,7 +6,7 @@ from typing import List, Optional
 from datetime import datetime, date, timedelta
 
 from core.database import get_db
-from core.dependencies import get_current_gym, require_owner_or_manager
+from core.dependencies import get_current_gym, require_owner_or_manager, require_owner
 from core.date_utils import parse_date, format_date
 from core.cache import get_gym_settings
 from core.aadhaar_crypto import encrypt_aadhaar, decrypt_aadhaar, hash_aadhaar, mask_aadhaar
@@ -78,19 +78,6 @@ def map_member_response(member: Member, admission_expiry_days: int = 365):
     for field in ('DateOfJoining', 'DateOfReJoin', 'MembershipExpiryDate', 'LastPaymentDate', 'NextDuedate'):
         m_dict[field] = format_date(getattr(member, field, None))
 
-    # Compute MembershipStatus dynamically (stored column removed in v2)
-    today = datetime.now().date()
-    if member.NextDuedate:
-        if today <= member.NextDuedate:
-            computed_ms = 'Active'
-        elif member.MembershipExpiryDate and today > member.MembershipExpiryDate:
-            computed_ms = 'Expired'
-        else:
-            computed_ms = 'Inactive'
-    else:
-        computed_ms = 'Inactive'
-    m_dict['MembershipStatus'] = computed_ms
-
     status_info = calculate_member_status(member, admission_expiry_days)
     m_dict.update(status_info)
     return m_dict
@@ -117,9 +104,8 @@ def get_members(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    # ARCH-06: Enforce max page_size=500 (page_size=0 is allowed for exports only)
-    if page_size > 0:
-        page_size = min(page_size, 500)
+    # ARCH-06: Enforce max page_size=500, no page_size=0 bypass
+    page_size = max(1, min(page_size, 500))
     # FIX: use cache.py (10-min TTL) instead of raw DB query for GymSettings
     settings = get_gym_settings(current_gym.id, db)
     admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
@@ -138,21 +124,14 @@ def get_members(
             )
         )
 
-    # FIX: filter on computed_status (hybrid expression) — MembershipStatus column removed in v2
     if status_filter:
         query = query.filter(Member.computed_status == status_filter)
 
     total = query.count()
 
-    # page_size=0 means return all (for exports/bulk operations)
-    if page_size > 0:
-        offset = (page - 1) * page_size
-        members = query.order_by(Member.createdAt.desc()).offset(offset).limit(page_size).all()
-        total_pages = (total + page_size - 1) // page_size
-    else:
-        members = query.order_by(Member.createdAt.desc()).all()
-        total_pages = 1
-        page_size = total
+    offset = (page - 1) * page_size
+    members = query.order_by(Member.createdAt.desc()).offset(offset).limit(page_size).all()
+    total_pages = (total + page_size - 1) // page_size
 
     return {
         "data":       [map_member_response(m, admission_expiry_days) for m in members],
@@ -162,6 +141,27 @@ def get_members(
         "totalPages": total_pages,
     }
 
+
+@router.get("/export", dependencies=[Depends(require_owner)])
+def export_members(
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    """Gated export endpoint for gym owners. Limited to 1000 records."""
+    settings = get_gym_settings(current_gym.id, db)
+    admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
+    
+    members = db.query(Member).filter(
+        Member.gymId == current_gym.id
+    ).order_by(Member.createdAt.desc()).limit(1000).all()
+    
+    return {
+        "data":       [map_member_response(m, admission_expiry_days) for m in members],
+        "total":      len(members),
+        "page":       1,
+        "pageSize":   len(members),
+        "totalPages": 1,
+    }
 
 
 @router.post("/search-duplicates")
@@ -183,7 +183,7 @@ def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), d
     if whatsapp:
         conditions.append(Member.Whatsapp == str(whatsapp))
     if aadhaar:
-        conditions.append(Member.Aadhaar == str(aadhaar))
+        conditions.append(Member.AadhaarHash == hash_aadhaar(str(aadhaar).strip()))
             
     if not conditions:
         return []

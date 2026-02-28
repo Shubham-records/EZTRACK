@@ -273,7 +273,7 @@ export default function WebappMain() {
     'NextDuedate',
     'LastPaymentAmount',
     'RenewalReceiptNumber',
-    'MembershipStatus',
+    'computed_status',
     'MembershipExpiryDate',
 
     'Aadhaar',

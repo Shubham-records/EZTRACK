@@ -36,7 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers import (
     auth, members, staff, proteins, invoices, dashboard,
-    settings, expenses, contacts, pending, automation, audit,
+    settings, expenses, contacts, automation, audit,
     terms, branch_details, whatsapp_templates,
 )
 from core.database import Base, engine
@@ -136,7 +136,6 @@ app.include_router(dashboard.router,          prefix="/api/dashboard",          
 app.include_router(settings.router,           prefix="/api/settings",            tags=["Settings"])
 app.include_router(expenses.router,           prefix="/api/expenses",            tags=["Expenses"])
 app.include_router(contacts.router,           prefix="/api/contacts",            tags=["Contacts"])
-app.include_router(pending.router,            prefix="/api/pending",             tags=["Pending Balance"])
 app.include_router(automation.router,         prefix="/api/automation",          tags=["Automation"])
 app.include_router(audit.router,              prefix="/api/audit",               tags=["Audit Logs"])
 app.include_router(terms.router,              prefix="/api/terms",               tags=["Terms"])

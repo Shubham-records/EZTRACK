@@ -38,7 +38,7 @@ export default function SearchResults({ results, category, onRedirect, onBack })
                                 <>
                                     <p>ID: {item.MembershipReceiptnumber}</p>
                                     <p>Phone: {item.Mobile}</p>
-                                    <p>Status: {item.MembershipStatus}</p>
+                                    <p>Status: {item.computed_status}</p>
                                 </>
                             )}
                             {category === 'Protein' && (

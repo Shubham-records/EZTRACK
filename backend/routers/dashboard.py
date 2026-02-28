@@ -27,9 +27,9 @@ from datetime import datetime, timedelta, date
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func, text, select
 
-from core.database import get_db, SessionLocal
+from core.database import get_db, SessionLocal, AsyncSessionLocal
 from core.dependencies import get_current_gym
 from core.cache import get_gym_settings
 from models.all_models import (
@@ -62,14 +62,14 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
 
     expiring_today = db.query(func.count(Member.id)).filter(
         Member.gymId == gym_id,
-        Member.MembershipExpiryDate == today,
+        Member.NextDuedate == today,
         Member.isDeleted == False,
     ).scalar() or 0
 
     expiring_this_week = db.query(func.count(Member.id)).filter(
         Member.gymId == gym_id,
-        Member.MembershipExpiryDate >= today,
-        Member.MembershipExpiryDate <= week_end,
+        Member.NextDuedate >= today,
+        Member.NextDuedate <= week_end,
         Member.computed_status == "Active",
         Member.isDeleted == False,
     ).scalar() or 0
@@ -136,17 +136,234 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
     }
 
 
-def _compute_stats_new_session(gym_id: str) -> dict:
-    """
-    Same as _compute_stats but opens its own DB session.
-    Used only by the SSE generator (runs in a thread pool via asyncio.to_thread).
-    """
-    db = SessionLocal()
-    try:
-        return _compute_stats(gym_id, db)
-    finally:
-        db.close()
+async def _compute_stats_async(gym_id: str, db: AsyncSessionLocal) -> dict:
+    """Compute all dashboard stats via an async session (fixes ARCH-NEW-01)."""
+    today       = datetime.now().date()
+    today_start = datetime.combine(today, datetime.min.time())
+    week_start  = datetime.combine(today - timedelta(days=today.weekday()), datetime.min.time())
+    month_start = datetime.combine(today.replace(day=1), datetime.min.time())
+    week_end    = today + timedelta(days=7)
 
+    active_members = (await db.execute(
+        select(func.count(Member.id)).filter(
+            Member.gymId == gym_id,
+            Member.computed_status == "Active",
+            Member.isDeleted == False,
+        )
+    )).scalar() or 0
+
+    expiring_today = (await db.execute(
+        select(func.count(Member.id)).filter(
+            Member.gymId == gym_id,
+            Member.NextDuedate == today,
+            Member.isDeleted == False,
+        )
+    )).scalar() or 0
+
+    expiring_this_week = (await db.execute(
+        select(func.count(Member.id)).filter(
+            Member.gymId == gym_id,
+            Member.NextDuedate >= today,
+            Member.NextDuedate <= week_end,
+            Member.computed_status == "Active",
+            Member.isDeleted == False,
+        )
+    )).scalar() or 0
+
+    today_collection = (await db.execute(
+        select(func.sum(Invoice.total)).filter(
+            Invoice.gymId == gym_id,
+            Invoice.invoiceDate >= today_start,
+            Invoice.isDeleted == False,
+        )
+    )).scalar() or 0.0
+
+    week_collection = (await db.execute(
+        select(func.sum(Invoice.total)).filter(
+            Invoice.gymId == gym_id,
+            Invoice.invoiceDate >= week_start,
+            Invoice.isDeleted == False,
+        )
+    )).scalar() or 0.0
+
+    month_collection = (await db.execute(
+        select(func.sum(Invoice.total)).filter(
+            Invoice.gymId == gym_id,
+            Invoice.invoiceDate >= month_start,
+            Invoice.isDeleted == False,
+        )
+    )).scalar() or 0.0
+
+    pending_balance = (await db.execute(
+        select(func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0))).filter(
+            Invoice.gymId == gym_id,
+            Invoice.status.in_(["PENDING", "PARTIAL"]),
+            Invoice.isDeleted == False,
+        )
+    )).scalar() or 0.0
+
+    month_expenses = (await db.execute(
+        select(func.sum(Expense.amount)).filter(
+            Expense.gymId == gym_id,
+            Expense.date >= month_start.date(),
+        )
+    )).scalar() or 0.0
+
+    today_expenses = (await db.execute(
+        select(func.sum(Expense.amount)).filter(
+            Expense.gymId == gym_id,
+            Expense.date == today,
+        )
+    )).scalar() or 0.0
+
+    # Auto-resolve defaults since we avoid inter-mixing sync cache models in async streams 
+    settings = (await db.execute(
+        select(GymSettings).filter(GymSettings.gymId == gym_id)
+    )).scalar()
+    default_thresh = (getattr(settings, "lowStockThreshold", None) or 5) if getattr(settings, "id", None) else 5
+
+    low_stock_count = (await db.execute(
+        select(func.count(ProteinLot.id)).join(
+            ProteinStock, ProteinLot.proteinId == ProteinStock.id
+        ).filter(
+            ProteinLot.gymId == gym_id,
+            ProteinLot.quantity < func.coalesce(ProteinStock.StockThreshold, default_thresh),
+        )
+    )).scalar() or 0
+
+    return {
+        "activeMembers":    active_members,
+        "expiringToday":    expiring_today,
+        "expiringThisWeek": expiring_this_week,
+        "todayCollection":  round(float(today_collection), 2),
+        "weekCollection":   round(float(week_collection), 2),
+        "monthCollection":  round(float(month_collection), 2),
+        "pendingBalance":   round(float(pending_balance), 2),
+        "todayExpenses":    round(float(today_expenses), 2),
+        "monthExpenses":    round(float(month_expenses), 2),
+        "netProfit":        round(float(month_collection) - float(month_expenses), 2),
+        "lowStockItems":    low_stock_count,
+        "lastUpdated":      datetime.now().isoformat(),
+    }
+
+
+def _stats_from_summary(summary: GymDailySummary) -> dict:
+    """Helper to deserialize stats from GymDailySummary."""
+    return {
+        "activeMembers": summary.activeMembers,
+        "expiringToday": summary.expiringToday,
+        "expiringThisWeek": summary.expiringThisWeek,
+        "todayCollection": float(summary.todayCollection or 0),
+        "weekCollection": float(summary.weekCollection or 0),
+        "monthCollection": float(summary.monthCollection or 0),
+        "pendingBalance": float(summary.pendingBalance or 0),
+        "todayExpenses": float(summary.todayExpenses or 0),
+        "monthExpenses": float(summary.monthExpenses or 0),
+        "netProfit": float(summary.netProfit or 0),
+        "lowStockItems": summary.lowStockItems,
+        "lastUpdated": summary.updatedAt.isoformat(),
+    }
+
+
+# ─── SSE Stream Manager (ARCH-NEW-02 Fix) ─────────────────────────────────────
+
+class GymStreamManager:
+    """
+    Manages SSE connections to prevent N duplicate SQL chains per gym.
+    Multiple clients connected to the same gym share the same tick.
+    """
+    def __init__(self):
+        self._listeners = {}  # gym_id -> set of asyncio queues
+        self._tasks = {}      # gym_id -> asyncio task
+
+    async def subscribe(self, gym_id: str):
+        queue = asyncio.Queue()
+        if gym_id not in self._listeners:
+            self._listeners[gym_id] = set()
+            self._tasks[gym_id] = asyncio.create_task(self._pump_stats(gym_id))
+        self._listeners[gym_id].add(queue)
+        logger.debug(f"[SSE] Gym {gym_id} client connected. Total: {len(self._listeners[gym_id])}")
+        return queue
+
+    async def unsubscribe(self, gym_id: str, queue: asyncio.Queue):
+        if gym_id in self._listeners and queue in self._listeners[gym_id]:
+            self._listeners[gym_id].remove(queue)
+            logger.debug(f"[SSE] Gym {gym_id} client disconnected. Remaining: {len(self._listeners[gym_id])}")
+            if not self._listeners[gym_id]:
+                del self._listeners[gym_id]
+                task = self._tasks.pop(gym_id, None)
+                if task:
+                    task.cancel()
+                logger.debug(f"[SSE] Gym {gym_id} task stopped (no clients).")
+
+    async def _pump_stats(self, gym_id: str):
+        """Dedicated background task per gym to fetch and broadcast stats."""
+        try:
+            while True:
+                stats = await self._fetch_or_compute(gym_id)
+                data_block = f"data: {json.dumps(stats)}\n\n"
+                
+                # Broadcast
+                for q in list(self._listeners.get(gym_id, [])):
+                    try:
+                        q.put_nowait(data_block)
+                    except asyncio.QueueFull:
+                        pass
+                
+                await asyncio.sleep(SSE_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[SSE] Gym {gym_id} pump error: {e}")
+
+    async def _fetch_or_compute(self, gym_id: str) -> dict:
+        """ARCH-NEW-02: Check cache before hitting live tables."""
+        async with AsyncSessionLocal() as db:
+            # 1. Try hitting the Summary table first (fresher than 5 mins limit)
+            stale_threshold = datetime.now() - timedelta(minutes=5)
+            summary = (await db.execute(
+                select(GymDailySummary).filter(
+                    GymDailySummary.gymId == gym_id,
+                    GymDailySummary.date == date.today(),
+                    GymDailySummary.updatedAt > stale_threshold
+                )
+            )).scalar_one_or_none()
+
+            if summary:
+                return _stats_from_summary(summary)
+
+            # 2. Live computation needed
+            stats = await _compute_stats_async(gym_id, db)
+
+            # 3. Upsert into Summary Table
+            summary = (await db.execute(
+                select(GymDailySummary).filter(
+                    GymDailySummary.gymId == gym_id,
+                    GymDailySummary.date == date.today()
+                )
+            )).scalar_one_or_none()
+
+            if not summary:
+                summary = GymDailySummary(gymId=gym_id, date=date.today())
+                db.add(summary)
+            
+            summary.activeMembers = stats["activeMembers"]
+            summary.expiringToday = stats["expiringToday"]
+            summary.expiringThisWeek = stats["expiringThisWeek"]
+            summary.todayCollection = stats["todayCollection"]
+            summary.weekCollection = stats["weekCollection"]
+            summary.monthCollection = stats["monthCollection"]
+            summary.pendingBalance = stats["pendingBalance"]
+            summary.todayExpenses = stats["todayExpenses"]
+            summary.monthExpenses = stats["monthExpenses"]
+            summary.netProfit = stats["netProfit"]
+            summary.lowStockItems = stats["lowStockItems"]
+            summary.updatedAt = datetime.now()
+            
+            await db.commit()
+            return stats
+
+stream_manager = GymStreamManager()
 
 # ─── SSE stream ───────────────────────────────────────────────────────────────
 
@@ -155,27 +372,20 @@ async def dashboard_stream(current_gym: Gym = Depends(get_current_gym)):
     """
     SSE endpoint — push fresh dashboard stats every 60 seconds.
     Replaces APScheduler. Only runs for gyms actively on the dashboard.
-
-    Frontend usage:
-        const es = new EventSource('/api/dashboard/stream', { withCredentials: true });
-        es.onmessage = (e) => updateDashboard(JSON.parse(e.data));
-        es.onerror = () => es.close();
+    Includes connection deduplication and summary caching.
     """
     gym_id = current_gym.id
 
     async def event_generator():
+        queue = await stream_manager.subscribe(gym_id)
         try:
-            # Push immediately on connect — no 60s wait on page load
-            stats = await asyncio.to_thread(_compute_stats_new_session, gym_id)
-            yield f"data: {json.dumps(stats)}\n\n"
-
             while True:
-                await asyncio.sleep(SSE_INTERVAL_SECONDS)
-                stats = await asyncio.to_thread(_compute_stats_new_session, gym_id)
-                yield f"data: {json.dumps(stats)}\n\n"
-
+                data = await queue.get()
+                yield data
         except asyncio.CancelledError:
-            logger.debug("SSE stream closed for gym %s", gym_id)
+            pass
+        finally:
+            await stream_manager.unsubscribe(gym_id, queue)
 
     return StreamingResponse(
         event_generator(),
