@@ -168,9 +168,14 @@ def preview_template(
 ):
     """Preview a rendered template. Returns PLAIN TEXT — never HTML.
     SEC-11: All substitution values are HTML-escaped before insertion.
+    SEC-NEW-06: Template text is validated against the allowlist before rendering.
     """
     template_text = data.get("messageTemplate", "")
     sample_data = data.get("sampleData", {})
+
+    # SEC-NEW-06: Validate placeholders before rendering — prevent probing and injection
+    if template_text:
+        _validate_template_placeholders(template_text)
 
     defaults = {
         "customerName": "John Doe",

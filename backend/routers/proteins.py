@@ -45,18 +45,17 @@ def recalculate_computed_fields(protein):
         pass
 
 def sync_protein_quantity(protein_id: str, current_gym_id: str, db: Session):
-    """Sync the Quantity field of a protein to the sum of its lots."""
-    protein = db.query(ProteinStock).filter(
-        ProteinStock.id == protein_id,
-        ProteinStock.gymId == current_gym_id
-    ).first()
-    if protein:
-        total_lots = db.query(func.sum(ProteinLot.quantity)).filter(
-            ProteinLot.proteinId == protein_id,
-            ProteinLot.gymId == current_gym_id
-        ).scalar() or 0
-        protein.Quantity = total_lots
-        db.commit()  # separate commit — lot write is already committed by caller
+    """
+    ARCH-NEW-03: This function is DEPRECATED redundant dead code.
+    The PostgreSQL trigger trg_sync_protein_quantity handles ProteinStock.Quantity
+    syncing automatically at the DB level on every ProteinLot INSERT/UPDATE/DELETE.
+    Calling this function after a lot operation causes a double-commit on the same
+    session, which is a subtle atomicity risk.
+
+    This function is kept as a no-op stub to avoid import errors from any external
+    callers. Remove all call sites and then delete this function in a future cleanup.
+    """
+    pass  # DB trigger handles this — no action needed
 
 
 
@@ -350,9 +349,18 @@ def bulk_delete_proteins(
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
 ):
+    ids = data.get("ids", [])
     if not ids:
         raise HTTPException(status_code=400, detail="No IDs provided")
-    
+
+    # SEC-NEW-04: Cap bulk deletes to prevent oversized IN-clause queries
+    MAX_BULK_DELETE = 500
+    if len(ids) > MAX_BULK_DELETE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bulk delete limited to {MAX_BULK_DELETE} items per request. Got {len(ids)}.",
+        )
+
     try:
         stmt = ProteinStock.__table__.delete().where(
             ProteinStock.id.in_(ids),
@@ -616,11 +624,9 @@ def adjust_protein_stock(
     )
     db.add(lot)
     db.commit()
-    
-    # Sync quantity
-    sync_protein_quantity(protein.id, current_gym.id, db)
+    # ARCH-NEW-03: DB trigger trg_sync_protein_quantity handles Quantity sync automatically
     db.refresh(protein)
-    
+
     return {
         "message": f"Stock adjusted by {adjustment}",
         "previousQuantity": current_qty,
@@ -649,7 +655,8 @@ def get_protein_lots(
         'quantity': l.quantity,
         'purchasePrice': l.purchasePrice,
         'sellingPrice': l.sellingPrice,
-        'expiryDate': format_date(l.expiryDate)
+        'expiryDate': format_date(l.expiryDate),
+        'purchaseDate': format_date(l.purchaseDate),
     } for l in lots]
 
 
@@ -676,15 +683,14 @@ def create_protein_lot(
         quantity=quantity,
         purchasePrice=float(data.get('purchasePrice')) if data.get('purchasePrice') else None,
         sellingPrice=float(data.get('sellingPrice')) if data.get('sellingPrice') else None,
-        marginType=data.get('marginType'),
         marginValue=float(data.get('marginValue')) if data.get('marginValue') else None,
         offerPrice=float(data.get('offerPrice')) if data.get('offerPrice') else None,
-        expiryDate=parse_date(data.get('expiryDate'))
+        expiryDate=parse_date(data.get('expiryDate')),
+        purchaseDate=parse_date(data.get('purchaseDate')),
     )
     db.add(lot)
     db.commit()
-    
-    sync_protein_quantity(protein_id, current_gym.id, db)
+    # ARCH-NEW-03: DB trigger handles Quantity sync — just refresh
     db.refresh(lot)
     db.refresh(protein)
 
@@ -694,7 +700,8 @@ def create_protein_lot(
         'quantity': lot.quantity,
         'purchasePrice': lot.purchasePrice,
         'sellingPrice': lot.sellingPrice,
-        'expiryDate': format_date(lot.expiryDate)
+        'expiryDate': format_date(lot.expiryDate),
+        'purchaseDate': format_date(lot.purchaseDate),
     }
 
 
@@ -723,16 +730,15 @@ def update_protein_lot(
             setattr(lot, key, data.get(key))
     if 'expiryDate' in data:
         lot.expiryDate = parse_date(data.get('expiryDate'))
+    if 'purchaseDate' in data:
+        lot.purchaseDate = parse_date(data.get('purchaseDate'))
     lot.quantity = new_qty
 
     db.commit()
-    
-    if protein:
-        sync_protein_quantity(protein.id, current_gym.id, db)
-        
-    db.refresh(lot)
+    # ARCH-NEW-03: DB trigger handles Quantity sync — just refresh
     if protein:
         db.refresh(protein)
+    db.refresh(lot)
 
     return {
         'id': lot.id,
@@ -740,7 +746,8 @@ def update_protein_lot(
         'quantity': lot.quantity,
         'purchasePrice': lot.purchasePrice,
         'sellingPrice': lot.sellingPrice,
-        'expiryDate': format_date(lot.expiryDate)
+        'expiryDate': format_date(lot.expiryDate),
+        'purchaseDate': format_date(lot.purchaseDate),
     }
 
 
@@ -758,8 +765,6 @@ def delete_protein_lot(
     protein = db.query(ProteinStock).filter(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id).first()
     db.delete(lot)
     db.commit()
-    
-    if protein:
-        sync_protein_quantity(protein.id, current_gym.id, db)
-        
+    # ARCH-NEW-03: DB trigger handles Quantity sync — no code needed here
+
     return None

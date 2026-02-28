@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.config import settings
+from core.security import JWT_AUDIENCE  # SEC-NEW-02
 from models.all_models import Gym, User
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,12 @@ def get_current_gym(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
+        # SEC-NEW-02: Validate audience claim — rejects tokens from other services
         payload = jwt.decode(
-            token, settings.JWT_SECRET_KEY, algorithms=[settings.ALGORITHM]
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUDIENCE,
         )
         gymId: str = payload.get("gymId")
         if gymId is None:
@@ -68,10 +73,15 @@ def get_current_gym(
 # ─── Token payload extractor ──────────────────────────────────────────────────
 
 def _decode_payload(token: str) -> dict:
-    """Decode JWT and return payload dict; raises 401 on failure."""
+    """Decode JWT and return payload dict; raises 401 on failure.
+    SEC-NEW-02: Validates audience claim.
+    """
     try:
         return jwt.decode(
-            token, settings.JWT_SECRET_KEY, algorithms=[settings.ALGORITHM]
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUDIENCE,   # SEC-NEW-02: reject foreign tokens
         )
     except JWTError:
         raise HTTPException(

@@ -29,8 +29,21 @@ router = APIRouter()
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def _to_response(b: Branch) -> dict:
-    return {
+def _to_response(b: Branch, include_logo: bool = False) -> dict:
+    """
+    Build a branch detail response dict.
+
+    SEC-NEW-07: `get_signed_url()` is NOT called here by default.
+    Generating a signed URL requires a live external HTTP call to the storage
+    provider (Supabase/R2/S3) — embedding it in every list response blocks the
+    response on an external I/O call and leaks short-lived URLs into cached JSON.
+
+    Instead:
+    - `hasLogo` is a boolean derived from `b.logoUrl` (no IO).
+    - `logoUrl` is only populated when `include_logo=True` is explicitly requested.
+    - The dedicated GET /logo endpoint always returns a fresh signed URL on demand.
+    """
+    data = {
         "id": b.id,
         "gymId": b.gymId,
         "branchId": b.id,
@@ -45,13 +58,11 @@ def _to_response(b: Branch) -> dict:
         "state": b.state,
         "pincode": b.pincode,
         "phoneCountryCode": b.phoneCountryCode or "+91",
-        # hasLogo derived from logoUrl — no separate flag needed
         "hasLogo": bool(b.logoUrl),
-        # Return signed URL if logo exists, else None.
-        # Signed URL is generated on every response — valid for STORAGE_SIGNED_URL_EXPIRY seconds.
-        # Frontend should NOT cache this URL beyond its expiry.
-        "logoUrl": get_signed_url(b.logoUrl) if b.logoUrl else None,
+        # logoUrl is only resolved to a signed URL when explicitly requested
+        "logoUrl": get_signed_url(b.logoUrl) if (include_logo and b.logoUrl) else None,
     }
+    return data
 
 
 def _get_default_branch(gym_id: str, db: Session) -> Branch:
@@ -83,57 +94,65 @@ def _get_default_branch(gym_id: str, db: Session) -> Branch:
 
 @router.get("")
 def get_gym_details(
+    include_logo: bool = False,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
 ):
-    """Get gym-level details (default branch)."""
+    """Get gym-level details (default branch).
+    Pass ?include_logo=true to get a signed logo URL (adds an external IO call).
+    """
     branch = _get_default_branch(current_gym.id, db)
-    return _to_response(branch)
+    return _to_response(branch, include_logo=include_logo)
 
 
 @router.get("/all")
 def get_all_branch_details(
+    include_logo: bool = False,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
 ):
-    """Get all branch details for this gym."""
+    """Get all branch details. Pass ?include_logo=true to include signed logo URLs."""
     branches = db.query(Branch).filter(Branch.gymId == current_gym.id).all()
     if not branches:
         branches = [_get_default_branch(current_gym.id, db)]
-    return [_to_response(b) for b in branches]
+    return [_to_response(b, include_logo=include_logo) for b in branches]
 
 
 @router.get("/for-invoice")
 def get_details_for_invoice(
     branch_id: Optional[str] = None,
+    include_logo: bool = True,   # invoicing always needs the logo for PDF
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
 ):
-    """Smart endpoint: branch-specific details if available, else default branch."""
+    """Smart endpoint: branch-specific details if available, else default branch.
+    Defaults include_logo=True since this is used for PDF generation.
+    """
     if branch_id:
         branch = db.query(Branch).filter(
             Branch.gymId == current_gym.id,
             Branch.id == branch_id,
         ).first()
         if branch:
-            return _to_response(branch)
-    return _to_response(_get_default_branch(current_gym.id, db))
+            return _to_response(branch, include_logo=include_logo)
+    return _to_response(_get_default_branch(current_gym.id, db), include_logo=include_logo)
 
 
 @router.get("/branch/{branch_id}")
 def get_branch_details(
     branch_id: str,
+    include_logo: bool = False,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
 ):
-    """Get details for a specific branch."""
+    """Get details for a specific branch. Pass ?include_logo=true for a signed URL."""
     branch = db.query(Branch).filter(
         Branch.gymId == current_gym.id,
         Branch.id == branch_id,
     ).first()
     if not branch:
         raise HTTPException(status_code=404, detail="Branch not found")
-    return _to_response(branch)
+    return _to_response(branch, include_logo=include_logo)
 
 
 # ─── PUT endpoints ────────────────────────────────────────────────────────────
@@ -154,7 +173,7 @@ def update_gym_details(
             setattr(branch, key, value)
     db.commit()
     db.refresh(branch)
-    return _to_response(branch)
+    return _to_response(branch, include_logo=True)  # include logo after update
 
 
 @router.put("/branch/{branch_id}")

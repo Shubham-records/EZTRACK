@@ -43,18 +43,21 @@ def get_pending_balances(
     db: Session = Depends(get_db)
 ):
     """Get all pending balances from invoices."""
-    query = db.query(Invoice).filter(Invoice.gymId == current_gym.id)
-    
+    query = db.query(Invoice).filter(
+        Invoice.gymId == current_gym.id,
+        Invoice.isDeleted == False,
+    )
+
     if status_filter:
         query = query.filter(Invoice.status == status_filter.upper())
     else:
         query = query.filter(Invoice.status.in_(['PENDING', 'PARTIAL']))
-        
+
     if entity_type == 'member':
         query = query.filter(Invoice.memberId != None)
     elif entity_type == 'external':
         query = query.filter(Invoice.memberId == None)
-    
+
     invoices = query.order_by(Invoice.dueDate).all()
     return [map_invoice_to_pending(inv) for inv in invoices]
 
@@ -66,25 +69,27 @@ def get_pending_summary(
     """Get pending balance summary from invoices."""
     invoices = db.query(Invoice).filter(
         Invoice.gymId == current_gym.id,
-        Invoice.status.in_(['PENDING', 'PARTIAL'])
+        Invoice.status.in_(['PENDING', 'PARTIAL']),
+        Invoice.isDeleted == False,
     ).all()
-    
+
     total_pending = 0
     by_type = {"member": 0, "external": 0}
     overdue_count = 0
     today = datetime.now().date()
-    
+
     for inv in invoices:
         paid_amt = getattr(inv, "paidAmount", 0)  or 0
         remaining = (inv.total or 0) - paid_amt
         total_pending += remaining
-        
+
         ent_type = "member" if inv.memberId else "external"
         by_type[ent_type] += remaining
-        
-        if inv.dueDate and inv.dueDate.date() < today:
+
+        # P9: dueDate is TIMESTAMPTZ — compare using .date() to avoid IST offset
+        if inv.dueDate and (inv.dueDate.date() if hasattr(inv.dueDate, 'date') else inv.dueDate) < today:
             overdue_count += 1
-            
+
     return {
         "totalPending": round(total_pending, 2),
         "byType": by_type,
@@ -97,15 +102,17 @@ def get_overdue_balances(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get overdue pending balances from invoices."""
-    today = datetime.now()
-    
+    """Get overdue pending balances from invoices. P9: date-level comparison."""
+    # P9: Compare against today's date (not naive datetime) — dueDate is TIMESTAMPTZ
+    today = datetime.now().date()
+
     invoices = db.query(Invoice).filter(
         Invoice.gymId == current_gym.id,
         Invoice.status.in_(['PENDING', 'PARTIAL']),
-        Invoice.dueDate < today
+        Invoice.dueDate < today,
+        Invoice.isDeleted == False,
     ).order_by(Invoice.dueDate).all()
-    
+
     return [map_invoice_to_pending(inv) for inv in invoices]
 
 @router.get("/{pending_id}")

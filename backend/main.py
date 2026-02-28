@@ -31,8 +31,9 @@ import os
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from routers import (
     auth, members, staff, proteins, invoices, dashboard,
@@ -116,6 +117,17 @@ if "*" in origins:
         "Set explicit origins, e.g. ALLOWED_ORIGINS=https://app.yourgym.com"
     )
 
+# SEC-NEW-10: Warn if any HTTP (non-TLS) origins are in production
+_env = os.getenv("VERCEL_ENV", "development").lower()
+if _env == "production":
+    _http_origins = [o for o in origins if o.startswith("http://")]
+    if _http_origins:
+        logger.warning(
+            "SEC-NEW-10: HTTP origins detected in production ALLOWED_ORIGINS: %s. "
+            "All traffic should use HTTPS to protect JWT tokens and Aadhaar data.",
+            _http_origins,
+        )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -123,6 +135,25 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
+
+
+# ─── HSTS Middleware (SEC-NEW-10) ─────────────────────────────────────────────
+
+class HSTSMiddleware(BaseHTTPMiddleware):
+    """
+    SEC-NEW-10: Add Strict-Transport-Security header to all responses.
+    max-age=63072000 = 2 years (HSTS preload minimum is 1 year).
+    This ensures browsers always use HTTPS for this domain, protecting
+    JWT tokens and Aadhaar-encrypted payloads even if Nginx is misconfigured.
+    """
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=63072000; includeSubDomains; preload"
+        )
+        return response
+
+app.add_middleware(HSTSMiddleware)
 
 
 # ─── Routers ──────────────────────────────────────────────────────────────────

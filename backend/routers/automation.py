@@ -80,13 +80,15 @@ def get_overdue_payments(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get overdue pending payments."""
-    today = datetime.now()
+    """Get overdue pending payments. P9: Use date() comparison to avoid timezone drift."""
+    # P9: dueDate is TIMESTAMPTZ — compare using today's date to avoid 5.5-hour IST offset
+    today = datetime.now().date()
 
     pending = db.query(Invoice).filter(
         Invoice.gymId == current_gym.id,
         Invoice.status.in_(["PENDING", "PARTIAL"]),
         Invoice.dueDate < today,
+        Invoice.isDeleted == False,
     ).all()
 
     return [{
@@ -143,7 +145,8 @@ def get_smart_suggestions(
     overdue = db.query(Invoice).filter(
         Invoice.gymId == current_gym.id,
         Invoice.status.in_(["PENDING", "PARTIAL"]),
-        Invoice.dueDate < today,
+        Invoice.dueDate < today,   # P9: today is already datetime.now().date() above
+        Invoice.isDeleted == False,
     ).count()
 
     if overdue > 0:
@@ -207,7 +210,8 @@ def generate_bulk_whatsapp_links(
         pending = db.query(Invoice).filter(
             Invoice.gymId == current_gym.id,
             Invoice.status.in_(["PENDING", "PARTIAL"]),
-            Invoice.dueDate < datetime.now(),
+            Invoice.dueDate < datetime.now().date(),  # P9: date comparison avoids IST offset
+            Invoice.isDeleted == False,
         ).all()
 
         for p in pending:

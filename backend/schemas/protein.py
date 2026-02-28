@@ -5,8 +5,6 @@ from typing import List
 
 
 class ProteinBase(BaseModel):
-    Year: Optional[str] = None
-    Month: Optional[str] = None
     Brand: Optional[str] = None
     ProductName: Optional[str] = None
     Flavour: Optional[str] = None
@@ -33,8 +31,6 @@ class ProteinCreate(ProteinBase):
 
 
 class ProteinUpdate(BaseModel):
-    Year: Optional[str] = None
-    Month: Optional[str] = None
     Brand: Optional[str] = None
     ProductName: Optional[str] = None
     Flavour: Optional[str] = None

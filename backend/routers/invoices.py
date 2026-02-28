@@ -12,6 +12,8 @@ from schemas.invoice import InvoiceCreate, InvoiceResponse
 from core.audit_utils import log_audit
 
 logger = logging.getLogger(__name__)
+router = APIRouter()
+
 
 # SEC-04: Strongly-typed update schema — prevents mass assignment of total/gymId
 class InvoiceUpdateRequest(BaseModel):
@@ -127,13 +129,27 @@ def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_g
     )
     
     db.add(new_invoice)
-    db.flush()
+    db.flush()  # get new_invoice.id before creating PaymentEvent
+
+    # ARCH-NEW-09: Always create a PaymentEvent when paid > 0.
+    # This ensures Invoice.paidAmount == SUM(PaymentEvent.amount) from creation,
+    # closing the drift path that previously existed for upfront-PAID invoices.
+    if paid > 0:
+        payment_event = PaymentEvent(
+            gymId=current_gym.id,
+            invoiceId=new_invoice.id,
+            amount=paid,
+            paymentMode=data.paymentMode or "CASH",
+            notes="Initial payment at invoice creation",
+        )
+        db.add(payment_event)
+
     log_audit(db, current_gym.id, "Invoice", new_invoice.id, "CREATE",
               {"customerName": data.customerName, "total": total, "status": data.status},
               current_gym.username)
     db.commit()
     db.refresh(new_invoice)
-    
+
     return map_invoice_response(new_invoice)
 
 
@@ -213,14 +229,22 @@ def bulk_delete_invoices(
     ids = data.get("ids", [])
     if not ids:
         raise HTTPException(status_code=400, detail="No IDs provided")
-    
+
+    # SEC-NEW-04: Cap bulk deletes to prevent oversized IN-clause queries
+    MAX_BULK_DELETE = 500
+    if len(ids) > MAX_BULK_DELETE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bulk delete limited to {MAX_BULK_DELETE} items per request. Got {len(ids)}.",
+        )
+
     try:
         from datetime import datetime
         stmt = Invoice.__table__.update().where(
             Invoice.id.in_(ids),
             Invoice.gymId == current_gym.id
         ).values(isDeleted=True, deletedAt=datetime.utcnow())
-        
+
         result = db.execute(stmt)
         db.commit()
         return {"message": f"Deleted {result.rowcount} invoices", "count": result.rowcount}
