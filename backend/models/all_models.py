@@ -17,7 +17,7 @@ Changes from v1:
 
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, Date, ForeignKey,
-    Text, JSON, Index, DateTime, Numeric
+    Text, JSON, Index, DateTime, Numeric, CheckConstraint
 )
 # ARCH-03: Numeric(12,2) used for ALL currency fields — Float silently drops precision
 # e.g. 1999.99 stored as Float can become 1999.9899999... causing balance drift.
@@ -122,6 +122,8 @@ class User(Base):
         # Without this, two concurrent POST /staff requests both pass the
         # Python duplicate check before either commits, creating duplicates.
         Index("uq_user_gym_username", "gymId", "username", unique=True),
+        # SCH-NEW-05: Enforce valid role values at DB level
+        CheckConstraint("role IN ('OWNER', 'MANAGER', 'STAFF')", name="ck_user_role"),
     )
 
     id       = Column(String, primary_key=True, default=generate_uuid)
@@ -139,8 +141,57 @@ class User(Base):
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
-
     gym = relationship("Gym", back_populates="users")
+    # P12: relationship to structured branch access (replaces .branchIds JSON)
+    branchAccess = relationship("UserBranchAccess", back_populates="user",
+                                cascade="all, delete-orphan")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UserBranchAccess  (P12: replaces User.branchIds JSON — normalized junction table)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class UserBranchAccess(Base):
+    """
+    P12: Replaces `User.branchIds = Column(JSON)` with a normalized junction table.
+
+    Benefits over JSON:
+    - SQL query: 'which users can access branch X' is now a simple JOIN, not a JSON scan
+    - Can add permissions per branch (e.g., a MANAGER at HQ but STAFF at Satellite branch)
+    - Foreign key integrity on Branch.id
+    - Index on branchId enables fast branch-level access control checks
+
+    Migration path:
+    - `User.branchIds` JSON column is kept (DEPRECATED) for backward compatibility with
+      the frontend until it is updated to use the new junction table API.
+    - Both columns are written in sync by `routers/staff.py:update_staff()`.
+    - New code SHOULD read from `UserBranchAccess`.
+    - Old code reading `User.branchIds` still works.
+    """
+    __tablename__ = "UserBranchAccess"
+    __table_args__ = (
+        Index("ix_uba_user_id",   "userId"),
+        Index("ix_uba_branch_id", "branchId"),
+        # Prevent duplicate access rows for the same user+branch pair
+        Index("uq_uba_user_branch", "userId", "branchId", unique=True),
+    )
+
+    id       = Column(String, primary_key=True, default=generate_uuid)
+    userId   = Column(String, ForeignKey("User.id"),   nullable=False)
+    branchId = Column(String, ForeignKey("Branch.id"), nullable=False)
+    gymId    = Column(String, ForeignKey("Gym.id"),    nullable=False)  # denormalized for tenant isolation
+
+    # Optional: per-branch role override (None = inherit from User.role)
+    # e.g. a MANAGER at HQ may be STAFF at Satellite branch
+    roleOverride = Column(String, nullable=True)  # OWNER | MANAGER | STAFF | None
+
+    grantedAt = Column(DateTime(timezone=True), default=func.now())
+    grantedBy = Column(String, nullable=True)  # username of granting OWNER
+
+    user   = relationship("User",   back_populates="branchAccess")
+    branch = relationship("Branch", backref="userAccess")
+    gym    = relationship("Gym",    backref="userBranchAccess")
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,8 +208,10 @@ class RefreshToken(Base):
     """
     __tablename__ = "RefreshToken"
     __table_args__ = (
-        Index("ix_refresh_gym",  "gymId"),
-        Index("ix_refresh_token", "tokenHash", unique=True),
+        Index("ix_refresh_gym",     "gymId"),
+        Index("ix_refresh_token",   "tokenHash", unique=True),
+        # ARCH-NEW-10: Index on expiresAt for cleanup queries and _revoke_all_refresh_tokens scans
+        Index("ix_refresh_expires", "expiresAt"),
     )
 
     id         = Column(String, primary_key=True, default=generate_uuid)
@@ -232,6 +285,13 @@ class Invoice(Base):
         Index("ix_invoice_gym_date",   "gymId", "invoiceDate"),
         Index("ix_invoice_gym_status", "gymId", "status"),
         Index("ix_invoice_gym_member", "gymId", "memberId"),
+        # SCH-NEW-05: Enforce valid status values at DB level
+        CheckConstraint("status IN ('PENDING', 'PARTIAL', 'PAID')", name="ck_invoice_status"),
+        # SCH-NEW-05: Enforce valid paymentMode values
+        CheckConstraint(
+            "\"paymentMode\" IS NULL OR \"paymentMode\" IN ('CASH', 'UPI', 'CARD', 'BANK')",
+            name="ck_invoice_payment_mode"
+        ),
     )
 
     id     = Column(String, primary_key=True, default=generate_uuid)
@@ -297,6 +357,11 @@ class PaymentEvent(Base):
     __table_args__ = (
         Index("ix_payment_invoice", "invoiceId"),
         Index("ix_payment_gym",     "gymId"),
+        # SCH-NEW-05: Enforce valid paymentMode at DB level
+        CheckConstraint(
+            "\"paymentMode\" IN ('CASH', 'UPI', 'CARD', 'BANK')",
+            name="ck_payment_event_mode"
+        ),
     )
 
     id        = Column(String, primary_key=True, default=generate_uuid)
@@ -371,7 +436,7 @@ class Member(Base):
     MembershipExpiryDate = Column(Date, nullable=True)
     LastPaymentDate      = Column(Date, nullable=True)
     NextDuedate          = Column(Date, nullable=True)
-    LastPaymentAmount    = Column(Integer, nullable=True)
+    LastPaymentAmount    = Column(MONEY, nullable=True)  # SCH-NEW-02: was Integer — truncated decimal payments
     RenewalReceiptNumber = Column(Integer, nullable=True)
     Remark               = Column(String, nullable=True)
     extraDays            = Column(Integer, nullable=True, default=0)
@@ -434,13 +499,15 @@ class ProteinStock(Base):
     id    = Column(String, primary_key=True, default=generate_uuid)
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
 
-    Year        = Column(String, nullable=True)
-    Month       = Column(String, nullable=True)
+    # SCH-NEW-01: Year and Month string columns REMOVED.
+    # Previously: Year = Column(String), Month = Column(String, e.g. "March")
+    # Problems: string-sorted, locale-dependent, duplicate of lot-level purchaseDate.
+    # Fix: use ProteinLot.purchaseDate (Date column) for all month/year grouping.
     Brand       = Column(String, nullable=True)
     ProductName = Column(String, nullable=True)
     Flavour     = Column(String, nullable=True)
     Weight      = Column(String, nullable=True)
-    Quantity    = Column(Integer, default=0)   # synced from sum of ProteinLot.quantity
+    Quantity    = Column(Integer, default=0)   # synced from sum of ProteinLot.quantity (DB trigger)
     MRPPrice    = Column(MONEY, default=0)     # ARCH-03: was Float
     LandingPrice = Column(MONEY, default=0)
     Remark      = Column(String, nullable=True)
@@ -492,6 +559,9 @@ class ProteinLot(Base):
     marginValue   = Column(MONEY, nullable=True)
     offerPrice    = Column(MONEY, nullable=True)
     expiryDate    = Column(Date, nullable=True)
+    # SCH-NEW-01: Added purchaseDate replacing ProteinStock.Year/Month string columns.
+    # Use this for monthly/yearly inventory grouping: GROUP BY date_trunc('month', purchaseDate)
+    purchaseDate  = Column(Date, nullable=True)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
@@ -681,6 +751,10 @@ class PricingConfig(Base):
               unique=True, postgresql_where="\"configType\" = 'member'"),
         Index("uq_pricing_protein", "gymId", "configType", "brandName",
               unique=True, postgresql_where="\"configType\" = 'protein'"),
+        # SCH-NEW-03: PT pricing also needs uniqueness to prevent duplicate rows
+        # from concurrent POST /api/settings/pricing/pt-matrix/bulk requests.
+        Index("uq_pricing_pt", "gymId", "configType", "planType", "periodType",
+              unique=True, postgresql_where="\"configType\" = 'pt'"),
     )
 
     id    = Column(String, primary_key=True, default=generate_uuid)
@@ -706,16 +780,41 @@ class PricingConfig(Base):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AuditLog  (change tracking)
-# FIX: removed postgresql_partition_by — caused INSERT failures when child
-#      partitions were not manually created. Add back via Alembic DDL at scale.
+# AuditLog  (append-only change tracking)
+#
+# P13 PARTITIONING PLAN:
+# At 2,500 writes/day × 365 days = 912,500 rows/year.
+# After ~6 months, queries without a createdAt filter will scan all rows.
+#
+# When ready to partition (6-12 months of data):
+# 1. Run: `alembic revision --autogenerate -m "partition_auditlog_by_month"`
+# 2. In the migration, use:
+#    op.execute("""
+#        CREATE TABLE "AuditLog_partitioned" (LIKE "AuditLog" INCLUDING ALL)
+#        PARTITION BY RANGE ("createdAt");
+#        -- Create monthly child partitions
+#        CREATE TABLE "AuditLog_2026_03" PARTITION OF "AuditLog_partitioned"
+#            FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
+#        -- ... etc.
+#        -- Then: INSERT INTO "AuditLog_partitioned" SELECT * FROM "AuditLog";
+#        -- Then: DROP TABLE "AuditLog"; ALTER TABLE "AuditLog_partitioned" RENAME TO "AuditLog";
+#    """)
+# 3. Use a pg_cron job to CREATE monthly partitions 30 days in advance.
+#
+# The (gymId, createdAt) composite index below is designed for the partition key.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AuditLog(Base):
     __tablename__ = "AuditLog"
     __table_args__ = (
+        # P13: primary composite index for all gym-scoped + date-range audit queries
+        # e.g. GET /audit?from=2026-03-01&to=2026-03-31 — uses this index.
+        # This is also the future partition key column order.
         Index("ix_audit_gym_created", "gymId", "createdAt"),
+        # Secondary: entity-level lookup (e.g. 'show all changes to Member abc123')
         Index("ix_audit_gym_entity",  "gymId", "entityType", "entityId"),
+        # P13: createdAt-only index for partition pruning and cleanup queries
+        Index("ix_audit_created_at",  "createdAt"),
     )
 
     id     = Column(String, primary_key=True, default=generate_uuid)

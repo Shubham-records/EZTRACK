@@ -336,9 +336,18 @@ def bulk_delete_proteins(
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
 ):
+    ids = data.get("ids", [])
     if not ids:
         raise HTTPException(status_code=400, detail="No IDs provided")
-    
+
+    # SEC-NEW-04: Cap bulk deletes to prevent oversized IN-clause queries
+    MAX_BULK_DELETE = 500
+    if len(ids) > MAX_BULK_DELETE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bulk delete limited to {MAX_BULK_DELETE} items per request. Got {len(ids)}.",
+        )
+
     try:
         stmt = ProteinStock.__table__.delete().where(
             ProteinStock.id.in_(ids),
@@ -604,7 +613,7 @@ def adjust_protein_stock(
     db.commit()
     
     db.refresh(protein)
-    
+
     return {
         "message": f"Stock adjusted by {adjustment}",
         "previousQuantity": current_qty,
@@ -633,7 +642,8 @@ def get_protein_lots(
         'quantity': l.quantity,
         'purchasePrice': l.purchasePrice,
         'sellingPrice': l.sellingPrice,
-        'expiryDate': format_date(l.expiryDate)
+        'expiryDate': format_date(l.expiryDate),
+        'purchaseDate': format_date(l.purchaseDate),
     } for l in lots]
 
 
@@ -660,10 +670,10 @@ def create_protein_lot(
         quantity=quantity,
         purchasePrice=float(data.get('purchasePrice')) if data.get('purchasePrice') else None,
         sellingPrice=float(data.get('sellingPrice')) if data.get('sellingPrice') else None,
-        marginType=data.get('marginType'),
         marginValue=float(data.get('marginValue')) if data.get('marginValue') else None,
         offerPrice=float(data.get('offerPrice')) if data.get('offerPrice') else None,
-        expiryDate=parse_date(data.get('expiryDate'))
+        expiryDate=parse_date(data.get('expiryDate')),
+        purchaseDate=parse_date(data.get('purchaseDate')),
     )
     db.add(lot)
     db.commit()
@@ -677,7 +687,8 @@ def create_protein_lot(
         'quantity': lot.quantity,
         'purchasePrice': lot.purchasePrice,
         'sellingPrice': lot.sellingPrice,
-        'expiryDate': format_date(lot.expiryDate)
+        'expiryDate': format_date(lot.expiryDate),
+        'purchaseDate': format_date(lot.purchaseDate),
     }
 
 
@@ -706,6 +717,8 @@ def update_protein_lot(
             setattr(lot, key, data.get(key))
     if 'expiryDate' in data:
         lot.expiryDate = parse_date(data.get('expiryDate'))
+    if 'purchaseDate' in data:
+        lot.purchaseDate = parse_date(data.get('purchaseDate'))
     lot.quantity = new_qty
 
     db.commit()
@@ -713,6 +726,7 @@ def update_protein_lot(
     db.refresh(lot)
     if protein:
         db.refresh(protein)
+    db.refresh(lot)
 
     return {
         'id': lot.id,
@@ -720,7 +734,8 @@ def update_protein_lot(
         'quantity': lot.quantity,
         'purchasePrice': lot.purchasePrice,
         'sellingPrice': lot.sellingPrice,
-        'expiryDate': format_date(lot.expiryDate)
+        'expiryDate': format_date(lot.expiryDate),
+        'purchaseDate': format_date(lot.purchaseDate),
     }
 
 

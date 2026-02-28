@@ -80,6 +80,8 @@ def map_member_response(member: Member, admission_expiry_days: int = 365):
 
     status_info = calculate_member_status(member, admission_expiry_days)
     m_dict.update(status_info)
+    # Keep MembershipStatus as an alias of computed_status for backward-compat with frontend
+    m_dict['MembershipStatus'] = status_info['computed_status']
     return m_dict
 
 @router.get("/generate-client-number")
@@ -128,7 +130,6 @@ def get_members(
         query = query.filter(Member.computed_status == status_filter)
 
     total = query.count()
-
     offset = (page - 1) * page_size
     members = query.order_by(Member.createdAt.desc()).offset(offset).limit(page_size).all()
     total_pages = (total + page_size - 1) // page_size
@@ -166,15 +167,24 @@ def export_members(
 
 @router.post("/search-duplicates")
 def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Search for potential duplicates based on Name, Mobile, Whatsapp, or Aadhaar"""
+    """Search for potential duplicates based on Name, Mobile, Whatsapp, or Aadhaar.
+
+    SEC-NEW-09: Returns minimal fields only — {id, Name, masked_phone}.
+    Full member objects must NOT be returned here; this endpoint is accessible to all
+    authenticated roles including STAFF and could leak sensitive data if it returned
+    phone numbers, addresses, or masked Aadhaar to lower-privilege callers.
+
+    ARCH-NEW-05: Aadhaar matching now uses AadhaarHash (HMAC) — the Aadhaar column
+    stores Fernet ciphertext which can never match a raw 12-digit number.
+    """
     name = data.get("Name")
     mobile = data.get("Mobile")
     whatsapp = data.get("Whatsapp")
     aadhaar = data.get("Aadhaar")
-    
+
     if not any([name, mobile, whatsapp, aadhaar]):
         return []
-        
+
     conditions = []
     if name:
         conditions.append(Member.Name == name)
@@ -187,14 +197,22 @@ def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), d
             
     if not conditions:
         return []
-        
+
     # Find matches
     matches = db.query(Member).filter(
         Member.gymId == current_gym.id,
         or_(*conditions)
     ).all()
-    
-    return [map_member_response(m) for m in matches]
+
+    # SEC-NEW-09: Return minimal safe fields only — no phone numbers, no addresses, no Aadhaar
+    return [
+        {
+            "id": m.id,
+            "Name": m.Name,
+            "MembershipReceiptnumber": m.MembershipReceiptnumber,
+        }
+        for m in matches
+    ]
 
 @router.post("/check-duplicates")
 def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
@@ -268,7 +286,7 @@ def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym),
                 MembershipExpiryDate=parse_date(member_data.get("MembershipExpiryDate")),
                 LastPaymentDate=parse_date(member_data.get("LastPaymentDate")),
                 NextDuedate=parse_date(member_data.get("NextDuedate")),
-                LastPaymentAmount=int(member_data.get("LastPaymentAmount")) if member_data.get("LastPaymentAmount") else None,
+                LastPaymentAmount=float(member_data.get("LastPaymentAmount")) if member_data.get("LastPaymentAmount") else None,
                 RenewalReceiptNumber=member_data.get("RenewalReceiptNumber"),
                 Aadhaar=str(member_data.get("Aadhaar")) if member_data.get("Aadhaar") else None,
                 Remark=member_data.get("Remark"),
@@ -340,8 +358,10 @@ def bulk_update_members(data: dict, current_gym: Gym = Depends(get_current_gym),
                 continue
             if hasattr(member, key) and value is not None:
                 try:
-                    if key in ['Age', 'weight', 'LastPaymentAmount']:
+                    if key in ['Age', 'weight']:
                         value = int(value) if value else None
+                    elif key == 'LastPaymentAmount':
+                        value = float(value) if value else None
                     elif key in ['Mobile', 'Whatsapp', 'Aadhaar']:
                         value = str(value) if value else None
                     elif key == 'height':
@@ -809,8 +829,10 @@ def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_curren
              continue
         if hasattr(member, key):
              try:
-                 if key in ['Age', 'weight', 'LastPaymentAmount', 'MembershipReceiptnumber', 'RenewalReceiptNumber']:
+                 if key in ['Age', 'weight', 'MembershipReceiptnumber', 'RenewalReceiptNumber']:
                      value = int(value) if value is not None and value != '' else None
+                 elif key in ['LastPaymentAmount']:
+                     value = float(value) if value is not None and value != '' else None
                  elif key in ['Mobile', 'Whatsapp', 'Aadhaar']:
                      value = str(value) if value is not None and value != '' else None
                  elif key in ['height']:
@@ -867,8 +889,10 @@ def update_member_body(data: dict, current_gym: Gym = Depends(get_current_gym), 
     for key, value in updatable_data.items():
         if hasattr(member, key):
             try:
-                if key in ['Age', 'weight', 'LastPaymentAmount', 'MembershipReceiptnumber', 'RenewalReceiptNumber']:
+                if key in ['Age', 'weight', 'MembershipReceiptnumber', 'RenewalReceiptNumber']:
                     value = int(value) if value is not None and value != '' else None
+                elif key in ['LastPaymentAmount']:
+                    value = float(value) if value is not None and value != '' else None
                 elif key in ['Mobile', 'Whatsapp', 'Aadhaar']:
                     value = str(value) if value is not None and value != '' else None
                 elif key in ['height']:

@@ -127,17 +127,29 @@ def bulk_delete_expenses(
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    """Bulk delete expenses"""
+    """Bulk delete expenses. SEC-NEW-04: Requires MANAGER+, capped at 500, audit-logged."""
     ids = data.get("ids", [])
     if not ids:
         raise HTTPException(status_code=400, detail="No IDs provided")
-    
+
+    # SEC-NEW-04: Cap to prevent oversized IN-clause SQL queries
+    MAX_BULK_DELETE = 500
+    if len(ids) > MAX_BULK_DELETE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bulk delete limited to {MAX_BULK_DELETE} items per request. Got {len(ids)}.",
+        )
+
     try:
         stmt = Expense.__table__.delete().where(
             Expense.id.in_(ids),
             Expense.gymId == current_gym.id
         )
         result = db.execute(stmt)
+        # SEC-NEW-04: Audit log for bulk hard-deletes
+        log_audit(db, current_gym.id, "Expense", "bulk", "DELETE",
+                  {"ids_count": result.rowcount, "requested_ids": len(ids)},
+                  current_gym.username)
         db.commit()
         return {"message": f"Deleted {result.rowcount} expenses", "count": result.rowcount}
     except Exception as e:

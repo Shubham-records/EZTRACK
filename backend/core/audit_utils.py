@@ -6,8 +6,15 @@ Does NOT commit — caller commits as part of their transaction.
 
 SEC-13: SENSITIVE_FIELDS are redacted to '[REDACTED]' in compute_diff()
         so Aadhaar/phone never appear in AuditLog.changes JSON.
+
+SEC-NEW-08: log_audit() now accepts an optional `ip_address` parameter.
+            Callers that have access to the Request object should pass
+            request.client.host so the ipAddress column is populated.
+            For internal/background calls where no request is available,
+            ip_address remains None (acceptable — documented gap).
 """
 import logging
+from typing import Optional
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -19,8 +26,16 @@ SENSITIVE_FIELDS = frozenset({
 })
 
 
-def log_audit(db: Session, gym_id: str, entity_type: str, entity_id: str,
-              action: str, changes: dict, user_name: str):
+def log_audit(
+    db: Session,
+    gym_id: str,
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    changes: dict,
+    user_name: str,
+    ip_address: Optional[str] = None,
+):
     """
     Append one row to AuditLog.
 
@@ -32,6 +47,9 @@ def log_audit(db: Session, gym_id: str, entity_type: str, entity_id: str,
         action:      CREATE | UPDATE | DELETE
         changes:     Diff dict: { "fieldName": { "from": old, "to": new } }
         user_name:   Username of the staff performing the action.
+        ip_address:  SEC-NEW-08: Originating IP for compliance audit trail.
+                     Pass request.client.host from the FastAPI Request object.
+                     None if called from a background context.
     """
     from models.all_models import AuditLog
 
@@ -45,6 +63,7 @@ def log_audit(db: Session, gym_id: str, entity_type: str, entity_id: str,
         action=action,
         changes=safe_changes,
         userName=user_name,
+        ipAddress=ip_address,   # SEC-NEW-08: populated when request context is available
     )
     db.add(entry)
     # Do NOT commit here — caller commits as part of their transaction

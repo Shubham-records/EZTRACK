@@ -2,16 +2,18 @@
 routers/auth.py
 ===============
 SEC-03: Refresh token flow + revocable JWT.
-  - POST /login   → returns access_token (30 min) + refresh_token (7 days)
-  - POST /refresh → exchanges refresh_token for new access_token
-  - POST /logout  → revokes the refresh_token (actual server-side invalidation)
-  - POST /signup  → creates gym + default branch + default WhatsApp templates
-  - GET  /me      → returns current gym info
+  - POST /login        → returns access_token (30 min) + refresh_token (7 days)
+  - POST /staff-login  → SEC-NEW-01: staff auth, JWT includes userId (makes RBAC functional)
+  - POST /refresh      → exchanges refresh_token for new access_token
+  - POST /logout       → revokes the refresh_token (actual server-side invalidation)
+  - POST /signup       → creates gym + default branch + default WhatsApp templates
+  - GET  /me           → returns current gym info
 
 ARCH-10: Rate limiting via slowapi (applied via decorator).
-  - /login  → 10 req/min/IP (brute-force protection)
-  - /signup → 5 req/min/IP
-  - /refresh → 30 req/min/IP
+  - /login       → 10 req/min/IP (brute-force protection)
+  - /staff-login → 10 req/min/IP
+  - /signup      → 5 req/min/IP
+  - /refresh     → 30 req/min/IP
 """
 
 import hashlib
@@ -106,6 +108,12 @@ class FullLoginResponse(BaseModel):
     refresh_token: str
 
 
+class StaffLoginRequest(BaseModel):
+    """SEC-NEW-01: Staff login credentials."""
+    username: str
+    password: str
+
+
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
 @router.post("/login")
@@ -140,12 +148,65 @@ def login(request: LoginRequest, req: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.post("/staff-login")
+@router.post("/staff-login/", include_in_schema=False)
+@_rate_limit("10/minute")
+def staff_login(request: StaffLoginRequest, req: Request, db: Session = Depends(get_db)):
+    """
+    SEC-NEW-01: Authenticate staff member. Returns JWT that includes both gymId AND userId.
+    This makes the RBAC system operational — without this endpoint, all tokens are treated as
+    OWNER because get_caller_role() never sees a userId in the payload.
+
+    Token payload: { gymId, userId, username, role }
+    The 'userId' field is what causes get_caller_role() to look up the User table and
+    return the correct role instead of defaulting to OWNER.
+    """
+    # Find user by username within any gym
+    user = db.query(User).filter(User.username == request.username).first()
+    if not user or not verify_password(request.password, user.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password.",
+        )
+
+    # Verify the gym is still active
+    gym = db.query(Gym).filter(Gym.id == user.gymId, Gym.isDeleted == False).first()
+    if not gym:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Associated gym is no longer active.",
+        )
+
+    # Issue access token with userId — this is what makes RBAC work in get_caller_role()
+    access_token = create_access_token(data={
+        "gymId": user.gymId,
+        "userId": user.id,
+        "username": user.username,
+        "role": user.role,
+    })
+
+    # Revoke old staff refresh tokens and issue a new one scoped to this user
+    _revoke_all_refresh_tokens(db, user.gymId, user_id=user.id)
+    raw_refresh = _create_refresh_token(db, user.gymId, user_id=user.id)
+    db.commit()
+
+    logger.info("Staff '%s' (role=%s) logged into gym '%s'", user.username, user.role, gym.username)
+    return {
+        "message": "Login successful!",
+        "eztracker_jwt_access_control_token": access_token,
+        "eztracker_jwt_databaseName_control_token": user.gymId,
+        "refresh_token": raw_refresh,
+        "role": user.role,
+    }
+
+
 @router.post("/refresh")
 @_rate_limit("30/minute")
 def refresh_access_token(body: RefreshRequest, req: Request, db: Session = Depends(get_db)):
     """
     Exchange a valid refresh token for a new access token.
     SEC-03: This is the renewal path — frontend calls this when access token expires.
+    Preserves userId in new token if the refresh token belonged to a staff member.
     """
     token_hash = _hash_token(body.refresh_token)
     now = datetime.now(tz=timezone.utc)
@@ -168,8 +229,27 @@ def refresh_access_token(body: RefreshRequest, req: Request, db: Session = Depen
 
     # Rotate: revoke old token, issue new pair
     rt.isRevoked = True
-    new_access = create_access_token(data={"gymId": gym.id, "username": gym.username})
-    new_refresh_raw = _create_refresh_token(db, gym.id)
+
+    # If this was a staff refresh token, preserve userId in the new access token
+    if rt.userId:
+        user = db.query(User).filter(User.id == rt.userId, User.gymId == rt.gymId).first()
+        if user:
+            new_access = create_access_token(data={
+                "gymId": gym.id,
+                "userId": user.id,
+                "username": user.username,
+                "role": user.role,
+            })
+            new_refresh_raw = _create_refresh_token(db, gym.id, user_id=user.id)
+        else:
+            # User was deleted — fall back to gym owner token
+            new_access = create_access_token(data={"gymId": gym.id, "username": gym.username})
+            new_refresh_raw = _create_refresh_token(db, gym.id)
+    else:
+        # Gym owner token
+        new_access = create_access_token(data={"gymId": gym.id, "username": gym.username})
+        new_refresh_raw = _create_refresh_token(db, gym.id)
+
     db.commit()
 
     return {

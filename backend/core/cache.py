@@ -10,6 +10,16 @@ Multi-worker note: Each gunicorn/uvicorn worker has its own cache. A settings
 update will take up to TTL_SECONDS to propagate to other workers (max 10 min).
 This is acceptable for GymSettings — gym owners change settings infrequently.
 
+ARCH-NEW-07 FIX: The cache now stores a plain dict snapshot, NOT the live ORM
+object. Storing the ORM object caused a DetachedInstanceError risk: after the
+request-scoped DB session closes (in get_db's finally block), SQLAlchemy
+detaches the object. Any subsequent access to a cached ORM object in a new
+request's session would fail with DetachedInstanceError if relationships are
+ever accessed (e.g., settings.gym.gymname).
+
+The cache returns a dict-like namespace object (_DictNamespace) that supports
+attribute-style access (settings.admissionExpiryDays) for backward compat.
+
 Usage
 -----
     from core.cache import get_gym_settings, invalidate_gym_settings
@@ -21,6 +31,7 @@ Usage
 import logging
 from datetime import datetime
 from threading import Lock
+from types import SimpleNamespace
 
 from sqlalchemy.orm import Session
 
@@ -32,24 +43,44 @@ TTL_SECONDS = 600   # 10 minutes — safe for GymSettings
 
 # ─── Internal State ───────────────────────────────────────────────────────────
 
-_settings_cache: dict = {}   # { gym_id: { "data": GymSettings, "ts": datetime } }
+# ARCH-NEW-07: Cache stores plain dict snapshots, NOT live ORM objects.
+# { gym_id: { "data": dict, "ts": datetime } }
+_settings_cache: dict = {}
 _lock = Lock()               # thread-safe writes
+
+
+def _orm_to_dict(settings) -> dict:
+    """Convert a GymSettings ORM object to a plain dict snapshot."""
+    return {c.name: getattr(settings, c.name) for c in settings.__table__.columns}
+
+
+def _dict_to_namespace(d: dict) -> SimpleNamespace:
+    """
+    Wrap a plain dict in a SimpleNamespace so callers can use attribute access
+    (settings.admissionExpiryDays) instead of dict access (settings['admissionExpiryDays']).
+    This maintains backward compatibility with all router code.
+    """
+    return SimpleNamespace(**d)
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 def get_gym_settings(gym_id: str, db: Session):
     """
-    Return GymSettings for the given gym_id.
+    Return GymSettings for the given gym_id as a SimpleNamespace (attribute-accessible).
     Serves from cache if the entry is fresher than TTL_SECONDS.
     Creates default settings if none exist for this gym.
+
+    ARCH-NEW-07: Returns a SimpleNamespace wrapping a plain dict snapshot.
+    The ORM object is NOT cached — only its column values are snapshotted at
+    query time. This prevents DetachedInstanceError when the DB session closes.
     """
     with _lock:
         cached = _settings_cache.get(gym_id)
         if cached:
             age = (datetime.now() - cached["ts"]).total_seconds()
             if age < TTL_SECONDS:
-                return cached["data"]
+                return _dict_to_namespace(cached["data"])
 
     # Cache miss — hit the database
     from models.all_models import GymSettings
@@ -67,11 +98,13 @@ def get_gym_settings(gym_id: str, db: Session):
             db.rollback()
             settings = db.query(GymSettings).filter(GymSettings.gymId == gym_id).first()
 
+    # ARCH-NEW-07: Store plain dict snapshot — NOT the live ORM object
+    data_snapshot = _orm_to_dict(settings)
     with _lock:
-        _settings_cache[gym_id] = {"data": settings, "ts": datetime.now()}
+        _settings_cache[gym_id] = {"data": data_snapshot, "ts": datetime.now()}
 
     logger.debug("GymSettings cache miss for gym %s — refreshed from DB", gym_id)
-    return settings
+    return _dict_to_namespace(data_snapshot)
 
 
 def invalidate_gym_settings(gym_id: str) -> None:
