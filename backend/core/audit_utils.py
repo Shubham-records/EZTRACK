@@ -16,8 +16,12 @@ SEC-NEW-08: log_audit() now accepts an optional `ip_address` parameter.
 import logging
 from typing import Optional
 from sqlalchemy.orm import Session
+import contextvars
 
 logger = logging.getLogger(__name__)
+
+# SEC-NEW-08: Context variable to store the originating IP address
+request_ip_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("request_ip", default=None)
 
 # SEC-13: Fields that must never appear in audit log diffs
 SENSITIVE_FIELDS = frozenset({
@@ -55,6 +59,10 @@ def log_audit(
 
     # SEC-13: Scrub sensitive fields
     safe_changes = _scrub_sensitive(changes)
+
+    # SEC-NEW-08: fallback to context var if not explicitly provided
+    if ip_address is None:
+        ip_address = request_ip_var.get()
 
     entry = AuditLog(
         gymId=gym_id,

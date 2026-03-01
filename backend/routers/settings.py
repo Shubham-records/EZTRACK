@@ -7,6 +7,7 @@ from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, GymSettings, PricingConfig
 from schemas.settings import GymSettingsCreate, GymSettingsUpdate, GymSettingsResponse
 from schemas.pricing import PricingConfigCreate, PricingConfigUpdate, PricingConfigResponse
+from core.cache import invalidate_gym_settings
 
 router = APIRouter()
 
@@ -51,6 +52,7 @@ def update_settings(
     
     db.commit()
     db.refresh(settings)
+    invalidate_gym_settings(current_gym.id)
     return settings
 
 

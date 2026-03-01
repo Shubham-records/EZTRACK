@@ -97,6 +97,15 @@ def get_gym_settings(gym_id: str, db: Session):
         except Exception:
             db.rollback()
             settings = db.query(GymSettings).filter(GymSettings.gymId == gym_id).first()
+            if not settings:
+                # If gymId is invalid or insertion failed for another reason, 
+                # fallback to in-memory default to prevent crashing.
+                from schemas.settings import GymSettingsBase
+                try:
+                    defaults = GymSettingsBase().model_dump()
+                except Exception:
+                    defaults = GymSettingsBase().dict()
+                settings = GymSettings(gymId=gym_id, **defaults)
 
     # ARCH-NEW-07: Store plain dict snapshot — NOT the live ORM object
     data_snapshot = _orm_to_dict(settings)

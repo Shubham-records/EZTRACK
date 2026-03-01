@@ -91,16 +91,18 @@ app = FastAPI(
 # ─── Rate Limiting (ARCH-10) ──────────────────────────────────────────────────
 
 try:
-    from slowapi import Limiter, _rate_limit_exceeded_handler
-    from slowapi.util import get_remote_address
+    from slowapi import _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
     from slowapi.middleware import SlowAPIMiddleware
+    from core.rate_limit import limiter
 
-    limiter = Limiter(key_func=get_remote_address)
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_middleware(SlowAPIMiddleware)
-    logger.info("slowapi rate limiting enabled.")
+    if limiter:
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        app.add_middleware(SlowAPIMiddleware)
+        logger.info("slowapi rate limiting enabled with gymId keying.")
+    else:
+        logger.warning("slowapi not installed — rate limiting DISABLED. Run: pip install slowapi")
 except ImportError:
     limiter = None
     logger.warning("slowapi not installed — rate limiting DISABLED. Run: pip install slowapi")
@@ -154,6 +156,41 @@ class HSTSMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(HSTSMiddleware)
+
+
+# ─── Request IP Middleware (SEC-NEW-08) ───────────────────────────────────────
+
+class RequestIPMiddleware(BaseHTTPMiddleware):
+    """
+    SEC-NEW-08: Capture originating IP address for audit logs.
+    Stores the IP address in a context variable.
+    """
+    async def dispatch(self, request: Request, call_next):
+        from core.audit_utils import request_ip_var
+        client_host = request.client.host if request.client else None
+        
+        # Check for proxy headers (like X-Forwarded-For or X-Real-IP)
+        forwarded_for = request.headers.get("x-forwarded-for")
+        real_ip = request.headers.get("x-real-ip")
+        
+        if forwarded_for:
+            # X-Forwarded-For can be a comma-separated list of IPs. First is the original client.
+            client_host = forwarded_for.split(",")[0].strip()
+        elif real_ip:
+            client_host = real_ip
+
+        if client_host:
+            token = request_ip_var.set(client_host)
+        else:
+            token = request_ip_var.set(None)
+
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            request_ip_var.reset(token)
+
+app.add_middleware(RequestIPMiddleware)
 
 
 # ─── Routers ──────────────────────────────────────────────────────────────────

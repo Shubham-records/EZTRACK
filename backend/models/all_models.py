@@ -301,7 +301,7 @@ class Invoice(Base):
     customerName = Column(String, nullable=True)
 
     invoiceDate = Column(DateTime(timezone=True), default=func.now())
-    dueDate     = Column(DateTime(timezone=True), nullable=True)
+    dueDate     = Column(Date, nullable=True)
 
     # Line items — structured JSON array
     # Each item: { description, quantity, rate, amount }
@@ -693,6 +693,10 @@ class Expense(Base):
 
     lastEditedBy = Column(String, nullable=True)
     editReason   = Column(String, nullable=True)
+
+    # SEC-NEW-04: Soft-delete for expenses
+    isDeleted = Column(Boolean, default=False, index=True)
+    deletedAt = Column(DateTime(timezone=True), nullable=True)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())

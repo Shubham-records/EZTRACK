@@ -24,7 +24,7 @@ import json
 import logging
 from datetime import datetime, timedelta, date
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text, select
@@ -35,6 +35,7 @@ from core.cache import get_gym_settings
 from models.all_models import (
     Gym, Member, Invoice, ProteinStock, ProteinLot, Expense, GymSettings, GymDailySummary
 )
+from core.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -143,11 +144,13 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
     month_expenses = db.query(func.sum(Expense.amount)).filter(
         Expense.gymId == gym_id,
         Expense.date >= month_start.date(),
+        Expense.isDeleted == False,
     ).scalar() or 0.0
 
     today_expenses = db.query(func.sum(Expense.amount)).filter(
         Expense.gymId == gym_id,
         Expense.date == today,
+        Expense.isDeleted == False,
     ).scalar() or 0.0
 
     settings        = get_gym_settings(gym_id, db)
@@ -247,6 +250,7 @@ async def _compute_stats_async(gym_id: str, db: AsyncSessionLocal) -> dict:
         select(func.sum(Expense.amount)).filter(
             Expense.gymId == gym_id,
             Expense.date >= month_start.date(),
+            Expense.isDeleted == False,
         )
     )).scalar() or 0.0
 
@@ -254,6 +258,7 @@ async def _compute_stats_async(gym_id: str, db: AsyncSessionLocal) -> dict:
         select(func.sum(Expense.amount)).filter(
             Expense.gymId == gym_id,
             Expense.date == today,
+            Expense.isDeleted == False,
         )
     )).scalar() or 0.0
 
@@ -409,7 +414,9 @@ stream_manager = GymStreamManager()
 # ─── SSE stream ───────────────────────────────────────────────────────────────
 
 @router.get("/stream")
+@rate_limit("10/minute")
 async def dashboard_stream(
+    request: Request,
     current_gym: Gym = Depends(get_current_gym),
 ):
     """

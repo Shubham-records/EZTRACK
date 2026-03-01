@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -10,7 +10,8 @@ from core.database import get_db
 from core.dependencies import get_current_gym, require_owner
 from models.all_models import Gym, Member, ProteinStock, Expense, Invoice, AuditLog
 
-logger = logging.getLogger(__name__)
+from core.audit_utils import log_audit  # imported if needed
+from core.rate_limit import rate_limit
 router = APIRouter()
 
 
@@ -157,7 +158,9 @@ EXPENSE_CATEGORIES = ["Rent", "Electricity", "Salaries", "Maintenance", "Supplie
 
 
 @router.post("/seed-sample-data")
+@rate_limit("5/minute")
 def seed_sample_data(
+    request: Request,
     members_count: int = 100,
     proteins_count: int = 50,
     current_gym: Gym = Depends(get_current_gym),

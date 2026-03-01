@@ -1,0 +1,50 @@
+import logging
+from fastapi import Request
+from jose import jwt
+from core.config import settings
+from core.security import JWT_AUDIENCE, JWT_ISSUER
+
+logger = logging.getLogger(__name__)
+
+try:
+    from slowapi import Limiter
+    from slowapi.util import get_remote_address
+    
+    def get_gym_id_from_token(request: Request) -> str:
+        """
+        Extract gymId for rate limit keying. Falls back to IP.
+        """
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header.replace("Bearer ", "")
+            if token:
+                try:
+                    payload = jwt.decode(
+                        token, 
+                        settings.JWT_SECRET_KEY, 
+                        algorithms=[settings.ALGORITHM],
+                        audience=JWT_AUDIENCE,
+                        issuer=JWT_ISSUER
+                    )
+                    gymId = payload.get("gymId")
+                    if gymId:
+                        return gymId
+                except Exception:
+                    pass
+                    
+        return get_remote_address(request)
+
+    limiter = Limiter(key_func=get_gym_id_from_token)
+    
+except ImportError:
+    limiter = None
+
+def rate_limit(limit_str: str):
+    """
+    Decorator for rate limiting endpoints using the central limiter.
+    """
+    if limiter:
+        return limiter.limit(limit_str)
+    def _noop(fn): 
+        return fn
+    return _noop

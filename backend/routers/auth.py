@@ -76,23 +76,14 @@ def _revoke_all_refresh_tokens(db: Session, gym_id: str, user_id: str | None = N
         q = q.filter(RefreshToken.userId == user_id)
     q.update({"isRevoked": True}, synchronize_session=False)
 
-
-# ─── Rate limiter reference (optional) ───────────────────────────────────────
-
-try:
-    from slowapi import Limiter
-    from slowapi.util import get_remote_address
-    _limiter = Limiter(key_func=get_remote_address)
-except ImportError:
-    _limiter = None
+def cleanup_expired_refresh_tokens(db: Session):
+    """Cleanup — add a function callable from a management script or cron"""
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=1)
+    db.query(RefreshToken).filter(RefreshToken.expiresAt < cutoff).delete(synchronize_session=False)
+    db.commit()
 
 
-def _rate_limit(limit_str: str):
-    """Return slowapi limit decorator or a no-op if slowapi not installed."""
-    if _limiter:
-        return _limiter.limit(limit_str)
-    def _noop(fn): return fn
-    return _noop
+from core.rate_limit import rate_limit as _rate_limit
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
@@ -110,6 +101,7 @@ class FullLoginResponse(BaseModel):
 
 class StaffLoginRequest(BaseModel):
     """SEC-NEW-01: Staff login credentials."""
+    gym_id: str
     username: str
     password: str
 
@@ -119,13 +111,13 @@ class StaffLoginRequest(BaseModel):
 @router.post("/login")
 @router.post("/login/", include_in_schema=False)
 @_rate_limit("10/minute")
-def login(request: LoginRequest, req: Request, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     """
     Authenticate gym owner. Returns short-lived access_token + long-lived refresh_token.
     ARCH-10: Rate limited to 10 req/min/IP.
     """
-    gym = db.query(Gym).filter(Gym.username == request.username, Gym.isDeleted == False).first()
-    if not gym or not verify_password(request.password, gym.password):
+    gym = db.query(Gym).filter(Gym.username == body.username, Gym.isDeleted == False).first()
+    if not gym or not verify_password(body.password, gym.password):
         # SEC-03: Use generic error — don't reveal whether username exists
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -151,50 +143,43 @@ def login(request: LoginRequest, req: Request, db: Session = Depends(get_db)):
 @router.post("/staff-login")
 @router.post("/staff-login/", include_in_schema=False)
 @_rate_limit("10/minute")
-def staff_login(request: StaffLoginRequest, req: Request, db: Session = Depends(get_db)):
+def staff_login(body: StaffLoginRequest, request: Request, db: Session = Depends(get_db)):
     """
     SEC-NEW-01: Authenticate staff member. Returns JWT that includes both gymId AND userId.
-    This makes the RBAC system operational — without this endpoint, all tokens are treated as
-    OWNER because get_caller_role() never sees a userId in the payload.
-
-    Token payload: { gymId, userId, username, role }
-    The 'userId' field is what causes get_caller_role() to look up the User table and
-    return the correct role instead of defaulting to OWNER.
     """
-    # Find user by username within any gym
-    user = db.query(User).filter(User.username == request.username).first()
-    if not user or not verify_password(request.password, user.password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password.",
-        )
-
-    # Verify the gym is still active
-    gym = db.query(Gym).filter(Gym.id == user.gymId, Gym.isDeleted == False).first()
+    gym = db.query(Gym).filter(Gym.id == body.gym_id, Gym.isDeleted == False).first()
     if not gym:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    user = db.query(User).filter(
+        User.gymId == gym.id,
+        User.username == body.username
+    ).first()
+    
+    if not user or not verify_password(body.password, user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Associated gym is no longer active.",
+            detail="Invalid credentials"
         )
 
     # Issue access token with userId — this is what makes RBAC work in get_caller_role()
     access_token = create_access_token(data={
-        "gymId": user.gymId,
-        "userId": user.id,
+        "gymId": gym.id,
+        "userId": user.id,        # ← this is what activates the RBAC path
         "username": user.username,
         "role": user.role,
     })
 
     # Revoke old staff refresh tokens and issue a new one scoped to this user
-    _revoke_all_refresh_tokens(db, user.gymId, user_id=user.id)
-    raw_refresh = _create_refresh_token(db, user.gymId, user_id=user.id)
+    _revoke_all_refresh_tokens(db, gym.id, user_id=user.id)
+    raw_refresh = _create_refresh_token(db, gym.id, user_id=user.id)
     db.commit()
 
     logger.info("Staff '%s' (role=%s) logged into gym '%s'", user.username, user.role, gym.username)
     return {
         "message": "Login successful!",
         "eztracker_jwt_access_control_token": access_token,
-        "eztracker_jwt_databaseName_control_token": user.gymId,
+        "eztracker_jwt_databaseName_control_token": gym.id,
         "refresh_token": raw_refresh,
         "role": user.role,
     }
@@ -202,7 +187,7 @@ def staff_login(request: StaffLoginRequest, req: Request, db: Session = Depends(
 
 @router.post("/refresh")
 @_rate_limit("30/minute")
-def refresh_access_token(body: RefreshRequest, req: Request, db: Session = Depends(get_db)):
+def refresh_access_token(body: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     """
     Exchange a valid refresh token for a new access token.
     SEC-03: This is the renewal path — frontend calls this when access token expires.
@@ -279,22 +264,22 @@ def logout(body: RefreshRequest | None = None, db: Session = Depends(get_db)):
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 @router.post("/signup/", status_code=status.HTTP_201_CREATED, include_in_schema=False)
 @_rate_limit("5/minute")
-def signup(request: SignupRequest, req: Request, db: Session = Depends(get_db)):
+def signup(body: SignupRequest, request: Request, db: Session = Depends(get_db)):
     """ARCH-10: Rate limited to 5 req/min/IP."""
-    existing_user = db.query(Gym).filter(Gym.username == request.username).first()
+    existing_user = db.query(Gym).filter(Gym.username == body.username).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already registered!")
 
-    existing_email = db.query(Gym).filter(Gym.email == request.EMAILID).first()
+    existing_email = db.query(Gym).filter(Gym.email == body.EMAILID).first()
     if existing_email:
         raise HTTPException(status_code=400, detail="Email already registered!")
 
     new_gym = Gym(
         id=str(uuid.uuid4()),
-        gymname=request.GYMNAME,
-        email=request.EMAILID,
-        username=request.username,
-        password=get_password_hash(request.password),
+        gymname=body.GYMNAME,
+        email=body.EMAILID,
+        username=body.username,
+        password=get_password_hash(body.password),
     )
     db.add(new_gym)
     db.flush()   # get new_gym.id without committing

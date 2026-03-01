@@ -15,6 +15,13 @@ class UserCreate(UserBase):
     password: str
     gymId: Optional[str] = None  # Optional — inferred from JWT in create_staff()
 
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v):
+        if v and len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
+
 
 class UserUpdate(BaseModel):
     """
@@ -27,6 +34,13 @@ class UserUpdate(BaseModel):
     activeBranchId: Optional[str] = None
     branchIds: Optional[List[str]] = None
     password: Optional[str] = None  # will be hashed before storage
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v):
+        if v and len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
 
     # NOTE: username, gymId, id are NOT accepted here.
     # Username changes require a separate endpoint with duplicate checking.

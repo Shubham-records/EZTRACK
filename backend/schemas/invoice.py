@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Any
-from datetime import datetime
+from datetime import datetime, date
 
 class InvoiceItem(BaseModel):
     description: str
@@ -12,7 +12,7 @@ class InvoiceBase(BaseModel):
     memberId: Optional[str] = None
     customerName: Optional[str] = None
     invoiceDate: Optional[datetime] = None
-    dueDate: Optional[datetime] = None
+    dueDate: Optional[date] = None
     items: List[InvoiceItem] = []
     subTotal: float = 0
     tax: float = 0
@@ -35,7 +35,7 @@ class InvoiceCreate(BaseModel):
     status: Optional[str] = "PENDING"
     paymentMode: Optional[str] = "CASH"
     invoiceDate: Optional[datetime] = None
-    dueDate: Optional[datetime] = None
+    dueDate: Optional[date] = None
     paidAmount: Optional[float] = None
     termsAndConditions: Optional[Any] = None
 

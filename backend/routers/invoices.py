@@ -1,8 +1,8 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date
 from pydantic import BaseModel
 
 from core.database import get_db
@@ -10,6 +10,7 @@ from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, Invoice, PaymentEvent
 from schemas.invoice import InvoiceCreate, InvoiceResponse
 from core.audit_utils import log_audit
+from core.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -19,7 +20,7 @@ class InvoiceUpdateRequest(BaseModel):
     id: Optional[str] = None
     status: Optional[str] = None
     paymentMode: Optional[str] = None
-    dueDate: Optional[datetime] = None
+    dueDate: Optional[date] = None
     customerName: Optional[str] = None
     editReason: Optional[str] = None
     items: Optional[list] = None
@@ -140,6 +141,7 @@ def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_g
             amount=paid,
             paymentMode=data.paymentMode or "CASH",
             notes="Initial payment at invoice creation",
+            recordedBy=current_gym.username,
         )
         db.add(payment_event)
 
@@ -153,7 +155,8 @@ def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_g
 
 
 @router.post("/bulk-create")
-def bulk_create_invoices(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+@rate_limit("5/minute")
+def bulk_create_invoices(request: Request, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     """Bulk create invoices from import"""
     invoices_list = data.get("invoices", [])
     created_count = 0
@@ -196,6 +199,7 @@ def bulk_create_invoices(data: dict, current_gym: Gym = Depends(get_current_gym)
                 editReason='Bulk Import'
             )
             db.add(new_invoice)
+            db.flush()
 
             # DATA-1: Insert PaymentEvent if paidAmount > 0
             if new_invoice.paidAmount and new_invoice.paidAmount > 0:
@@ -476,7 +480,7 @@ def get_pending_summary(
         ent_type = "member" if inv.memberId else "external"
         by_type[ent_type] += remaining
         
-        if inv.dueDate and inv.dueDate.date() < today:
+        if inv.dueDate and inv.dueDate < today:
             overdue_count += 1
             
     return {
@@ -492,7 +496,7 @@ def get_overdue_balances(
     db: Session = Depends(get_db)
 ):
     """Get overdue pending balances from invoices."""
-    today = datetime.now()
+    today = datetime.now().date()
     
     invoices = db.query(Invoice).filter(
         Invoice.gymId == current_gym.id,

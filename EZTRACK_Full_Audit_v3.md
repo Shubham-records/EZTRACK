@@ -212,7 +212,7 @@ This means a frontend consuming both fields may show contradictory status indica
 
 ---
 
-### ARCH-NEW-07 — GymSettings Cache Stores Detachable ORM Object
+### ARCH-NEW-07 — GymSettings Cache Stores Detachable ORM Object -- done
 **Severity:** MEDIUM  
 **File:** `core/cache.py`  
 **Status:** NEW — not in previous audits
@@ -232,10 +232,10 @@ Update `get_gym_settings()` callers to accept a dict and access fields with `set
 
 ---
 
-### ARCH-NEW-08 — `migration.py` Is Orphaned Dead Code and a Type Bomb
+### ARCH-NEW-08 — `migration.py` Is Orphaned Dead Code and a Type Bomb -- done
 **Severity:** MEDIUM  
 **File:** `migration.py`  
-**Status:** Confirmed still present, needs deletion
+**Status:** Deleted — fixed
 
 This file adds columns via raw `ALTER TABLE` SQL. It:
 - Swallows all exceptions silently (already caused DATE vs VARCHAR bug, Bug #9 in Master Audit)
@@ -248,10 +248,10 @@ This file adds columns via raw `ALTER TABLE` SQL. It:
 
 ---
 
-### ARCH-NEW-09 — `Invoice.paidAmount` Can Drift From `SUM(PaymentEvent.amount)` — Two Unplugged Write Paths
+### ARCH-NEW-09 — `Invoice.paidAmount` Can Drift From `SUM(PaymentEvent.amount)` — Two Unplugged Write Paths -- done
 **Severity:** HIGH  
 **File:** `routers/invoices.py`  
-**Status:** Partially fixed (DATA-1), but two paths remain
+**Status:** Fixed — both drift paths closed
 
 Despite DATA-1 being marked DONE, two write paths still set `Invoice.paidAmount` without inserting a matching `PaymentEvent`:
 
@@ -297,10 +297,10 @@ if new_invoice.paidAmount and new_invoice.paidAmount > 0:
 
 ---
 
-### ARCH-NEW-10 — `RefreshToken` Table Has No Cleanup Mechanism
+### ARCH-NEW-10 — `RefreshToken` Table Has No Cleanup Mechanism --- done
 **Severity:** MEDIUM  
 **File:** `models/all_models.py`, `routers/auth.py`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — cleanup index and function added
 
 `RefreshToken` rows are marked `isRevoked=True` on logout but never physically deleted. At 100 logins/day: 36,500 rows per year, most stale. The `_revoke_all_refresh_tokens()` function scans `WHERE gymId = X AND isRevoked = FALSE` — this is efficient today but degrades as the table grows because the `gymId` index has to skip over increasing numbers of revoked rows.
 
@@ -321,10 +321,10 @@ Call this weekly. At 100 logins/day × 7-day TTL, a weekly cleanup maintains the
 
 ---
 
-### ARCH-NEW-11 — `Invoice.dueDate` Timezone Comparison Bug (P9 — Still Open)
+### ARCH-NEW-11 — `Invoice.dueDate` Timezone Comparison Bug -- done
 **Severity:** HIGH  
 **Files:** `routers/automation.py`, `routers/pending.py`, `routers/invoices.py`  
-**Status:** Open from Master Audit P9
+**Status:** Fixed — changed dueDate to Date and removed timezone comparison drift
 
 `Invoice.dueDate` is `Column(DateTime(timezone=True))`. Every overdue comparison in the codebase uses timezone-naive `datetime.now()`:
 
@@ -352,10 +352,10 @@ This removes timezone ambiguity entirely. Due dates are calendar dates, not time
 
 ## Section 2 — Security Vulnerabilities
 
-### SEC-NEW-01 — RBAC Is Non-Functional: No Staff Login Endpoint
+### SEC-NEW-01 — RBAC Is Non-Functional: No Staff Login Endpoint --- done 
 **Severity:** CRITICAL  
 **File:** `routers/auth.py`, `core/dependencies.py`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — add StaffLoginRequest and implemented staff_login correctly with proper queries
 
 This is the single most critical finding in this audit. The RBAC system in `dependencies.py` is architecturally complete but operationally dead.
 
@@ -400,10 +400,10 @@ Without this endpoint, `require_owner()` and `require_owner_or_manager()` are se
 
 ---
 
-### SEC-NEW-02 — JWT Has No Audience or Issuer Claims
+### SEC-NEW-02 — JWT Has No Audience or Issuer Claims -- done
 **Severity:** MEDIUM  
 **File:** `core/security.py`, `create_access_token()`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — added issuer and audience claims to token and enabled validation in dependencies
 
 JWTs contain `gymId`, `username`, and `exp`. No `aud` (audience) or `iss` (issuer) claim. `python-jose` does not validate these unless explicitly passed to `jwt.decode()`.
 
@@ -428,10 +428,10 @@ payload = jwt.decode(
 
 ---
 
-### SEC-NEW-03 — Rate Limiting Only on Auth Endpoints — Business Endpoints Unprotected
+### SEC-NEW-03 — Rate Limiting Only on Auth Endpoints — Business Endpoints Unprotected -- done
 **Severity:** HIGH  
 **Files:** All routers except `auth.py`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — applied per-gym rate limiting to /members, /expenses, /invoices, /audit, and /dashboard
 
 ARCH-10 added rate limiting to `/login` (10/min/IP) and `/signup` (5/min/IP). Every other endpoint has zero rate limiting.
 
@@ -472,10 +472,10 @@ def bulk_create_members(...): ...
 
 ---
 
-### SEC-NEW-04 — Bulk Delete Endpoints Have No Row Count Cap and Missing RBAC
+### SEC-NEW-04 — Bulk Delete Endpoints Have No Row Count Cap and Missing RBAC -- done
 **Severity:** HIGH  
 **Files:** `routers/expenses.py`, `routers/invoices.py`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — Added soft-delete to Expense, Row count cap of 500, and isDeleted == False filters.
 
 Both bulk delete endpoints receive a list of IDs from the request body with no size cap:
 
@@ -521,10 +521,10 @@ def bulk_delete_expenses(
 
 ---
 
-### SEC-NEW-05 — `update_staff()` Accepts Raw `dict` — Role Escalation Risk
+### SEC-NEW-05 — `update_staff()` Accepts Raw `dict` — Role Escalation Risk -- done
 **Severity:** MEDIUM  
 **File:** `routers/staff.py`, `update_staff()`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — Added `password_strength` Pydantic validator to `UserCreate` and `UserUpdate`, schema uses explicitly typed string constants for Role, and `update_staff` blocks MANAGER escalation.
 
 ```python
 def update_staff(user_id: str, data: dict, ...)
@@ -564,10 +564,10 @@ def update_staff(user_id: str, data: StaffUpdateRequest,
 
 ---
 
-### SEC-NEW-06 — `preview_template()` Skips Placeholder Validation
+### SEC-NEW-06 — `preview_template()` Skips Placeholder Validation -- done
 **Severity:** MEDIUM  
 **File:** `routers/whatsapp_templates.py`, `preview_template()`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — added placeholder validation to prevent injection
 
 The `update_template` endpoint calls `_validate_template_placeholders()` to enforce the allowlist (SEC-11 fix). The `preview` endpoint does not:
 
@@ -599,10 +599,10 @@ def preview_template(data: dict, ...):
 
 ---
 
-### SEC-NEW-07 — Signed URLs Generated Inline on Every List Response
+### SEC-NEW-07 — Signed URLs Generated Inline on Every List Response -- done
 **Severity:** MEDIUM  
 **Files:** `routers/branch_details.py` (`_to_response()`), `routers/expenses.py`, `routers/members.py`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — Signed URLs are decoupled from list mappers or explicitly gated behind `include_logo` parameter.
 
 `_to_response()` in `branch_details.py` calls `get_signed_url(b.logoUrl)` synchronously on every invocation. `get_signed_url()` makes an API call to Supabase/R2/S3 to generate a presigned URL via `boto3.client().generate_presigned_url()`.
 
@@ -628,10 +628,10 @@ def _to_response(b: Branch, include_logo: bool = False) -> dict:
 
 ---
 
-### SEC-NEW-08 — `AuditLog.ipAddress` Is Never Populated
+### SEC-NEW-08 — `AuditLog.ipAddress` Is Never Populated -- done
 **Severity:** LOW — Compliance Gap  
 **File:** `core/audit_utils.py`, `models/all_models.py`  
-**Status:** NEW — not in previous audits
+**Status:** Fixed — Implemented `RequestIPMiddleware` using `contextvars` to automatically inject IP address into `AuditLog` without modifying every router signature.
 
 `AuditLog` has an `ipAddress` column. `log_audit()` never accepts or sets it. Every audit log row has `ipAddress = NULL`. Under DPDP Act 2023 (India's Digital Personal Data Protection Act), for systems handling Aadhaar-adjacent sensitive personal data, audit trails are expected to include originating IP for incident investigation.
 

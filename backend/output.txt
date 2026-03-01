@@ -1,8 +1,0 @@
-Traceback (most recent call last):
-  File "<string>", line 1, in <module>
-    import logging; logging.basicConfig(level=logging.DEBUG); from core.cache import get_gym_settings; from core.database import SessionLocal; db = SessionLocal(); settings = get_gym_settings('541315b7-7eb7-40b9-858a-a43b679b3ee4', db); print(type(settings)); print(settings.lowStockThreshold)
-                                                                                                                                                                               ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "D:\EZTRACK\backend\core\cache.py", line 74, in get_gym_settings
-    snapshot_dict = {c.name: getattr(settings, c.name) for c in settings.__table__.columns}
-                                                                ^^^^^^^^^^^^^^^^^^
-AttributeError: 'NoneType' object has no attribute '__table__'. Did you mean: '__le__'?

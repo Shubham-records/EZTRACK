@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.config import settings
-from core.security import JWT_AUDIENCE  # SEC-NEW-02
+from core.security import JWT_AUDIENCE, JWT_ISSUER  # SEC-NEW-02
 from models.all_models import Gym, User
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,7 @@ def get_current_gym(
             settings.JWT_SECRET_KEY,
             algorithms=[settings.ALGORITHM],
             audience=JWT_AUDIENCE,
+            issuer=JWT_ISSUER,
         )
         gymId: str = payload.get("gymId")
         if gymId is None:
@@ -82,6 +83,7 @@ def _decode_payload(token: str) -> dict:
             settings.JWT_SECRET_KEY,
             algorithms=[settings.ALGORITHM],
             audience=JWT_AUDIENCE,   # SEC-NEW-02: reject foreign tokens
+            issuer=JWT_ISSUER,
         )
     except JWTError:
         raise HTTPException(

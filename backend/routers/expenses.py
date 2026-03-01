@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -11,6 +11,7 @@ from core.storage import upload_image, get_signed_url, delete_image, StorageFold
 from models.all_models import Gym, Expense
 from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse
 from core.audit_utils import log_audit
+from core.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -39,7 +40,10 @@ def get_expenses(
 ):
     """ARCH-06: Paginated expenses. max limit=500."""
     limit = min(limit, 500)
-    query = db.query(Expense).filter(Expense.gymId == current_gym.id)
+    query = db.query(Expense).filter(
+        Expense.gymId == current_gym.id,
+        Expense.isDeleted == False
+    )
 
     if category:
         query = query.filter(Expense.category == category)
@@ -80,7 +84,8 @@ def create_expense(
 
 
 @router.post("/bulk-create")
-def bulk_create_expenses(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+@rate_limit("5/minute")
+def bulk_create_expenses(request: Request, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     """Bulk create expenses from import"""
     expenses_list = data.get("items", []) # Aligning naming with frontend generic 'items' or 'expenses'
     # Actually frontend usually sends { "expenses": [...] } or generic. Let's support "expenses"
@@ -141,10 +146,11 @@ def bulk_delete_expenses(
         )
 
     try:
-        stmt = Expense.__table__.delete().where(
+        from datetime import datetime
+        stmt = Expense.__table__.update().where(
             Expense.id.in_(ids),
             Expense.gymId == current_gym.id
-        )
+        ).values(isDeleted=True, deletedAt=datetime.utcnow())
         result = db.execute(stmt)
         # SEC-NEW-04: Audit log for bulk hard-deletes
         log_audit(db, current_gym.id, "Expense", "bulk", "DELETE",
@@ -167,7 +173,8 @@ def update_expense(
     """Update an expense record."""
     expense = db.query(Expense).filter(
         Expense.id == expense_id,
-        Expense.gymId == current_gym.id
+        Expense.gymId == current_gym.id,
+        Expense.isDeleted == False
     ).first()
     
     if not expense:
@@ -196,7 +203,8 @@ def delete_expense(
     """Delete an expense record."""
     expense = db.query(Expense).filter(
         Expense.id == expense_id,
-        Expense.gymId == current_gym.id
+        Expense.gymId == current_gym.id,
+        Expense.isDeleted == False
     ).first()
     
     if not expense:
@@ -205,7 +213,9 @@ def delete_expense(
     log_audit(db, current_gym.id, "Expense", expense.id, "DELETE",
               {"category": expense.category, "amount": expense.amount},
               current_gym.username)
-    db.delete(expense)
+    from datetime import datetime
+    expense.isDeleted = True
+    expense.deletedAt = datetime.utcnow()
     db.commit()
     return None
 
@@ -220,7 +230,8 @@ async def upload_receipt(
     """Upload receipt image for an expense — stored in object storage (not DB)."""
     expense = db.query(Expense).filter(
         Expense.id == expense_id,
-        Expense.gymId == current_gym.id
+        Expense.gymId == current_gym.id,
+        Expense.isDeleted == False
     ).first()
 
     if not expense:
@@ -262,7 +273,8 @@ def get_receipt(
     """
     expense = db.query(Expense).filter(
         Expense.id == expense_id,
-        Expense.gymId == current_gym.id
+        Expense.gymId == current_gym.id,
+        Expense.isDeleted == False
     ).first()
 
     if not expense or not expense.receiptUrl:
@@ -281,7 +293,10 @@ def get_expense_summary(
     db: Session = Depends(get_db)
 ):
     """Get expense summary by category."""
-    query = db.query(Expense).filter(Expense.gymId == current_gym.id)
+    query = db.query(Expense).filter(
+        Expense.gymId == current_gym.id,
+        Expense.isDeleted == False
+    )
     
     if start_date:
         query = query.filter(Expense.date >= start_date)

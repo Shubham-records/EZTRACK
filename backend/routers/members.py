@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func, String
 from typing import List, Optional
@@ -13,6 +13,7 @@ from core.aadhaar_crypto import encrypt_aadhaar, decrypt_aadhaar, hash_aadhaar, 
 from models.all_models import Gym, Member, Invoice, GymSettings, PaymentEvent, GymSubscription
 from schemas.member import MemberCreate, MemberResponse, MemberUpdate
 from core.audit_utils import log_audit
+from core.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -98,7 +99,9 @@ def generate_client_number(current_gym: Gym = Depends(get_current_gym), db: Sess
 
 @router.get("")
 @router.get("/")
+@rate_limit("200/minute")
 def get_members(
+    request: Request,
     page: int = 1,
     page_size: int = 30,
     search: str = "",
@@ -259,7 +262,8 @@ def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db
 
 
 @router.post("/bulk-create")
-def bulk_create_members(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+@rate_limit("5/minute")
+def bulk_create_members(request: Request, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     """Bulk create members from import"""
     members_list = data.get("members", [])
     created_count = 0
