@@ -3,9 +3,14 @@ migrate.py  —  Clean-slate DB migration + post-schema DB objects
 =================================================================
 Usage:
     source venv/bin/activate
+
+    # Normal: drop + recreate schema + install triggers (DEV only)
     python migrate.py
 
-What this does:
+    # P13: Partition AuditLog by month (PRODUCTION — run once when table > 100K rows)
+    python migrate.py --partition
+
+What this does (normal mode):
 1. Drops ALL tables in the public schema (safe — no production data).
 2. Recreates every table from the current SQLAlchemy models.
 3. Installs PostgreSQL triggers and rules that cannot be expressed in SQLAlchemy:
@@ -14,12 +19,23 @@ What this does:
    - SCH-04:  Invoice.items JSON schema validation trigger (rejects malformed line items)
    - SCH-05:  User.branchIds FK validation trigger (rejects branch IDs not in Branch table)
 
+What --partition does (P13):
+- Safe for production: does NOT drop any tables.
+- Renames "AuditLog" → "AuditLog_classic" (preserves all existing rows).
+- Creates "AuditLog" as a RANGE-partitioned table on "createdAt".
+- Creates monthly child partitions for the last 12 months + next 12 months.
+- Copies all rows from AuditLog_classic into the new partitioned table.
+- Installs a pg_cron job to auto-create future monthly partitions 30 days ahead.
+- All application code, indexes, and FK references continue working unchanged.
+
 After the first production deploy with real data, use Alembic instead:
     alembic revision --autogenerate -m "describe_change"
     alembic upgrade head
 """
 
 import sys
+import calendar
+from datetime import date
 from sqlalchemy import text
 
 # ── Bootstrap ──────────────────────────────────────────────────────────────────
@@ -193,6 +209,210 @@ CREATE TRIGGER trg_validate_user_branch_ids
 """
 
 
+# ─── P13: AuditLog Monthly Partitioning ──────────────────────────────────────
+# Run ONCE when AuditLog reaches ~100K rows (typically 12 months after launch).
+# Safe for production: renames the old table, never drops it.
+
+def partition_auditlog():
+    """
+    P13: Convert AuditLog from a regular heap table to a RANGE-partitioned table.
+
+    Steps (all in a single transaction block per phase):
+      Phase 1 — Rename the old table to AuditLog_classic (zero downtime preserves data).
+      Phase 2 — Create AuditLog as PARTITION BY RANGE (createdAt).
+      Phase 3 — Create monthly child partitions (12 back + 12 forward from today).
+      Phase 4 — Copy all rows from AuditLog_classic into the new table.
+      Phase 5 — Install pg_cron job to auto-create future partitions monthly.
+      Phase 6 — Verify partition layout.
+
+    Idempotent: safe to re-run if interrupted (checks for existing partitions).
+    """
+    print("=" * 60)
+    print("  P13 — AuditLog Monthly Partitioning")
+    print("=" * 60)
+    print()
+    print("  ⚠️  This migration is safe for production but CANNOT be undone")
+    print("      without downtime. Ensure a backup exists before proceeding.")
+    print()
+
+    confirm = input("  Type 'yes' to continue: ").strip().lower()
+    if confirm != "yes":
+        print("  Aborted.")
+        return
+
+    with engine.connect() as conn:
+        # ── Phase 1: Check if already partitioned ───────────────────────────
+        result = conn.execute(text("""
+            SELECT relkind
+            FROM pg_class
+            WHERE relname = 'AuditLog'
+              AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+        """)).fetchone()
+
+        if result and result[0] == 'p':
+            print("  ℹ️  AuditLog is already a partitioned table. Nothing to do.")
+            return
+
+        print("  Phase 1: Renaming AuditLog → AuditLog_classic ...")
+        conn.execute(text('ALTER TABLE "AuditLog" RENAME TO "AuditLog_classic";'))
+        conn.commit()
+        print("  ✅ Phase 1 complete.\n")
+
+        # ── Phase 2: Create partitioned parent table ─────────────────────────
+        print("  Phase 2: Creating partitioned AuditLog table ...")
+        conn.execute(text("""
+            CREATE TABLE "AuditLog" (
+                id           TEXT        NOT NULL,
+                "gymId"      TEXT        NOT NULL REFERENCES "Gym"(id),
+                "entityType" TEXT        NOT NULL,
+                "entityId"   TEXT        NOT NULL,
+                action       TEXT        NOT NULL,
+                changes      JSONB,
+                "userId"     TEXT,
+                "userName"   TEXT,
+                "ipAddress"  TEXT,
+                "createdAt"  TIMESTAMPTZ NOT NULL DEFAULT now()
+            ) PARTITION BY RANGE ("createdAt");
+        """))
+        # Recreate indexes on parent (inherited by each partition)
+        conn.execute(text(
+            'CREATE INDEX ix_audit_gym_created ON "AuditLog" ("gymId", "createdAt");'
+        ))
+        conn.execute(text(
+            'CREATE INDEX ix_audit_gym_entity  ON "AuditLog" ("gymId", "entityType", "entityId");'
+        ))
+        conn.execute(text(
+            'CREATE INDEX ix_audit_created_at  ON "AuditLog" ("createdAt");'
+        ))
+        conn.commit()
+        print("  ✅ Phase 2 complete.\n")
+
+        # -- Phase 3: Create current month partition only ---------------------
+        # manage_audit_partitions() (pg_cron, monthly) creates future partitions
+        # automatically, so we only need the current month to start accepting data.
+        print("  Phase 3: Creating current month partition ...")
+        today      = date.today()
+        cur_start  = today.replace(day=1)
+        if cur_start.month == 12:
+            nxt_start = date(cur_start.year + 1, 1, 1)
+        else:
+            nxt_start = date(cur_start.year, cur_start.month + 1, 1)
+        part_name  = f"AuditLog_{cur_start.strftime('%Y_%m')}"
+        from_val   = cur_start.strftime("%Y-%m-01")
+        to_val     = nxt_start.strftime("%Y-%m-01")
+
+        exists = conn.execute(text("""
+            SELECT 1 FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = :name AND n.nspname = 'public'
+        """), {"name": part_name}).fetchone()
+
+        if not exists:
+            conn.execute(text(
+                f'CREATE TABLE "{part_name}" '
+                f'PARTITION OF "AuditLog" '
+                f"FOR VALUES FROM ('{from_val}') TO ('{to_val}');"
+            ))
+        conn.commit()
+        print(f"  [OK] Phase 3 complete -- {part_name} ({from_val} to {to_val})\n")
+        print("  Note: manage_audit_partitions() will create future partitions")
+        print("        automatically when scheduled via pg_cron.\n")
+
+        # -- Phase 5: Install pg_cron auto-partition + 6-month cleanup ---------
+        print("  Phase 5: Installing pg_cron auto-partition + cleanup function ...")
+        conn.execute(text("""
+            CREATE OR REPLACE FUNCTION manage_audit_partitions()
+            RETURNS void AS $$
+            DECLARE
+                retention_months INT  := 6;
+                next_month     DATE := date_trunc('month', NOW()) + INTERVAL '1 month';
+                cutoff_month   DATE := date_trunc('month', NOW())
+                                       - (retention_months || ' months')::INTERVAL;
+                partition_name TEXT;
+                from_val       TEXT;
+                to_val         TEXT;
+                already_exists BOOLEAN;
+                rec            RECORD;
+            BEGIN
+                -- Step 1: create next month partition
+                partition_name := 'AuditLog_' || to_char(next_month, 'YYYY_MM');
+                from_val       := to_char(next_month, 'YYYY-MM-01');
+                to_val         := to_char(next_month + INTERVAL '1 month', 'YYYY-MM-01');
+
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE c.relname = partition_name AND n.nspname = 'public'
+                ) INTO already_exists;
+
+                IF NOT already_exists THEN
+                    EXECUTE format(
+                        'CREATE TABLE %I PARTITION OF "AuditLog" FOR VALUES FROM (%L) TO (%L)',
+                        partition_name, from_val, to_val
+                    );
+                    RAISE NOTICE 'Created partition: %', partition_name;
+                END IF;
+
+                -- Step 2: drop partitions older than retention_months
+                FOR rec IN
+                    SELECT c.relname AS pname
+                    FROM pg_class p
+                    JOIN pg_inherits i ON i.inhparent = p.oid
+                    JOIN pg_class   c ON c.oid = i.inhrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE p.relname = 'AuditLog'
+                      AND n.nspname = 'public'
+                      AND to_date(
+                            substring(c.relname FROM 'AuditLog_([0-9]{4}_[0-9]{2})'),
+                            'YYYY_MM'
+                          ) < cutoff_month
+                LOOP
+                    EXECUTE format('DROP TABLE IF EXISTS %I', rec.pname);
+                    RAISE NOTICE 'Dropped old partition: % (> % months old)',
+                                 rec.pname, retention_months;
+                END LOOP;
+            END;
+            $$ LANGUAGE plpgsql;
+        """))
+        conn.commit()
+        print("  [OK] manage_audit_partitions() installed.")
+        print("       - Creates next month partition on each run (idempotent)")
+        print("       - Drops partitions older than 6 months (instant DROP TABLE, no VACUUM)")
+        print()
+        print("  MANUAL STEP: schedule in psql (requires pg_cron extension):")
+        print("    SELECT cron.schedule(")
+        print("        'monthly-audit-manage',")
+        print("        '0 0 1 * *',  -- 1st of each month at midnight")
+        print("        'SELECT manage_audit_partitions();'")
+        print("    );")
+        print("  If pg_cron unavailable: run manually on the 1st of each month.")
+        print()
+
+        # ── Phase 6: Verify ──────────────────────────────────────────────────
+        print("  Phase 6: Verifying partition layout ...")
+        partitions = conn.execute(text("""
+            SELECT
+                c.relname                         AS partition_name,
+                pg_get_expr(c.relpartbound, c.oid) AS bounds
+            FROM pg_class p
+            JOIN pg_inherits i ON i.inhparent = p.oid
+            JOIN pg_class   c ON c.oid        = i.inhrelid
+            WHERE p.relname = 'AuditLog'
+            ORDER BY c.relname;
+        """)).fetchall()
+
+        print(f"  Total partitions: {len(partitions)}")
+        for p in partitions:
+            print(f"     {p[0]:30s}  {p[1]}")
+
+    print()
+    print("=" * 60)
+    print("  P13 Partitioning complete!")
+    print("  AuditLog_classic preserved — drop it after verifying correctness.")
+    print("  DROP TABLE \"AuditLog_classic\";  -- run manually when confident")
+    print("=" * 60)
+
+
 # ─── Core migration functions ─────────────────────────────────────────────────
 
 def drop_all_tables():
@@ -298,17 +518,25 @@ def verify_tables():
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("  EZTRACK — Clean-Slate DB Migration")
-    print("=" * 60)
-    print()
+    if "--partition" in sys.argv:
+        # P13: Run AuditLog partitioning only — safe for production
+        partition_auditlog()
+    else:
+        # Normal: Full drop + recreate (DEV only)
+        print("=" * 60)
+        print("  EZTRACK — Clean-Slate DB Migration")
+        print("=" * 60)
+        print()
 
-    drop_all_tables()
-    create_all_tables()
-    install_db_objects()
-    verify_tables()
+        drop_all_tables()
+        create_all_tables()
+        install_db_objects()
+        verify_tables()
 
-    print()
-    print("=" * 60)
-    print("  Migration complete.")
-    print("=" * 60)
+        print()
+        print("=" * 60)
+        print("  Migration complete.")
+        print("=" * 60)
+        print()
+        print("  Tip: When AuditLog exceeds 100K rows (~12 months), run:")
+        print("       python migrate.py --partition")

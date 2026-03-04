@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from core.database import get_db
 from core.dependencies import get_current_gym, require_owner_or_manager
-from models.all_models import Gym, Invoice, PaymentEvent
+from models.all_models import Gym, Invoice, Member, PaymentEvent
 from schemas.invoice import InvoiceCreate, InvoiceResponse
 from core.audit_utils import log_audit
 from core.rate_limit import rate_limit
@@ -96,6 +96,23 @@ def get_invoices(
 @router.post("", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+    # SCH-NORM-01: Cross-tenant guard — prevent invoices being attributed to
+    # members of a different gym. Invoice.gymId is denormalized for query
+    # efficiency, but without this check a stale/malicious memberId could
+    # create a cross-tenant billing record (no DB CHECK constraint covers it).
+    if data.memberId:
+        member = db.query(Member).filter(
+            Member.id == data.memberId,
+            Member.isDeleted == False,
+        ).first()
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found")
+        if member.gymId != current_gym.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Member does not belong to this gym",
+            )
+
     # Calculate totals
     items = data.items
     # sum amounts
@@ -367,6 +384,16 @@ def pay_invoice(
 
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid amount")
+
+    # SCH-NORM-02: Explicit cross-tenant guard before inserting PaymentEvent.
+    # PaymentEvent.gymId is denormalized from invoice.gymId for query efficiency.
+    # The query above already filters by gymId, but this assertion makes the
+    # invariant explicit so a future refactor can't silently drop the filter.
+    if invoice.gymId != current_gym.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Invoice does not belong to this gym",
+        )
 
     # FIX: INSERT a PaymentEvent row (append-only) instead of mutating a JSON blob.
     # Invoice.paidAmount is the denormalized running total — kept in sync here.

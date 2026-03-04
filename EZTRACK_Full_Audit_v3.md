@@ -653,7 +653,7 @@ Pass `request: Request` into endpoints that call `log_audit()`, or use FastAPI m
 
 ---
 
-### SEC-NEW-09 — Duplicate Check Endpoints Return Full Member Objects to STAFF
+### SEC-NEW-09 — Duplicate Check Endpoints Return Full Member Objects to STAFF -- done
 **Severity:** LOW  
 **File:** `routers/members.py`, `search_duplicates()`, `check_duplicates()`  
 **Status:** NEW — not in previous audits
@@ -675,7 +675,7 @@ return [{
 
 ---
 
-### SEC-NEW-10 — No HTTPS Enforcement or HSTS Header
+### SEC-NEW-10 — No HTTPS Enforcement or HSTS Header --done
 **Severity:** MEDIUM  
 **File:** `main.py`  
 **Status:** NEW — not in previous audits
@@ -712,7 +712,7 @@ async def lifespan(app):
 
 ## Section 3 — Schema Issues
 
-### SCH-NEW-01 — `ProteinStock.Year` and `ProteinStock.Month` Are Locale-Sensitive Strings
+### SCH-NEW-01 — `ProteinStock.Year` and `ProteinStock.Month` Are Locale-Sensitive Strings --done
 **Severity:** MEDIUM  
 **File:** `models/all_models.py`, `ProteinStock`  
 **Status:** NEW — not in previous audits
@@ -730,7 +730,7 @@ Problems:
 
 ---
 
-### SCH-NEW-02 — `Member.LastPaymentAmount` Is `Integer` — Truncates GST Amounts
+### SCH-NEW-02 — `Member.LastPaymentAmount` Is `Integer` — Truncates GST Amounts --done
 **Severity:** MEDIUM  
 **File:** `models/all_models.py`  
 **Status:** NEW — not in previous audits
@@ -750,7 +750,7 @@ Alembic migration: `ALTER TABLE "Member" ALTER COLUMN "LastPaymentAmount" TYPE N
 
 ---
 
-### SCH-NEW-03 — `PricingConfig` Has No Unique Constraint for `configType='pt'`
+### SCH-NEW-03 — `PricingConfig` Has No Unique Constraint for `configType='pt'` --done
 **Severity:** MEDIUM  
 **File:** `models/all_models.py`, `PricingConfig`  
 **Status:** NEW — not in previous audits
@@ -773,7 +773,7 @@ Index(
 
 ---
 
-### SCH-NEW-04 — Dashboard Invoice Aggregates Include Soft-Deleted Invoices
+### SCH-NEW-04 — Dashboard Invoice Aggregates Include Soft-Deleted Invoices -- done
 **Severity:** LOW  
 **File:** `routers/dashboard.py`, `_compute_stats()`  
 **Status:** NEW — not in previous audits
@@ -790,7 +790,7 @@ Does not filter `Invoice.isDeleted == False`. A soft-deleted invoice with `PENDI
 
 ---
 
-### SCH-NEW-05 — No Database-Level `CHECK` Constraints on Enum Columns
+### SCH-NEW-05 — No Database-Level `CHECK` Constraints on Enum Columns -- done
 **Severity:** MEDIUM  
 **File:** `models/all_models.py`  
 **Status:** NEW — not in previous audits
@@ -872,7 +872,7 @@ This section quantifies every write path at scale and flags the ones that will h
 
 ---
 
-## Section 5 — Redundant Relationships
+## Section 5 — Redundant Relationships --- done
 
 | Relationship | Issue | Risk |
 |---|---|---|

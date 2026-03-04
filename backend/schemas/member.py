@@ -20,7 +20,7 @@ class MemberBase(BaseModel):
     MembershipExpiryDate: Optional[str] = None
     LastPaymentDate: Optional[str] = None
     NextDuedate: Optional[str] = None
-    LastPaymentAmount: Optional[int] = None
+    LastPaymentAmount: Optional[float] = None  # SCH-NEW-02: was int — truncated decimal/GST amounts
     RenewalReceiptNumber: Optional[int] = None
     Aadhaar: Optional[int] = None
     Remark: Optional[str] = None

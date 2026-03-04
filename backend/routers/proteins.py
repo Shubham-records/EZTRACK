@@ -299,8 +299,7 @@ def bulk_create_proteins(data: dict, current_gym: Gym = Depends(get_current_gym)
             
             protein = ProteinStock(
                 gymId=current_gym.id,
-                Year=str(stock_data.get("Year", "")),
-                Month=str(stock_data.get("Month", "")),
+                # SCH-NEW-01: Year/Month string columns removed — use ProteinLot.purchaseDate for grouping
                 Brand=stock_data.get("Brand"),
                 ProductName=stock_data.get("ProductName"),
                 Flavour=stock_data.get("Flavour"),
@@ -592,7 +591,16 @@ def adjust_protein_stock(
     
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
-    
+
+    # SCH-NORM-03: Explicit cross-tenant guard before inserting ProteinLot.
+    # Same invariant as create_protein_lot — documents that lot.gymId must
+    # always equal the parent stock's gymId.
+    if protein.gymId != current_gym.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Protein does not belong to this gym",
+        )
+
     current_qty = protein.Quantity or 0
     new_qty = current_qty + adjustment
     
@@ -657,6 +665,16 @@ def create_protein_lot(
     protein = db.query(ProteinStock).filter(ProteinStock.id == protein_id, ProteinStock.gymId == current_gym.id).first()
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
+
+    # SCH-NORM-03: Explicit cross-tenant guard before inserting ProteinLot.
+    # ProteinLot.gymId is denormalized from ProteinStock.gymId for query
+    # efficiency. The query above already enforces ownership, but this makes
+    # the invariant explicit so any future refactor can't silently drop it.
+    if protein.gymId != current_gym.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Protein does not belong to this gym",
+        )
 
     try:
         quantity = int(data.get('quantity') or 0)

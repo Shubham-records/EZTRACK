@@ -245,9 +245,15 @@ def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db
             existing = query.filter(or_(*conditions)).first()
         
         if existing:
+            # SEC-NEW-09: Return minimal safe fields only — no phone numbers, no addresses, no Aadhaar
             conflicts.append({
                 "importData": member_data,
-                "existingMember": map_member_response(existing),
+                "existingMember": {
+                    "id": existing.id,
+                    "Name": existing.Name,
+                    "maskedPhone": existing.Mobile[:2] + "******" + existing.Mobile[-2:] if existing.Mobile and len(existing.Mobile) >= 4 else None,
+                    "DateOfJoining": format_date(existing.DateOfJoining),
+                },
                 "matchedOn": "Name" if existing.Name == name else "Mobile/Whatsapp"
             })
         else:
