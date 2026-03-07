@@ -294,20 +294,25 @@ async def _compute_stats_async(gym_id: str, db: AsyncSessionLocal) -> dict:
 
 
 def _stats_from_summary(summary: GymDailySummary) -> dict:
-    """Helper to deserialize stats from GymDailySummary."""
+    """Helper to deserialize stats from GymDailySummary.
+    ARCH-NEW-02 fix: field names aligned to actual model columns:
+      totalIncome → todayCollection proxy, weekToDateIncome, monthToDateIncome,
+      totalExpenses, pendingBalance, lowStockCount.
+    """
     return {
-        "activeMembers": summary.activeMembers,
-        "expiringToday": summary.expiringToday,
-        "expiringThisWeek": summary.expiringThisWeek,
-        "todayCollection": float(summary.todayCollection or 0),
-        "weekCollection": float(summary.weekCollection or 0),
-        "monthCollection": float(summary.monthCollection or 0),
-        "pendingBalance": float(summary.pendingBalance or 0),
-        "todayExpenses": float(summary.todayExpenses or 0),
-        "monthExpenses": float(summary.monthExpenses or 0),
-        "netProfit": float(summary.netProfit or 0),
-        "lowStockItems": summary.lowStockItems,
-        "lastUpdated": summary.updatedAt.isoformat(),
+        "activeMembers":    summary.activeMembers or 0,
+        "expiringToday":    summary.expiringToday or 0,
+        "expiringThisWeek": 0,   # not stored in model — omit from cache hit
+        "todayCollection":  float(summary.totalIncome or 0),
+        "weekCollection":   float(summary.weekToDateIncome or 0),
+        "monthCollection":  float(summary.monthToDateIncome or 0),
+        "pendingBalance":   float(summary.pendingBalance or 0),
+        "todayExpenses":    0,   # not stored in model — omit from cache hit
+        "monthExpenses":    float(summary.totalExpenses or 0),
+        "netProfit":        round(float(summary.monthToDateIncome or 0) - float(summary.totalExpenses or 0), 2),
+        "lowStockItems":    summary.lowStockCount or 0,
+        "lastUpdated":      summary.updatedAt.isoformat(),
+        "_source":          "summary_cache",
     }
 
 
@@ -363,14 +368,17 @@ class GymStreamManager:
             logger.error(f"[SSE] Gym {gym_id} pump error: {e}")
 
     async def _fetch_or_compute(self, gym_id: str) -> dict:
-        """ARCH-NEW-02: Check cache before hitting live tables."""
+        """ARCH-NEW-02: Check cache before hitting live tables.
+        BUGFIX: use summaryDate (not .date) to match GymDailySummary model column.
+        BUGFIX: upsert uses model column names (totalIncome, weekToDateIncome, etc.)
+        """
         async with AsyncSessionLocal() as db:
-            # 1. Try hitting the Summary table first (fresher than 5 mins limit)
+            # 1. Try hitting the Summary table first (fresher than 5 min)
             stale_threshold = datetime.now() - timedelta(minutes=5)
             summary = (await db.execute(
                 select(GymDailySummary).filter(
                     GymDailySummary.gymId == gym_id,
-                    GymDailySummary.date == date.today(),
+                    GymDailySummary.summaryDate == date.today(),   # FIXED: was .date
                     GymDailySummary.updatedAt > stale_threshold
                 )
             )).scalar_one_or_none()
@@ -378,34 +386,32 @@ class GymStreamManager:
             if summary:
                 return _stats_from_summary(summary)
 
-            # 2. Live computation needed
+            # 2. Cache miss — run live aggregate queries
             stats = await _compute_stats_async(gym_id, db)
 
-            # 3. Upsert into Summary Table
+            # 3. Upsert into GymDailySummary using correct column names
             summary = (await db.execute(
                 select(GymDailySummary).filter(
                     GymDailySummary.gymId == gym_id,
-                    GymDailySummary.date == date.today()
+                    GymDailySummary.summaryDate == date.today(),   # FIXED: was .date
                 )
             )).scalar_one_or_none()
 
             if not summary:
-                summary = GymDailySummary(gymId=gym_id, date=date.today())
+                summary = GymDailySummary(gymId=gym_id, summaryDate=date.today())  # FIXED: was date=
                 db.add(summary)
-            
-            summary.activeMembers = stats["activeMembers"]
-            summary.expiringToday = stats["expiringToday"]
-            summary.expiringThisWeek = stats["expiringThisWeek"]
-            summary.todayCollection = stats["todayCollection"]
-            summary.weekCollection = stats["weekCollection"]
-            summary.monthCollection = stats["monthCollection"]
-            summary.pendingBalance = stats["pendingBalance"]
-            summary.todayExpenses = stats["todayExpenses"]
-            summary.monthExpenses = stats["monthExpenses"]
-            summary.netProfit = stats["netProfit"]
-            summary.lowStockItems = stats["lowStockItems"]
-            summary.updatedAt = datetime.now()
-            
+
+            # FIXED: map stats keys to actual model column names
+            summary.activeMembers     = stats["activeMembers"]
+            summary.expiringToday     = stats["expiringToday"]
+            summary.totalIncome       = stats["todayCollection"]       # model col: totalIncome
+            summary.weekToDateIncome  = stats["weekCollection"]        # model col: weekToDateIncome
+            summary.monthToDateIncome = stats["monthCollection"]       # model col: monthToDateIncome
+            summary.pendingBalance    = stats["pendingBalance"]
+            summary.totalExpenses     = stats["monthExpenses"]         # model col: totalExpenses
+            summary.lowStockCount     = stats["lowStockItems"]         # model col: lowStockCount
+            summary.updatedAt         = datetime.now()
+
             await db.commit()
             return stats
 

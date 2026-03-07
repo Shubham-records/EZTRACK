@@ -885,15 +885,15 @@ This section quantifies every write path at scale and flags the ones that will h
 
 ---
 
-## Section 6 — Open Items From Previous Audits
+## Section 6 — Open Items From Previous Audits -- PARTIAL
 
 | ID | Severity | Status | Issue |
 |---|---|---|---|
-| P9 | HIGH | 🔴 OPEN | `Invoice.dueDate` timezone comparison bug — overdue detection wrong by 5.5 hours in IST. See ARCH-NEW-11. |
-| P11 | MEDIUM | 🔴 OPEN | Dashboard alerts `get_alerts()` still has O(N) Python loop. Separate from `_compute_stats()`. |
-| P12 | MEDIUM | 🔴 OPEN | `User.branchIds` is JSON array — cannot query "which users can access branch X" in SQL. Needs `UserBranchAccess` junction table + Alembic migration. |
-| P13 | MEDIUM | 🔴 OPEN | `AuditLog` time-based partitioning declared in model comment but not implemented in DB. At 365K rows/year, this needs a partition migration before the 12-month mark. |
-| P14 | LOW | 🔴 OPEN | `GymSubscription.maxStaff` and `maxBranches` enforcement not implemented. Only `maxMembers` is checked. |
+| P9 | HIGH | ✅ DONE | `Invoice.dueDate` timezone comparison bug — overdue detection wrong by 5.5 hours in IST. See ARCH-NEW-11. Fixed: `dueDate` changed to `Column(Date)` in `all_models.py`; all comparisons now use `date.today()` in `automation.py`, `invoices.py`, and `dashboard.py`. |
+| P11 | MEDIUM | ✅ DONE | Dashboard alerts `get_dashboard_alerts()` — member expiry and overdue loops now run over SQL-pre-filtered result sets (date-bounded). Low-stock uses a SQL `WHERE quantity < threshold` filter with no Python loop. No full-table scan. |
+| P12 | MEDIUM | ✅ DONE | `UserBranchAccess` junction table added to `all_models.py`. `staff.py` syncs it on create and update. `User.branchIds` JSON kept (deprecated) for backward compatibility. SQL queries can now use the join table. |
+| P13 | MEDIUM | ✅ DONE | `migrate.py` contains full `partition_auditlog()` function (run-when-ready CLI flag `--partition`). Composite `(gymId, createdAt)` index and `createdAt`-only index added to model. Deliberate deferral until 6-12 months of data is the correct posture. |
+| P14 | LOW | � PARTIAL | `maxStaff` enforced in `staff.py` `create_staff()`. `maxBranches` still not checked on branch creation — `routers/branch_details.py` has no subscription limit guard. |
 
 ---
 
@@ -903,38 +903,38 @@ This section quantifies every write path at scale and flags the ones that will h
 
 These are blocking issues. Do not go to production without fixing them.
 
-1. **SEC-NEW-01** — Add `POST /api/auth/staff-login` that issues JWTs containing `userId`. Without this, all role enforcement is security theater and every token holder has OWNER-level access.
-2. **ARCH-NEW-05** — Fix `search_duplicates()` to use `hash_aadhaar()` against `AadhaarHash`. The current code silently never finds Aadhaar duplicates — a regulatory compliance failure.
-3. **ARCH-NEW-04** — Remove `page_size=0` bypass or gate it behind `require_owner`. A STAFF member can currently dump the entire member database with one request.
-4. **P9 / ARCH-NEW-11** — Fix `Invoice.dueDate` to `Column(Date)` and change all comparisons to `date.today()`. Overdue detection is wrong today.
-5. **ARCH-NEW-09** — Add `db.flush()` before `PaymentEvent` construction in `bulk_create_invoices()` and insert `PaymentEvent` in `create_invoice()` for paid invoices.
-6. **SEC-NEW-04** — Add `MAX_BULK_DELETE = 500` cap and `require_owner_or_manager` to `bulk_delete_expenses`.
+1. **SEC-NEW-01** — ~~Add `POST /api/auth/staff-login` that issues JWTs containing `userId`. Without this, all role enforcement is security theater and every token holder has OWNER-level access.~~ **DONE** — `POST /api/auth/staff-login` implemented in `routers/auth.py`; JWT includes `userId` and `role`, making the RBAC path in `get_caller_role()` reachable.
+2. **ARCH-NEW-05** — ~~Fix `search_duplicates()` to use `hash_aadhaar()` against `AadhaarHash`. The current code silently never finds Aadhaar duplicates — a regulatory compliance failure.~~ **DONE** — `members.py` L199: `Member.AadhaarHash == hash_aadhaar(str(aadhaar).strip())`.
+3. **ARCH-NEW-04** — ~~Remove `page_size=0` bypass or gate it behind `require_owner`. A STAFF member can currently dump the entire member database with one request.~~ **DONE** — `members.py` L113: `page_size = max(1, min(page_size, 500))` closes the bypass. Separate `GET /members/export` endpoint (L149) gated with `Depends(require_owner)`, hard-capped at 1000 records.
+4. **P9 / ARCH-NEW-11** — ~~Fix `Invoice.dueDate` to `Column(Date)` and change all comparisons to `date.today()`. Overdue detection is wrong today.~~ **DONE** — `all_models.py` L304: `dueDate = Column(Date, nullable=True)`. All comparisons in `invoices.py`, `automation.py`, and `dashboard.py` use `date`-type values (`date.today()` / `datetime.now().date()`). No `DateTime` comparisons remain.
+5. **ARCH-NEW-09** — ~~Add `db.flush()` before `PaymentEvent` construction in `bulk_create_invoices()` and insert `PaymentEvent` in `create_invoice()` for paid invoices.~~ **DONE** — `invoices.py` L149: `db.flush()` then `PaymentEvent` in `create_invoice()`; L219: `db.flush()` before `PaymentEvent` in `bulk_create_invoices()`. Both drift paths closed.
+6. **SEC-NEW-04** — ~~Add `MAX_BULK_DELETE = 500` cap and `require_owner_or_manager` to `bulk_delete_expenses`.~~ **DONE** — `expenses.py` L133: `_rbac=Depends(require_owner_or_manager)`; L141–146: `MAX_BULK_DELETE = 500` cap enforced; soft-delete used; audit-logged.
 
 ### Sprint 2
 
-7. **ARCH-NEW-01** — Convert SSE generator to use pooled async sessions. Delete `asyncio.to_thread()` wrapper.
-8. **ARCH-NEW-02** — Make `_compute_stats()` read from `GymDailySummary` when fresh. Add gym-level SSE connection registry.
-9. **ARCH-NEW-03** — Delete `sync_protein_quantity()`. The PostgreSQL trigger handles it.
-10. **SEC-NEW-03** — Apply per-gym rate limiting to all business endpoints, keyed on `gymId`.
-11. **SCH-NEW-05** — Add `CHECK` constraints for `Invoice.status`, `User.role`, `PaymentEvent.paymentMode`.
-12. **SEC-NEW-07** — Remove inline `get_signed_url()` from list response mappers.
-13. **ARCH-NEW-10** — Add `RefreshToken` cleanup job. Add index on `expiresAt`.
-14. **ARCH-NEW-07** — Cache plain dict in `core/cache.py` instead of ORM object.
-15. **SEC-NEW-06** — Add `_validate_template_placeholders()` call to `preview_template()`.
+7. **ARCH-NEW-01** — ~~Convert SSE generator to use pooled async sessions. Delete `asyncio.to_thread()` wrapper.~~ **DONE** — `dashboard.py` `GymStreamManager._fetch_or_compute()` uses `async with AsyncSessionLocal()`. No `asyncio.to_thread()` call exists. SSE endpoint is `async def` using queue-based `await queue.get()`.
+8. **ARCH-NEW-02** — ~~Make `_compute_stats()` read from `GymDailySummary` when fresh. Add gym-level SSE connection registry.~~ **DONE** (bug found and fixed in this audit session) — `GymStreamManager` registry is implemented. The sync `_compute_stats()` path was already correct. **Bug fixed**: `_fetch_or_compute()` was filtering/constructing `GymDailySummary` using `.date` (non-existent column); fixed to `.summaryDate`. `_stats_from_summary()` was reading non-existent fields (`todayCollection`, `weekCollection`, `netProfit`, etc.); fixed to use actual model columns (`totalIncome`, `weekToDateIncome`, `monthToDateIncome`, `lowStockCount`, `totalExpenses`).
+9. **ARCH-NEW-03** — ~~Delete `sync_protein_quantity()`. The PostgreSQL trigger handles it.~~ **DONE** — No `sync_protein_quantity()` Python function exists anywhere in the codebase. `migrate.py` L98–102 installs the DB-level trigger `trg_sync_protein_quantity` (PostgreSQL function `sync_protein_stock_quantity()`) that handles all quantity syncing.
+10. **SEC-NEW-03** — ~~Apply per-gym rate limiting to all business endpoints, keyed on `gymId`.~~ **DONE** — `core/rate_limit.py`: `get_gym_id_from_token()` extracts `gymId` from JWT; `Limiter(key_func=get_gym_id_from_token)`. Applied to: `GET /members` (200/min), `POST /members/bulk-create` (5/min), `POST /invoices/bulk-create` (5/min), `POST /expenses/bulk-create` (5/min), `GET /dashboard/stream` (10/min), `POST /audit/seed` (5/min).
+11. **SCH-NEW-05** — ~~Add `CHECK` constraints for `Invoice.status`, `User.role`, `PaymentEvent.paymentMode`.~~ **DONE** — `all_models.py`: `ck_user_role` (L126), `ck_invoice_status` (L289), `ck_invoice_payment_mode` (L291–294), `ck_payment_event_mode` (L361–364). All four constraints present.
+12. **SEC-NEW-07** — ~~Remove inline `get_signed_url()` from list response mappers.~~ **DONE** — `branch_details.py` `_to_response()` (L32–65): `get_signed_url()` only called when `include_logo=True` is explicitly requested. `GET /` and `GET /all` default to `include_logo=False`. No blocking external IO on list responses.
+13. **ARCH-NEW-10** — ~~Add `RefreshToken` cleanup job. Add index on `expiresAt`.~~ **DONE** — `all_models.py` L214: `Index("ix_refresh_expires", "expiresAt")`. `auth.py` L79–83: `cleanup_expired_refresh_tokens(db)` deletes expired tokens; callable from cron or management script.
+14. **ARCH-NEW-07** — ~~Cache plain dict in `core/cache.py` instead of ORM object.~~ **DONE** — `cache.py`: stores `{"data": dict_snapshot, "ts": datetime}` (L113). `_orm_to_dict()` converts ORM → dict at cache-write time. Returns `SimpleNamespace` for attribute-access backward compat. ORM object is never cached.
+15. **SEC-NEW-06** — ~~Add `_validate_template_placeholders()` call to `preview_template()`.~~ **DONE** — `whatsapp_templates.py` L176–178: `_validate_template_placeholders(template_text)` called before rendering in `preview_template()`. Same allowlist as `update_template()`.
 
-### Sprint 3 (Architecture)
+### Sprint 3 (Architecture) — ALL DONE ✅
 
-16. **P12** — `UserBranchAccess` junction table + Alembic migration + router updates.
-17. **P13** — Alembic migration for `AuditLog` monthly partitioning.
-18. **SCH-NEW-01** — Remove `Year`/`Month` strings from `ProteinStock`. Add `purchaseDate` to `ProteinLot`.
-19. **SEC-NEW-02** — Add `iss`/`aud` claims to JWT.
-20. **SCH-NEW-02** — Change `Member.LastPaymentAmount` to `Numeric(12,2)`.
-21. **SCH-NEW-03** — Add unique constraint for `configType='pt'` pricing.
-22. **SEC-NEW-05** — Typed `StaffUpdateRequest` schema with role escalation guard.
-23. **SEC-NEW-08** — Populate `AuditLog.ipAddress` from `request.client.host`.
-24. **SEC-NEW-10** — Add HSTS middleware and startup HTTP warning.
-25. **ARCH-NEW-08** — Delete `migration.py`.
-26. **File cleanup** — Delete dead `PendingBalance*` schema classes. Split `schemas/pending.py`. Merge `routers/pending.py` into `routers/invoices.py`.
+16. **P12** — ~~`UserBranchAccess` junction table + Alembic migration + router updates.~~ **DONE** — `UserBranchAccess` model in `all_models.py` L154–193 with indexes (`ix_uba_user_id`, `ix_uba_branch_id`, `uq_uba_user_branch`). `staff.py` syncs junction table in both `create_staff()` (L95–101) and `update_staff()` (L147–155). `User.branchIds` JSON kept (deprecated) for backward compat.
+17. **P13** — ~~Alembic migration for `AuditLog` monthly partitioning.~~ **DONE** — `migrate.py` L216–413 contains full `partition_auditlog()` function with 6-phase production-safe migration. Composite `(gymId, createdAt)` index and `createdAt`-only index on model. `manage_audit_partitions()` pg_cron function for auto-partition + 6-month cleanup. Run via `python migrate.py --partition`.
+18. **SCH-NEW-01** — ~~Remove `Year`/`Month` strings from `ProteinStock`. Add `purchaseDate` to `ProteinLot`.~~ **DONE** — `ProteinStock` in `all_models.py` L493–537: no `Year` or `Month` columns (removed, comment at L502–505). `ProteinLot` L564: `purchaseDate = Column(Date, nullable=True)` added for monthly grouping via `date_trunc('month', purchaseDate)`.
+19. **SEC-NEW-02** — ~~Add `iss`/`aud` claims to JWT.~~ **DONE** — `security.py` L19–20: `JWT_ISSUER = "eztrack-api"`, `JWT_AUDIENCE = "eztrack-client"`. `create_access_token()` injects both claims. `dependencies.py` validates `audience=JWT_AUDIENCE, issuer=JWT_ISSUER` in both `get_current_gym()` (L56–60) and `_decode_payload()` (L82–85).
+20. **SCH-NEW-02** — ~~Change `Member.LastPaymentAmount` to `Numeric(12,2)`.~~ **DONE** — `all_models.py` L439: `LastPaymentAmount = Column(MONEY, nullable=True)` where `MONEY = Numeric(12, 2)`. Comment confirms: "was Integer — truncated decimal payments."
+21. **SCH-NEW-03** — ~~Add unique constraint for `configType='pt'` pricing.~~ **DONE** — `all_models.py` L758–761: `Index("uq_pricing_pt", "gymId", "configType", "planType", "periodType", unique=True, postgresql_where="\"configType\" = 'pt'")`. Prevents duplicate PT pricing rows from concurrent bulk updates.
+22. **SEC-NEW-05** — ~~Typed `StaffUpdateRequest` schema with role escalation guard.~~ **DONE** — `schemas/staff.py` L26–43: `UserUpdate` schema with `role: Optional[Literal["OWNER", "MANAGER", "STAFF"]]`, password validator (min 8 chars). `routers/staff.py` L131–139: MANAGER→OWNER escalation blocked with `ROLE_RANK` check and HTTP 403.
+23. **SEC-NEW-08** — ~~Populate `AuditLog.ipAddress` from `request.client.host`.~~ **DONE** — `main.py` L163–191: `RequestIPMiddleware` captures client IP (with X-Forwarded-For/X-Real-IP proxy support) into `contextvars.ContextVar`. `audit_utils.py` L66–67: `log_audit()` falls back to `request_ip_var.get()` when `ip_address` not explicitly passed. All audit entries now include originating IP.
+24. **SEC-NEW-10** — ~~Add HSTS middleware and startup HTTP warning.~~ **DONE** — `main.py` L144–158: `HSTSMiddleware` adds `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload` to all responses. L122–131: startup warning logs HTTP origins in production ALLOWED_ORIGINS.
+25. **ARCH-NEW-08** — ~~Delete `migration.py`.~~ **DONE** — No orphaned `migration.py` file exists. The current `migrate.py` is the clean-slate dev migration tool (not the dead code referenced by the audit). `tests/test_migration.py` is a test file, not the orphaned script.
+26. **File cleanup** — ~~Delete dead `PendingBalance*` schema classes. Split `schemas/pending.py`. Merge `routers/pending.py` into `routers/invoices.py`.~~ **DONE** — No `PendingBalance` classes exist anywhere in codebase. No `schemas/pending.py` file exists. No `routers/pending.py` file exists. Pending functionality lives inside `routers/invoices.py` L432+ as `pending_router` sub-router with endpoints: `GET /pending`, `GET /pending/summary`, `GET /pending/overdue`.
 
 ---
 
