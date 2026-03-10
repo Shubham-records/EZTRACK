@@ -84,14 +84,13 @@ def create_staff(
         password=hashed_password,
         role=data.role,
         permissions=data.permissions,
-        branchIds=data.branchIds,
         activeBranchId=data.activeBranchId,
     )
 
     db.add(new_user)
     db.flush()  # assign new_user.id
 
-    # P12: Sync UserBranchAccess
+    # Sync UserBranchAccess junction table
     if data.branchIds:
         for bid in data.branchIds:
             uba = UserBranchAccess(
@@ -147,11 +146,8 @@ def update_staff(
     if data.activeBranchId is not None:
         user.activeBranchId = data.activeBranchId
     if data.branchIds is not None:
-        user.branchIds = data.branchIds
-        # P12: Sync UserBranchAccess
-        # Remove old ones
+        # Replace UserBranchAccess rows
         db.query(UserBranchAccess).filter(UserBranchAccess.userId == user.id).delete()
-        # Add new ones
         for bid in data.branchIds:
             uba = UserBranchAccess(
                 userId=user.id,

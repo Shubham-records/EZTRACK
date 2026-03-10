@@ -134,15 +134,14 @@ class User(Base):
     role        = Column(String, default="STAFF")        # OWNER | MANAGER | STAFF
     permissions = Column(ARRAY(String), nullable=True)   # granular permission list
 
-    # Multi-branch access control
-    branchIds      = Column(JSON, nullable=True)   # list of Branch.id this user can access
+    # Multi-branch: active branch for the current session
     activeBranchId = Column(String, nullable=True)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     gym = relationship("Gym", back_populates="users")
-    # P12: relationship to structured branch access (replaces .branchIds JSON)
+    # Branch access managed via UserBranchAccess junction table
     branchAccess = relationship("UserBranchAccess", back_populates="user",
                                 cascade="all, delete-orphan")
 
@@ -153,20 +152,13 @@ class User(Base):
 
 class UserBranchAccess(Base):
     """
-    P12: Replaces `User.branchIds = Column(JSON)` with a normalized junction table.
+    Normalized junction table for user-to-branch access control.
 
-    Benefits over JSON:
-    - SQL query: 'which users can access branch X' is now a simple JOIN, not a JSON scan
-    - Can add permissions per branch (e.g., a MANAGER at HQ but STAFF at Satellite branch)
+    Benefits:
+    - SQL query: 'which users can access branch X' is a simple JOIN
     - Foreign key integrity on Branch.id
     - Index on branchId enables fast branch-level access control checks
-
-    Migration path:
-    - `User.branchIds` JSON column is kept (DEPRECATED) for backward compatibility with
-      the frontend until it is updated to use the new junction table API.
-    - Both columns are written in sync by `routers/staff.py:update_staff()`.
-    - New code SHOULD read from `UserBranchAccess`.
-    - Old code reading `User.branchIds` still works.
+    - Per-branch role overrides (e.g. MANAGER at HQ, STAFF at satellite)
     """
     __tablename__ = "UserBranchAccess"
     __table_args__ = (
@@ -205,22 +197,29 @@ class RefreshToken(Base):
     On logout, the refresh token is revoked (isRevoked=True).
     The token stored here is the SHA-256 hash of the actual token string
     so raw token values never appear in the database.
+
+    SEC-12: Token family rotation for theft detection:
+    - Each login creates a new token family (random UUID).
+    - On refresh, the new token inherits the same family.
+    - If a revoked token from the same family is reused, ALL tokens
+      in that family are revoked — indicating the original was stolen.
     """
     __tablename__ = "RefreshToken"
     __table_args__ = (
         Index("ix_refresh_gym",     "gymId"),
         Index("ix_refresh_token",   "tokenHash", unique=True),
-        # ARCH-NEW-10: Index on expiresAt for cleanup queries and _revoke_all_refresh_tokens scans
         Index("ix_refresh_expires", "expiresAt"),
+        Index("ix_refresh_family",  "tokenFamily"),
     )
 
     id         = Column(String, primary_key=True, default=generate_uuid)
     gymId      = Column(String, ForeignKey("Gym.id"), nullable=False)
     userId     = Column(String, ForeignKey("User.id"), nullable=True)  # null = gym owner
 
-    tokenHash  = Column(String(64), nullable=False)   # SHA-256 hex of the raw token
-    isRevoked  = Column(Boolean, default=False)
-    expiresAt  = Column(DateTime(timezone=True), nullable=False)
+    tokenHash    = Column(String(64), nullable=False)   # SHA-256 hex of the raw token
+    tokenFamily  = Column(String, nullable=False, default=generate_uuid)  # SEC-12: rotation family
+    isRevoked    = Column(Boolean, default=False)
+    expiresAt    = Column(DateTime(timezone=True), nullable=False)
 
     createdAt  = Column(DateTime(timezone=True), default=func.now())
 
@@ -387,15 +386,17 @@ class Member(Base):
     __tablename__ = "Member"
     __table_args__ = (
         Index("ix_member_gym_id",      "gymId"),
-        # FIX: removed ix_member_gym_status index on stale MembershipStatus column.
-        # Filter on NextDuedate using computed_status.expression instead.
         Index("ix_member_gym_receipt", "gymId", "MembershipReceiptnumber"),
         Index("ix_member_gym_expiry",  "gymId", "MembershipExpiryDate"),
         Index("ix_member_gym_nextdue", "gymId", "NextDuedate"),
         # PERF-1: partial index for computed_status == "Active" queries
-        # Covers the majority of dashboard/member-list filters at fraction of full-table cost
         Index("ix_member_gym_active", "gymId", "NextDuedate",
               postgresql_where=Column("NextDuedate").isnot(None)),
+        # PERF-2: GIN trigram indexes for ILIKE search (requires: CREATE EXTENSION pg_trgm)
+        Index("ix_member_name_trgm", "Name", postgresql_using="gin",
+              postgresql_ops={"Name": "gin_trgm_ops"}),
+        Index("ix_member_mobile_trgm", "Mobile", postgresql_using="gin",
+              postgresql_ops={"Mobile": "gin_trgm_ops"}),
     )
 
     id    = Column(String, primary_key=True, default=generate_uuid)
@@ -571,7 +572,7 @@ class ProteinLot(Base):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GymDailySummary  (pre-computed dashboard cache — written by background job)
+# GymDailySummary  (SSE dashboard stats cache — written by dashboard.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GymDailySummary(Base):
@@ -589,14 +590,13 @@ class GymDailySummary(Base):
     renewals       = Column(Integer, default=0)
     expiringToday  = Column(Integer, default=0)
 
-    totalIncome    = Column(MONEY, default=0)   # ARCH-03
+    totalIncome    = Column(MONEY, default=0)
     totalExpenses  = Column(MONEY, default=0)
     pendingBalance = Column(MONEY, default=0)
     lowStockCount  = Column(Integer, default=0)
 
-    # SCH-06: Week/month aggregates so dashboard doesn't run live SUM queries
-    weekToDateIncome  = Column(MONEY, default=0)   # Mon–today income
-    monthToDateIncome = Column(MONEY, default=0)   # 1st–today income
+    weekToDateIncome  = Column(MONEY, default=0)
+    monthToDateIncome = Column(MONEY, default=0)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
@@ -622,8 +622,8 @@ class GymSettings(Base):
 
     # GST
     enableGST        = Column(Boolean, default=False)
-    memberGSTPercent = Column(MONEY, default=18.0)   # ARCH-03
-    proteinGSTPercent = Column(MONEY, default=18.0)
+    memberGSTPercent = Column(Numeric(5, 2), default=18.0)    # percentage, not currency
+    proteinGSTPercent = Column(Numeric(5, 2), default=18.0)
     gstin            = Column(String, nullable=True)
     showGSTBreakup   = Column(Boolean, default=True)
     hsnService       = Column(String, default="99979")
@@ -676,6 +676,7 @@ class Expense(Base):
     gymId = Column(String, ForeignKey("Gym.id"), nullable=False)
 
     category    = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
     amount      = Column(MONEY, nullable=False)   # ARCH-03: was Float
     date        = Column(Date, nullable=False)
     paymentMode = Column(String, nullable=True)

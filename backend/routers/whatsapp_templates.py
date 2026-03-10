@@ -1,11 +1,12 @@
 import html
 import re
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 
 from core.database import get_db
 from core.dependencies import get_current_gym
+from core.rate_limit import rate_limit
 from models.all_models import Gym, WhatsAppTemplate
 from schemas.whatsapp import WhatsAppTemplateCreate, WhatsAppTemplateUpdate, WhatsAppTemplateResponse
 
@@ -41,13 +42,21 @@ DEFAULT_TEMPLATES = {
 }
 
 
+_initialized_gyms: set[str] = set()
+
+
 def ensure_default_templates(gym_id: str, db: Session):
-    """Create default templates for a gym if they don't exist."""
-    # DATA-5: Early exit — skip all work if templates already initialised
+    """Create default templates for a gym if they don't exist.
+    Uses in-memory cache to skip the DB check after first initialization per process.
+    """
+    if gym_id in _initialized_gyms:
+        return
+
     count = db.query(WhatsAppTemplate).filter(
         WhatsAppTemplate.gymId == gym_id
     ).count()
     if count >= len(DEFAULT_TEMPLATES):
+        _initialized_gyms.add(gym_id)
         return  # Already initialised, skip all work
 
     existing = db.query(WhatsAppTemplate).filter(
@@ -66,6 +75,7 @@ def ensure_default_templates(gym_id: str, db: Session):
             db.add(template)
 
     db.commit()
+    _initialized_gyms.add(gym_id)
 
 
 @router.get("")
@@ -161,7 +171,9 @@ def update_template(
 
 
 @router.post("/preview")
+@rate_limit("30/minute")
 def preview_template(
+    request: Request,
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),

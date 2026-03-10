@@ -56,26 +56,37 @@ def _derive_fernet_key() -> bytes:
     return base64.urlsafe_b64encode(key_bytes)
 
 
+# ─── Cached singletons — initialized once at first use ────────────────────────
+
+_FERNET_INSTANCE = None
+_HMAC_KEY_INSTANCE = None
+
+
 def _fernet():
-    """Lazy-load Fernet to avoid import errors if cryptography not installed."""
-    try:
-        from cryptography.fernet import Fernet
-        key = _derive_fernet_key()
-        return Fernet(key)
-    except ImportError:
-        raise RuntimeError(
-            "cryptography package is required for Aadhaar encryption. "
-            "Run: pip install cryptography"
-        )
+    """Return a cached Fernet instance (created once, reused for all calls)."""
+    global _FERNET_INSTANCE
+    if _FERNET_INSTANCE is None:
+        try:
+            from cryptography.fernet import Fernet
+            _FERNET_INSTANCE = Fernet(_derive_fernet_key())
+        except ImportError:
+            raise RuntimeError(
+                "cryptography package is required for Aadhaar encryption. "
+                "Run: pip install cryptography"
+            )
+    return _FERNET_INSTANCE
 
 
 def _hmac_key() -> bytes:
-    """Derive a separate 32-byte HMAC key from ENCRYPTION_KEY (second half)."""
-    raw_hex = os.getenv("ENCRYPTION_KEY", "")
-    if len(raw_hex) < 64:
-        return bytes.fromhex(raw_hex.ljust(64, "0"))[:32]
-    # Use SHA-256 of the key for HMAC to domain-separate from encryption key
-    return hashlib.sha256(bytes.fromhex(raw_hex[:64])).digest()
+    """Return a cached HMAC key (derived once from ENCRYPTION_KEY)."""
+    global _HMAC_KEY_INSTANCE
+    if _HMAC_KEY_INSTANCE is None:
+        raw_hex = os.getenv("ENCRYPTION_KEY", "")
+        if len(raw_hex) < 64:
+            _HMAC_KEY_INSTANCE = bytes.fromhex(raw_hex.ljust(64, "0"))[:32]
+        else:
+            _HMAC_KEY_INSTANCE = hashlib.sha256(bytes.fromhex(raw_hex[:64])).digest()
+    return _HMAC_KEY_INSTANCE
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────

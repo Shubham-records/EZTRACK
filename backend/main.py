@@ -160,30 +160,31 @@ app.add_middleware(HSTSMiddleware)
 
 # ─── Request IP Middleware (SEC-NEW-08) ───────────────────────────────────────
 
+# SEC-NEW-08: Only trust proxy headers from known proxies (e.g. Vercel, Cloudflare).
+# Without this, any client can spoof X-Forwarded-For to corrupt audit logs.
+_trusted_proxies_raw = os.getenv("TRUSTED_PROXY_IPS", "")
+TRUSTED_PROXY_IPS = {ip.strip() for ip in _trusted_proxies_raw.split(",") if ip.strip()}
+
 class RequestIPMiddleware(BaseHTTPMiddleware):
     """
     SEC-NEW-08: Capture originating IP address for audit logs.
-    Stores the IP address in a context variable.
+    Only reads proxy headers (X-Forwarded-For, X-Real-IP) when the direct
+    connection comes from a trusted proxy IP.
     """
     async def dispatch(self, request: Request, call_next):
         from core.audit_utils import request_ip_var
-        client_host = request.client.host if request.client else None
-        
-        # Check for proxy headers (like X-Forwarded-For or X-Real-IP)
-        forwarded_for = request.headers.get("x-forwarded-for")
-        real_ip = request.headers.get("x-real-ip")
-        
-        if forwarded_for:
-            # X-Forwarded-For can be a comma-separated list of IPs. First is the original client.
-            client_host = forwarded_for.split(",")[0].strip()
-        elif real_ip:
-            client_host = real_ip
+        direct_ip = request.client.host if request.client else None
 
-        if client_host:
-            token = request_ip_var.set(client_host)
-        else:
-            token = request_ip_var.set(None)
+        client_host = direct_ip
+        if direct_ip in TRUSTED_PROXY_IPS:
+            forwarded_for = request.headers.get("x-forwarded-for")
+            real_ip = request.headers.get("x-real-ip")
+            if forwarded_for:
+                client_host = forwarded_for.split(",")[0].strip()
+            elif real_ip:
+                client_host = real_ip
 
+        token = request_ip_var.set(client_host)
         try:
             response = await call_next(request)
             return response

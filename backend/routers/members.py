@@ -87,9 +87,15 @@ def map_member_response(member: Member, admission_expiry_days: int = 365):
 
 @router.get("/generate-client-number")
 def generate_client_number(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Generate the next available client number"""
+    """Generate the next available client number.
+    Uses SELECT ... FOR UPDATE to serialize concurrent requests per gym.
+    """
     try:
-        max_number = db.query(func.max(Member.MembershipReceiptnumber)).filter(Member.gymId == current_gym.id).scalar()
+        # Lock the gym row to serialize concurrent receipt number generation
+        db.query(Gym).filter(Gym.id == current_gym.id).with_for_update().first()
+        max_number = db.query(func.max(Member.MembershipReceiptnumber)).filter(
+            Member.gymId == current_gym.id,
+        ).scalar()
         next_number = (max_number or 0) + 1
         return {"clientNumber": next_number}
     except Exception as e:
@@ -147,7 +153,9 @@ def get_members(
 
 
 @router.get("/export", dependencies=[Depends(require_owner)])
+@rate_limit("5/minute")
 def export_members(
+    request: Request,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
@@ -219,33 +227,59 @@ def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), d
 
 @router.post("/check-duplicates")
 def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Check for duplicate members before import"""
+    """Check for duplicate members before import. Uses batched queries instead of N+1."""
     members_list = data.get("members", [])
     conflicts = []
     clean = []
-    
+
+    # Collect all names and phone numbers from the import batch
+    all_names = {m.get("Name", "").strip() for m in members_list if m.get("Name")}
+    all_phones = set()
+    for m in members_list:
+        if m.get("Mobile"):
+            all_phones.add(str(m["Mobile"]))
+        if m.get("Whatsapp"):
+            all_phones.add(str(m["Whatsapp"]))
+
+    # Two queries instead of N
+    existing_by_name = {}
+    if all_names:
+        rows = db.query(Member).filter(
+            Member.gymId == current_gym.id,
+            Member.Name.in_(all_names),
+        ).all()
+        for r in rows:
+            existing_by_name[r.Name] = r
+
+    existing_by_phone = {}
+    if all_phones:
+        rows = db.query(Member).filter(
+            Member.gymId == current_gym.id,
+            or_(Member.Mobile.in_(all_phones), Member.Whatsapp.in_(all_phones)),
+        ).all()
+        for r in rows:
+            if r.Mobile:
+                existing_by_phone[r.Mobile] = r
+            if r.Whatsapp:
+                existing_by_phone[r.Whatsapp] = r
+
+    # Match each import row against the pre-fetched sets
     for member_data in members_list:
-        name = member_data.get("Name", "")
-        mobile = member_data.get("Mobile")
-        whatsapp = member_data.get("Whatsapp")
-        
-        # Check if member exists by name or mobile
-        query = db.query(Member).filter(Member.gymId == current_gym.id)
-        
-        conditions = []
-        if name:
-            conditions.append(Member.Name == name)
-        if mobile:
-            conditions.append(Member.Mobile == str(mobile))
-        if whatsapp:
-            conditions.append(Member.Whatsapp == str(whatsapp))
-        
-        existing = None
-        if conditions:
-            existing = query.filter(or_(*conditions)).first()
-        
+        name = member_data.get("Name", "").strip()
+        mobile = str(member_data.get("Mobile", "")) if member_data.get("Mobile") else None
+        whatsapp = str(member_data.get("Whatsapp", "")) if member_data.get("Whatsapp") else None
+
+        existing = existing_by_name.get(name)
+        matched_on = "Name"
+        if not existing and mobile:
+            existing = existing_by_phone.get(mobile)
+            matched_on = "Mobile/Whatsapp"
+        if not existing and whatsapp:
+            existing = existing_by_phone.get(whatsapp)
+            matched_on = "Mobile/Whatsapp"
+
         if existing:
-            # SEC-NEW-09: Return minimal safe fields only — no phone numbers, no addresses, no Aadhaar
+            # SEC-NEW-09: Return minimal safe fields only
             conflicts.append({
                 "importData": member_data,
                 "existingMember": {
@@ -254,24 +288,52 @@ def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db
                     "maskedPhone": existing.Mobile[:2] + "******" + existing.Mobile[-2:] if existing.Mobile and len(existing.Mobile) >= 4 else None,
                     "DateOfJoining": format_date(existing.DateOfJoining),
                 },
-                "matchedOn": "Name" if existing.Name == name else "Mobile/Whatsapp"
+                "matchedOn": matched_on,
             })
         else:
             clean.append(member_data)
-    
+
     return {
         "conflicts": conflicts,
         "clean": clean,
         "conflictCount": len(conflicts),
-        "cleanCount": len(clean)
+        "cleanCount": len(clean),
     }
 
 
 @router.post("/bulk-create")
 @rate_limit("5/minute")
-def bulk_create_members(request: Request, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Bulk create members from import"""
+def bulk_create_members(
+    request: Request,
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
+):
+    """Bulk create members from import. Requires MANAGER+."""
     members_list = data.get("members", [])
+
+    # SEC-14: Enforce maxMembers subscription limit for bulk import
+    subscription = db.query(GymSubscription).filter(
+        GymSubscription.gymId == current_gym.id
+    ).first()
+    if subscription and subscription.maxMembers and subscription.maxMembers > 0:
+        current_count = db.query(func.count(Member.id)).filter(
+            Member.gymId == current_gym.id,
+            Member.isDeleted == False,
+        ).scalar() or 0
+        remaining = subscription.maxMembers - current_count
+        if remaining <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Member limit reached ({subscription.maxMembers}). Upgrade your plan to add more members.",
+            )
+        if len(members_list) > remaining:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Import would exceed member limit. You can add {remaining} more members (limit: {subscription.maxMembers}).",
+            )
+
     created_count = 0
     
     for member_data in members_list:
@@ -348,8 +410,13 @@ def bulk_delete_members(
 
 
 @router.post("/bulk-update")
-def bulk_update_members(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Bulk update members from import merge"""
+def bulk_update_members(
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
+):
+    """Bulk update members from import merge. Requires MANAGER+."""
     members_list = data.get("members", [])
     updated_count = 0
     
@@ -835,7 +902,8 @@ def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_curren
     changed = {}
     
     for key, value in data.items():
-        if key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'tableData']:
+        if key in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'tableData',
+                   'isDeleted', 'deletedAt', 'AadhaarHash', 'hasImage', 'imageUrl']:
              continue
         if hasattr(member, key):
              try:
@@ -866,19 +934,7 @@ def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_curren
     db.refresh(member)
     return map_member_response(member)
 
-@router.patch("", response_model=MemberResponse)
-@router.patch("/", response_model=MemberResponse)
-def update_member(data: MemberUpdate, id: str, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    # Note: Next.js reads 'id' from body, but using query param or path param is standard.
-    # Next.js PATCH: `const { id ... } = data`. So it expects ID in body.
-    # But here I defined `update_member` with `id: str` query param? 
-    # Wait, FastAPI can read from body.
-    # I should redefine logic to accept a Body model that INCLUDES id, or matches Next.js exactly.
-    # But let's assume I fix the frontend or make this ID extraction work.
-    # I'll change signature to take a dict or special Schema.
-    pass
-
-# Redefining PATCH to match Next.js exactly (ID in body)
+# PATCH /update — matches Next.js exactly (ID in body)
 @router.patch("/update", response_model=MemberResponse)
 def update_member_body(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
     member_id = data.get("id")
@@ -890,7 +946,8 @@ def update_member_body(data: dict, current_gym: Gym = Depends(get_current_gym), 
         raise HTTPException(status_code=404, detail="Member not found")
         
     updatable_data = data.copy()
-    for k in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'lastEditedBy', 'editReason', 'tableData']:
+    for k in ['id', '_id', 'gymId', 'createdAt', 'updatedAt', 'lastEditedBy', 'editReason', 'tableData',
+              'isDeleted', 'deletedAt', 'AadhaarHash', 'hasImage', 'imageUrl']:
         updatable_data.pop(k, None)
     
     date_keys = {'DateOfJoining', 'DateOfReJoin', 'MembershipExpiryDate', 'LastPaymentDate', 'NextDuedate'}

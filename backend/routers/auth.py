@@ -23,14 +23,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.dependencies import get_current_gym
 from core.security import verify_password, create_access_token, get_password_hash
 from models.all_models import Gym, Branch, WhatsAppTemplate, RefreshToken, User
-from schemas.auth import LoginRequest, LoginResponse, SignupRequest
+from schemas.auth import LoginRequest, LoginResponse, SignupRequest, RefreshRequest, StaffLoginRequest
 from routers.whatsapp_templates import DEFAULT_TEMPLATES
 
 logger = logging.getLogger(__name__)
@@ -50,8 +49,12 @@ def _create_refresh_token(
     db: Session,
     gym_id: str,
     user_id: str | None = None,
+    token_family: str | None = None,
 ) -> str:
-    """Generate a refresh token, store its hash in DB, return raw token."""
+    """Generate a refresh token, store its hash in DB, return raw token.
+    SEC-12: If token_family is provided, the new token inherits it (rotation).
+    If None, a new family is created (fresh login).
+    """
     raw = secrets.token_urlsafe(48)
     expires = datetime.now(tz=timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
 
@@ -59,6 +62,7 @@ def _create_refresh_token(
         gymId=gym_id,
         userId=user_id,
         tokenHash=_hash_token(raw),
+        tokenFamily=token_family or str(uuid.uuid4()),
         expiresAt=expires,
     )
     db.add(rt)
@@ -76,39 +80,30 @@ def _revoke_all_refresh_tokens(db: Session, gym_id: str, user_id: str | None = N
         q = q.filter(RefreshToken.userId == user_id)
     q.update({"isRevoked": True}, synchronize_session=False)
 
-def cleanup_expired_refresh_tokens(db: Session):
-    """Cleanup — add a function callable from a management script or cron"""
+_login_counter = 0
+_CLEANUP_EVERY_N_LOGINS = 50
+
+
+def _maybe_cleanup_tokens(db: Session) -> None:
+    """Run token cleanup every N logins to prevent unbounded table growth."""
+    global _login_counter
+    _login_counter += 1
+    if _login_counter % _CLEANUP_EVERY_N_LOGINS != 0:
+        return
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=1)
-    db.query(RefreshToken).filter(RefreshToken.expiresAt < cutoff).delete(synchronize_session=False)
-    db.commit()
+    deleted = db.query(RefreshToken).filter(
+        RefreshToken.expiresAt < cutoff,
+    ).delete(synchronize_session=False)
+    if deleted:
+        logger.info("Cleaned up %d expired refresh tokens", deleted)
 
 
 from core.rate_limit import rate_limit as _rate_limit
 
 
-# ─── Schemas ──────────────────────────────────────────────────────────────────
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-class FullLoginResponse(BaseModel):
-    message: str
-    eztracker_jwt_access_control_token: str
-    eztracker_jwt_databaseName_control_token: str
-    refresh_token: str
-
-
-class StaffLoginRequest(BaseModel):
-    """SEC-NEW-01: Staff login credentials."""
-    gym_id: str
-    username: str
-    password: str
-
-
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
-@router.post("/login")
+@router.post("/login", response_model=LoginResponse)
 @router.post("/login/", include_in_schema=False)
 @_rate_limit("10/minute")
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
@@ -128,6 +123,7 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
     # Revoke old refresh tokens and issue a new one
     _revoke_all_refresh_tokens(db, gym.id)
+    _maybe_cleanup_tokens(db)
     raw_refresh = _create_refresh_token(db, gym.id)
     db.commit()
 
@@ -165,9 +161,8 @@ def staff_login(body: StaffLoginRequest, request: Request, db: Session = Depends
     # Issue access token with userId — this is what makes RBAC work in get_caller_role()
     access_token = create_access_token(data={
         "gymId": gym.id,
-        "userId": user.id,        # ← this is what activates the RBAC path
+        "userId": user.id,
         "username": user.username,
-        "role": user.role,
     })
 
     # Revoke old staff refresh tokens and issue a new one scoped to this user
@@ -190,29 +185,50 @@ def staff_login(body: StaffLoginRequest, request: Request, db: Session = Depends
 def refresh_access_token(body: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     """
     Exchange a valid refresh token for a new access token.
-    SEC-03: This is the renewal path — frontend calls this when access token expires.
-    Preserves userId in new token if the refresh token belonged to a staff member.
+    SEC-12: Token family rotation with theft detection.
+    If the token was already revoked (reuse attack), ALL tokens in the family are revoked.
     """
     token_hash = _hash_token(body.refresh_token)
     now = datetime.now(tz=timezone.utc)
 
     rt = db.query(RefreshToken).filter(
         RefreshToken.tokenHash == token_hash,
-        RefreshToken.isRevoked == False,
-        RefreshToken.expiresAt > now,
     ).first()
 
     if not rt:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token is invalid, expired, or revoked.",
+            detail="Refresh token is invalid or expired.",
+        )
+
+    # SEC-12: If this token was already revoked, it means theft — nuke the entire family
+    if rt.isRevoked:
+        db.query(RefreshToken).filter(
+            RefreshToken.tokenFamily == rt.tokenFamily,
+        ).update({"isRevoked": True}, synchronize_session=False)
+        db.commit()
+        logger.warning(
+            "SEC-12: Refresh token reuse detected (family=%s, gym=%s). "
+            "All tokens in family revoked — possible theft.",
+            rt.tokenFamily, rt.gymId,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token reuse detected. All sessions revoked — please log in again.",
+        )
+
+    # Token expired?
+    if rt.expiresAt < now:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has expired.",
         )
 
     gym = db.query(Gym).filter(Gym.id == rt.gymId, Gym.isDeleted == False).first()
     if not gym:
         raise HTTPException(status_code=401, detail="Gym not found.")
 
-    # Rotate: revoke old token, issue new pair
+    # Rotate: revoke old token, issue new pair in the SAME family
     rt.isRevoked = True
 
     # If this was a staff refresh token, preserve userId in the new access token
@@ -223,17 +239,14 @@ def refresh_access_token(body: RefreshRequest, request: Request, db: Session = D
                 "gymId": gym.id,
                 "userId": user.id,
                 "username": user.username,
-                "role": user.role,
             })
-            new_refresh_raw = _create_refresh_token(db, gym.id, user_id=user.id)
+            new_refresh_raw = _create_refresh_token(db, gym.id, user_id=user.id, token_family=rt.tokenFamily)
         else:
-            # User was deleted — fall back to gym owner token
             new_access = create_access_token(data={"gymId": gym.id, "username": gym.username})
-            new_refresh_raw = _create_refresh_token(db, gym.id)
+            new_refresh_raw = _create_refresh_token(db, gym.id, token_family=rt.tokenFamily)
     else:
-        # Gym owner token
         new_access = create_access_token(data={"gymId": gym.id, "username": gym.username})
-        new_refresh_raw = _create_refresh_token(db, gym.id)
+        new_refresh_raw = _create_refresh_token(db, gym.id, token_family=rt.tokenFamily)
 
     db.commit()
 
@@ -287,11 +300,11 @@ def signup(body: SignupRequest, request: Request, db: Session = Depends(get_db))
     default_branch = Branch(
         id=str(uuid.uuid4()),
         gymId=new_gym.id,
-        name=request.GYMNAME,
-        displayName=request.GYMNAME,
+        name=body.GYMNAME,
+        displayName=body.GYMNAME,
         isActive=True,
         isDefault=True,
-        email=request.EMAILID,
+        email=body.EMAILID,
     )
     db.add(default_branch)
 

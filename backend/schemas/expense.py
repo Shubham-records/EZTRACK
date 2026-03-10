@@ -5,6 +5,7 @@ from datetime import datetime
 
 class ExpenseBase(BaseModel):
     category: str
+    description: Optional[str] = None
     amount: float
     date: str  # YYYY-MM-DD
     paymentMode: Optional[str] = None
@@ -19,6 +20,7 @@ class ExpenseCreate(ExpenseBase):
 
 class ExpenseUpdate(BaseModel):
     category: Optional[str] = None
+    description: Optional[str] = None
     amount: Optional[float] = None
     date: Optional[str] = None
     paymentMode: Optional[str] = None

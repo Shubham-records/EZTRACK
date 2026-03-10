@@ -227,8 +227,6 @@ def seed_sample_data(
             MarginPrice=float(margin),
             OfferPrice=float(offer),
             SellingPrice=float(landing_price + margin - offer),
-            Year=str(datetime.now().year),
-            Month=datetime.now().strftime("%B")
         )
         db.add(protein)
         created["proteins"] += 1
