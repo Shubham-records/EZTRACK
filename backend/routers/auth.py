@@ -149,7 +149,8 @@ def staff_login(body: StaffLoginRequest, request: Request, db: Session = Depends
 
     user = db.query(User).filter(
         User.gymId == gym.id,
-        User.username == body.username
+        User.username == body.username,
+        User.isActive == True
     ).first()
     
     if not user or not verify_password(body.password, user.password):

@@ -47,6 +47,47 @@ class ProteinUpdate(BaseModel):
     StockThreshold: Optional[int] = None
 
 
+class ProteinInlineUpdate(BaseModel):
+    """SEC-CRIT-01: Typed schema for PATCH /proteins/update (inline table edit).
+    Only explicitly listed fields can be updated — prevents mass assignment via raw dict.
+    """
+    id: Optional[str] = None    # accepted for convenience, not applied to model
+    Brand: Optional[str] = None
+    ProductName: Optional[str] = None
+    Flavour: Optional[str] = None
+    Weight: Optional[str] = None
+    Quantity: Optional[int] = None
+    MRPPrice: Optional[float] = None
+    LandingPrice: Optional[float] = None
+    Remark: Optional[str] = None
+    SellingPrice: Optional[float] = None
+    ExpiryDate: Optional[str] = None
+    MarginPrice: Optional[float] = None
+    OfferPrice: Optional[float] = None
+    StockThreshold: Optional[int] = None
+
+
+class BulkProteinItem(BaseModel):
+    """SEC-CRIT-02: Typed schema for one protein row in bulk-create."""
+    Brand: Optional[str] = None
+    ProductName: Optional[str] = None
+    Flavour: Optional[str] = None
+    Weight: Optional[str] = None
+    Quantity: Optional[int] = 0
+    MRPPrice: Optional[float] = 0
+    LandingPrice: Optional[float] = 0
+    MarginPrice: Optional[float] = 0
+    OfferPrice: Optional[float] = 0
+    SellingPrice: Optional[float] = None
+    Remark: Optional[str] = None
+    ExpiryDate: Optional[str] = None
+    StockThreshold: Optional[int] = 5
+
+
+class BulkProteinCreate(BaseModel):
+    stocks: List[BulkProteinItem] = []
+
+
 class ProteinResponse(ProteinBase):
     id: str
     legacy_id: str = Field(..., alias="_id", serialization_alias="_id")
@@ -57,6 +98,8 @@ class ProteinResponse(ProteinBase):
     # Computed field for low stock indicator
     isLowStock: Optional[bool] = None
     TotalPrice: Optional[float] = None  # Computed: Quantity × LandingPrice
+    hasImage: Optional[bool] = False
+    imageUrl: Optional[str] = None
     lots: Optional[List[dict]] = []
 
     class Config:

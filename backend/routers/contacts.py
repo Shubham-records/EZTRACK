@@ -17,10 +17,12 @@ def map_contact_response(c: ExternalContact):
     return c_dict
 
 
-@router.get("", response_model=List[ExternalContactResponse])
-@router.get("/", response_model=List[ExternalContactResponse])
+@router.get("")
+@router.get("/")
 def get_contacts(
     contact_type: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
@@ -32,9 +34,19 @@ def get_contacts(
     
     if contact_type:
         query = query.filter(ExternalContact.contactType == contact_type)
+        
+    total = query.count()
+    limit = max(1, min(page_size, 100))
+    offset = (max(1, page) - 1) * limit
     
-    contacts = query.order_by(ExternalContact.name).all()
-    return [map_contact_response(c) for c in contacts]
+    contacts = query.order_by(ExternalContact.name).offset(offset).limit(limit).all()
+    
+    return {
+        "items": [map_contact_response(c) for c in contacts],
+        "total": total,
+        "page": page,
+        "size": limit
+    }
 
 
 @router.get("/types")
@@ -66,7 +78,8 @@ def get_contact(
 def create_contact(
     data: ExternalContactCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Create a new external contact."""
     contact = ExternalContact(gymId=current_gym.id, **data.model_dump())
@@ -81,7 +94,8 @@ def update_contact(
     contact_id: str,
     data: ExternalContactUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     """Update an external contact."""
     contact = db.query(ExternalContact).filter(

@@ -137,6 +137,9 @@ class User(Base):
     # Multi-branch: active branch for the current session
     activeBranchId = Column(String, nullable=True)
 
+    isActive = Column(Boolean, default=True)
+    deletedAt = Column(DateTime(timezone=True), nullable=True)
+
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
@@ -529,6 +532,9 @@ class ProteinStock(Base):
     # Multi-branch support
     branchId = Column(String, ForeignKey("Branch.id"), nullable=True)
 
+    isDeleted = Column(Boolean, default=False, index=True)
+    deletedAt = Column(DateTime(timezone=True), nullable=True)
+
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
@@ -563,6 +569,9 @@ class ProteinLot(Base):
     # SCH-NEW-01: Added purchaseDate replacing ProteinStock.Year/Month string columns.
     # Use this for monthly/yearly inventory grouping: GROUP BY date_trunc('month', purchaseDate)
     purchaseDate  = Column(Date, nullable=True)
+
+    isDeleted = Column(Boolean, default=False, index=True)
+    deletedAt = Column(DateTime(timezone=True), nullable=True)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())

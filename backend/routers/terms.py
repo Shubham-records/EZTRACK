@@ -36,7 +36,8 @@ def get_terms(
 def create_term(
     data: TermsCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     new_term = TermsAndConditions(
         gymId=current_gym.id,
@@ -56,7 +57,8 @@ def update_term(
     term_id: str,
     data: TermsUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager)
 ):
     term = db.query(TermsAndConditions).filter(
         TermsAndConditions.id == term_id,

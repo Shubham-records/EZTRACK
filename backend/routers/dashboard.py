@@ -179,6 +179,30 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
         "_source":          "live",
     }
 
+    # ── ARCH-NEW-02: Upsert into GymDailySummary so SSE can use it as cache ──
+    try:
+        summary = db.query(GymDailySummary).filter(
+            GymDailySummary.gymId == gym_id,
+            GymDailySummary.summaryDate == datetime.now().date(),
+        ).first()
+        if not summary:
+            summary = GymDailySummary(gymId=gym_id, summaryDate=datetime.now().date())
+            db.add(summary)
+        summary.activeMembers     = result["activeMembers"]
+        summary.expiringToday     = result["expiringToday"]
+        summary.totalIncome       = result["todayCollection"]
+        summary.weekToDateIncome  = result["weekCollection"]
+        summary.monthToDateIncome = result["monthCollection"]
+        summary.pendingBalance    = result["pendingBalance"]
+        summary.totalExpenses     = result["monthExpenses"]
+        summary.lowStockCount     = result["lowStockItems"]
+        summary.updatedAt         = datetime.now()
+        db.commit()
+    except Exception:
+        pass  # Summary upsert is best-effort — never fail the stats response
+
+    return result
+
 
 async def _compute_stats_async(gym_id: str, db: AsyncSessionLocal) -> dict:
     """Compute all dashboard stats via an async session (fixes ARCH-NEW-01)."""

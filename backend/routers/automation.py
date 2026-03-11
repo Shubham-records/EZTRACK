@@ -52,26 +52,23 @@ def get_low_stock_items(
     db: Session = Depends(get_db)
 ):
     """Get products with low stock."""
+    from sqlalchemy import func
     proteins = db.query(ProteinStock).filter(
-        ProteinStock.gymId == current_gym.id
-    ).all()
+        ProteinStock.gymId == current_gym.id,
+        ProteinStock.isDeleted == False,
+        ProteinStock.Quantity < func.coalesce(ProteinStock.StockThreshold, 5)
+    ).order_by(ProteinStock.Quantity.asc()).all()
 
     low_stock = []
     for p in proteins:
-        threshold = p.StockThreshold or 5
-        # FIX: use p.Quantity (Integer column) — AvailableStock was removed in v2
-        current_qty = p.Quantity or 0
-        if current_qty < threshold:
-            low_stock.append({
-                "id":           p.id,
-                "productName":  p.ProductName,
-                "brand":        p.Brand,
-                "currentStock": current_qty,
-                "threshold":    threshold,
-                "sellingPrice": p.SellingPrice or p.LandingPrice,
-            })
-
-    low_stock.sort(key=lambda x: x["currentStock"])
+        low_stock.append({
+            "id":           p.id,
+            "productName":  p.ProductName,
+            "brand":        p.Brand,
+            "currentStock": p.Quantity or 0,
+            "threshold":    p.StockThreshold or 5,
+            "sellingPrice": p.SellingPrice or p.LandingPrice,
+        })
     return low_stock
 
 
@@ -127,12 +124,12 @@ def get_smart_suggestions(
             "action":  "view_expiring",
         })
 
-    # FIX: use p.Quantity (AvailableStock removed in v2)
-    proteins = db.query(ProteinStock).filter(ProteinStock.gymId == current_gym.id).all()
-    low_stock_count = sum(
-        1 for p in proteins
-        if (p.Quantity or 0) < (p.StockThreshold or 5)
-    )
+    from sqlalchemy import func
+    low_stock_count = db.query(func.count(ProteinStock.id)).filter(
+        ProteinStock.gymId == current_gym.id,
+        ProteinStock.isDeleted == False,
+        ProteinStock.Quantity < func.coalesce(ProteinStock.StockThreshold, 5)
+    ).scalar() or 0
 
     if low_stock_count > 0:
         suggestions.append({

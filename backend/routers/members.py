@@ -393,13 +393,13 @@ def bulk_delete_members(
     # Check if all members belong to current gym
     # We can delete in one query for efficiency
     try:
-        from datetime import datetime
+        from datetime import datetime, timezone
         
         # Soft delete instead of hard delete
         stmt = Member.__table__.update().where(
             Member.id.in_(ids),
             Member.gymId == current_gym.id
-        ).values(isDeleted=True, deletedAt=datetime.utcnow())
+        ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
         
         result = db.execute(stmt)
         db.commit()
@@ -723,7 +723,12 @@ def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
-def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+def create_member(
+    data: MemberCreate,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-01: MANAGER+ can create members
+):
     """Create a new member (admission). SEC-14: Enforces subscription maxMembers limit."""
     # SEC-14: Enforce subscription maxMembers limit
     subscription = db.query(GymSubscription).filter(
@@ -893,7 +898,13 @@ def create_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym
     }
 
 @router.put("/{id}", response_model=MemberResponse)
-def update_member_put(id: str, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+def update_member_put(
+    id: str,
+    data: dict,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-01: MANAGER+ can update members
+):
     member = db.query(Member).filter(Member.id == id, Member.gymId == current_gym.id).first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")

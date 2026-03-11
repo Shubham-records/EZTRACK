@@ -194,6 +194,22 @@ class RequestIPMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RequestIPMiddleware)
 
 
+# ─── Request ID Middleware (P3-22) ────────────────────────────────────────────
+
+import uuid
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """
+    P3-22: Ensure trace correlation by returning X-Request-ID
+    """
+    async def dispatch(self, request: Request, call_next):
+        req_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = req_id
+        return response
+
+app.add_middleware(RequestIDMiddleware)
+
 # ─── Routers ──────────────────────────────────────────────────────────────────
 
 app.include_router(auth.router,               prefix="/api/auth",               tags=["Auth"])

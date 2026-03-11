@@ -9,7 +9,7 @@ from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
 from models.all_models import Gym, Expense
-from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse
+from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse, BulkExpenseCreate
 from core.audit_utils import log_audit
 from core.rate_limit import rate_limit
 
@@ -67,7 +67,8 @@ def get_expenses(
 def create_expense(
     data: ExpenseCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-03: MANAGER+ only
 ):
     """Create a new expense record."""
     expense_data = data.model_dump()
@@ -85,42 +86,38 @@ def create_expense(
 
 @router.post("/bulk-create")
 @rate_limit("5/minute")
-def bulk_create_expenses(request: Request, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    """Bulk create expenses from import"""
-    expenses_list = data.get("items", []) # Aligning naming with frontend generic 'items' or 'expenses'
-    # Actually frontend usually sends { "expenses": [...] } or generic. Let's support "expenses"
-    if not expenses_list:
-        expenses_list = data.get("expenses", [])
-
+def bulk_create_expenses(
+    request: Request,
+    data: BulkExpenseCreate,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-03: MANAGER+ only
+):
+    """Bulk create expenses from import.
+    SEC-CRIT-02: Uses BulkExpenseCreate typed schema — no raw dict.
+    """
+    expenses_list = data.all_items()
     created_count = 0
-    
-    for expense_data in expenses_list:
-        try:
-            # Basic validation: Amount is required.
-            amount = expense_data.get("Amount") or expense_data.get("amount")
-            if not amount:
-                continue
 
-            # Parse date or default to today
-            date_str = expense_data.get("Date") or expense_data.get("date")
-            
+    for item in expenses_list:
+        try:
             new_expense = Expense(
                 gymId=current_gym.id,
-                description=expense_data.get("Description") or expense_data.get("description") or "Imported Expense",
-                amount=float(amount),
-                category=expense_data.get("Category") or expense_data.get("category") or "Other",
-                paymentMode=expense_data.get("PaymentMode") or expense_data.get("paymentMode") or "Cash",
-                date=parse_date(date_str),
-                notes=expense_data.get("Notes") or expense_data.get("notes"),
+                description=item.description or "Imported Expense",
+                amount=float(item.amount),
+                category=item.category or "Other",
+                paymentMode=item.paymentMode or "Cash",
+                date=parse_date(item.date),
+                notes=item.notes,
                 lastEditedBy=current_gym.username,
-                editReason='Bulk Import'
+                editReason='Bulk Import',
             )
             db.add(new_expense)
             created_count += 1
         except Exception as e:
             logger.error("Bulk expense create error: %s", type(e).__name__, exc_info=False)
             continue
-    
+
     db.commit()
     return {"message": f"Created {created_count} expenses", "count": created_count}
 
@@ -146,11 +143,11 @@ def bulk_delete_expenses(
         )
 
     try:
-        from datetime import datetime
+        from datetime import datetime, timezone
         stmt = Expense.__table__.update().where(
             Expense.id.in_(ids),
             Expense.gymId == current_gym.id
-        ).values(isDeleted=True, deletedAt=datetime.utcnow())
+        ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
         result = db.execute(stmt)
         # SEC-NEW-04: Audit log for bulk hard-deletes
         log_audit(db, current_gym.id, "Expense", "bulk", "DELETE",
@@ -160,7 +157,8 @@ def bulk_delete_expenses(
         return {"message": f"Deleted {result.rowcount} expenses", "count": result.rowcount}
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Bulk expense delete error: %s", type(e).__name__, exc_info=True)
+        raise HTTPException(status_code=500, detail="Bulk delete failed. Please try again.")
 
 
 @router.put("/{expense_id}", response_model=ExpenseResponse)
@@ -168,7 +166,8 @@ def update_expense(
     expense_id: str,
     data: ExpenseUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-03: MANAGER+ only
 ):
     """Update an expense record."""
     expense = db.query(Expense).filter(
@@ -213,9 +212,9 @@ def delete_expense(
     log_audit(db, current_gym.id, "Expense", expense.id, "DELETE",
               {"category": expense.category, "amount": expense.amount},
               current_gym.username)
-    from datetime import datetime
+    from datetime import datetime, timezone
     expense.isDeleted = True
-    expense.deletedAt = datetime.utcnow()
+    expense.deletedAt = datetime.now(timezone.utc)
     db.commit()
     return None
 
@@ -292,32 +291,41 @@ def get_expense_summary(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get expense summary by category."""
-    query = db.query(Expense).filter(
+    """Get expense summary by category.
+    BUG-02 fix: parse date strings before comparing with Date column.
+    BUG-03 fix: use SQL GROUP BY instead of Python in-memory grouping.
+    """
+    from sqlalchemy import func
+
+    query = db.query(
+        Expense.category,
+        func.sum(Expense.amount).label("category_total"),
+        func.count(Expense.id).label("category_count"),
+    ).filter(
         Expense.gymId == current_gym.id,
-        Expense.isDeleted == False
+        Expense.isDeleted == False,
     )
-    
+
+    # BUG-02: parse strings to native date before comparing with Date column
     if start_date:
-        query = query.filter(Expense.date >= start_date)
+        parsed_start = parse_date(start_date)
+        if parsed_start:
+            query = query.filter(Expense.date >= parsed_start)
     if end_date:
-        query = query.filter(Expense.date <= end_date)
-    
-    expenses = query.all()
-    
-    # Group by category
-    summary = {}
-    total = 0
-    for expense in expenses:
-        if expense.category not in summary:
-            summary[expense.category] = 0
-        summary[expense.category] += expense.amount
-        total += expense.amount
-    
+        parsed_end = parse_date(end_date)
+        if parsed_end:
+            query = query.filter(Expense.date <= parsed_end)
+
+    rows = query.group_by(Expense.category).all()
+
+    summary = {r.category: round(float(r.category_total or 0), 2) for r in rows}
+    total   = round(sum(summary.values()), 2)
+    count   = sum(r.category_count for r in rows)
+
     return {
         "byCategory": summary,
         "total": total,
-        "count": len(expenses)
+        "count": count,
     }
 
 

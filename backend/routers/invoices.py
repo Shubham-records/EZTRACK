@@ -95,7 +95,12 @@ def get_invoices(
 
 @router.post("", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
-def create_invoice(data: InvoiceCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+def create_invoice(
+    data: InvoiceCreate,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-02: MANAGER+ can create invoices
+):
     # SCH-NORM-01: Cross-tenant guard — prevent invoices being attributed to
     # members of a different gym. Invoice.gymId is denormalized for query
     # efficiency, but without this check a stale/malicious memberId could
@@ -259,11 +264,11 @@ def bulk_delete_invoices(
         )
 
     try:
-        from datetime import datetime
+        from datetime import datetime, timezone
         stmt = Invoice.__table__.update().where(
             Invoice.id.in_(ids),
             Invoice.gymId == current_gym.id
-        ).values(isDeleted=True, deletedAt=datetime.utcnow())
+        ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
 
         result = db.execute(stmt)
         db.commit()
@@ -328,9 +333,9 @@ def delete_invoice(
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     # SCH-08: Soft-delete — preserves PaymentEvent history and audit trail
-    from datetime import datetime
+    from datetime import datetime, timezone
     invoice.isDeleted = True
-    invoice.deletedAt = datetime.utcnow()
+    invoice.deletedAt = datetime.now(timezone.utc)
     db.commit()
     return None
 
@@ -369,7 +374,8 @@ def pay_invoice(
     invoice_id: str,
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-02: MANAGER+ can record payments
 ):
     invoice = db.query(Invoice).filter(
         Invoice.id == invoice_id,

@@ -145,13 +145,13 @@ def test_new_modules(client, db):
     # List Invoices
     res = client.get("/api/invoices/", headers=headers)
     assert res.status_code == 200
-    assert len(res.json()) >= 1
+    assert len(res.json()["items"]) >= 1
 
     # 3. Proteins
     # Get Proteins (Likely empty but shouldn't error)
     res = client.get("/api/proteins/", headers=headers)
     assert res.status_code == 200
-    assert isinstance(res.json(), list)
+    assert isinstance(res.json()["items"], list)
 
     # 4. Dashboard Stats
     res = client.get("/api/dashboard/stats", headers=headers)

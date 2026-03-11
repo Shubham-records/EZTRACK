@@ -9,6 +9,7 @@ class UserBase(BaseModel):
     permissions: Optional[List[str]] = []
     activeBranchId: Optional[str] = None
     branchIds: Optional[List[str]] = []
+    isActive: Optional[bool] = True
 
 
 class UserCreate(UserBase):

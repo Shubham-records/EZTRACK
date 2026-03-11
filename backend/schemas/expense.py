@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -38,3 +38,22 @@ class ExpenseResponse(ExpenseBase):
     class Config:
         from_attributes = True
         populate_by_name = True
+
+
+class BulkExpenseItem(BaseModel):
+    """SEC-CRIT-02: Typed schema for one expense row in bulk-create."""
+    category: Optional[str] = "Other"
+    description: Optional[str] = "Imported Expense"
+    amount: float
+    date: Optional[str] = None
+    paymentMode: Optional[str] = "Cash"
+    notes: Optional[str] = None
+
+
+class BulkExpenseCreate(BaseModel):
+    expenses: List[BulkExpenseItem] = []
+    items: List[BulkExpenseItem] = []   # alias for frontend compatibility
+
+    def all_items(self) -> List[BulkExpenseItem]:
+        """Return whichever list is populated (expenses or items)."""
+        return self.expenses or self.items

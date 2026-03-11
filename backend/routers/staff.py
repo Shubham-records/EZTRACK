@@ -41,7 +41,10 @@ def get_staff(
     _rbac=Depends(require_owner_or_manager),   # SEC-01: MANAGER+ only
 ):
     """List all staff members for the gym."""
-    users = db.query(User).filter(User.gymId == current_gym.id).all()
+    users = db.query(User).filter(
+        User.gymId == current_gym.id,
+        User.isActive == True
+    ).all()
     return users
 
 
@@ -124,7 +127,8 @@ def update_staff(
 
     user = db.query(User).filter(
         User.id == user_id,
-        User.gymId == current_gym.id
+        User.gymId == current_gym.id,
+        User.isActive == True
     ).first()
     if not user:
         raise HTTPException(status_code=404, detail="Staff member not found")
@@ -178,11 +182,18 @@ def delete_staff(
     """Delete a staff member. Only gym OWNERs can remove staff."""
     user = db.query(User).filter(
         User.id == user_id,
-        User.gymId == current_gym.id
+        User.gymId == current_gym.id,
+        User.isActive == True
     ).first()
     if not user:
         raise HTTPException(status_code=404, detail="Staff member not found")
 
-    db.delete(user)
+    from datetime import datetime, timezone
+    user.isActive = False
+    user.deletedAt = datetime.now(timezone.utc)
+    
+    # Remove their branch access immediately and revoke tokens (handled via auth endpoints for tokens typically or manual cleanup)
+    db.query(UserBranchAccess).filter(UserBranchAccess.userId == user.id).delete()
+    
     db.commit()
     return None
