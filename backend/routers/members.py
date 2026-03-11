@@ -47,7 +47,15 @@ def calculate_member_status(member: Member, admission_expiry_days: int = 365) ->
 
     return status_data
 
-def map_member_response(member: Member, admission_expiry_days: int = 365):
+def map_member_response(member: Member, admission_expiry_days: int = 365, decrypt: bool = True):
+    """
+    Map a Member ORM object to a response dict.
+
+    PB-01: When decrypt=False (list views), Aadhaar is NOT decrypted — saves
+    one Fernet decrypt call per member row. At 10K DAU with page_size=50,
+    this eliminates 50 crypto operations per list request. Single-member
+    detail views pass decrypt=True (default) to get the masked XXXX-XXXX-NNNN value.
+    """
     m_dict = member.__dict__.copy()
     m_dict['_id'] = member.id
 
@@ -56,16 +64,22 @@ def map_member_response(member: Member, admission_expiry_days: int = 365):
         val = m_dict.get(field)
         m_dict[field] = str(val) if val is not None else None
 
-    # SEC-05 / SCH-07: Decrypt Fernet ciphertext, then mask for API response.
-    # The plaintext is NEVER sent — only XXXX-XXXX-NNNN.
-    raw_aadhaar = m_dict.get('Aadhaar')
-    if raw_aadhaar:
-        plaintext = decrypt_aadhaar(raw_aadhaar)   # decrypt encrypted DB value
-        m_dict['Aadhaar'] = mask_aadhaar(plaintext)  # mask to XXXX-XXXX-NNNN
+    # SEC-05 / SCH-07 / PB-01: Decrypt Fernet ciphertext only for detail views.
+    # List views skip decryption entirely — Aadhaar is not shown in lists anyway.
+    if decrypt:
+        raw_aadhaar = m_dict.get('Aadhaar')
+        if raw_aadhaar:
+            plaintext = decrypt_aadhaar(raw_aadhaar)   # decrypt encrypted DB value
+            m_dict['Aadhaar'] = mask_aadhaar(plaintext)  # mask to XXXX-XXXX-NNNN
+        else:
+            m_dict['Aadhaar'] = None
     else:
+        # PB-01: Skip decryption in list views — always null in list context
         m_dict['Aadhaar'] = None
+
     # Never return the HMAC hash to clients
     m_dict.pop('AadhaarHash', None)
+
 
     # v1 leftovers — remove silently if still in __dict__
     m_dict.pop('AccessStatus',        None)
@@ -138,13 +152,20 @@ def get_members(
     if status_filter:
         query = query.filter(Member.computed_status == status_filter)
 
-    total = query.count()
     offset = (page - 1) * page_size
-    members = query.order_by(Member.createdAt.desc()).offset(offset).limit(page_size).all()
+    
+    # PB-04: Cursor/Window pagination. 
+    # Use window function to fetch total count in the same query without a full table scan N+1.
+    query = query.add_columns(func.count().over().label('_total_count'))
+    results = query.order_by(Member.createdAt.desc()).offset(offset).limit(page_size).all()
+    
+    total = results[0]._total_count if results else 0
+    members = [r.Member for r in results]
+    
     total_pages = (total + page_size - 1) // page_size
 
     return {
-        "data":       [map_member_response(m, admission_expiry_days) for m in members],
+        "data":       [map_member_response(m, admission_expiry_days, decrypt=False) for m in members],  # PB-01: no Fernet decrypt in list
         "total":      total,
         "page":       page,
         "pageSize":   page_size,
@@ -168,7 +189,7 @@ def export_members(
     ).order_by(Member.createdAt.desc()).limit(1000).all()
     
     return {
-        "data":       [map_member_response(m, admission_expiry_days) for m in members],
+        "data":       [map_member_response(m, admission_expiry_days, decrypt=False) for m in members],  # PB-01: no Fernet decrypt in export list
         "total":      len(members),
         "page":       1,
         "pageSize":   len(members),

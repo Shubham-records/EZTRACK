@@ -105,3 +105,34 @@ class ProteinResponse(ProteinBase):
     class Config:
         from_attributes = True
         populate_by_name = True
+
+
+class BulkDeleteRequest(BaseModel):
+    """SW-06: Typed schema for bulk-delete endpoints.
+    Validates that ids is a list of strings, capped at 500 items.
+    Replaces raw dict on bulk_delete_proteins.
+    """
+    ids: List[str] = Field(..., min_length=1, max_length=500)
+
+
+class ProteinLotCreate(BaseModel):
+    """SW-07: Typed schema for POST /proteins/lots (create lot).
+    Replaces raw dict param in create_protein_lot().
+    """
+    quantity: int = Field(..., ge=1)
+    purchaseDate: Optional[str] = None
+    expiryDate: Optional[str] = None
+    notes: Optional[str] = None
+    batchNumber: Optional[str] = None
+
+
+class ProteinLotUpdate(BaseModel):
+    """SW-07: Typed schema for PUT /proteins/lots/{lot_id} (update lot).
+    Replaces raw dict param in update_protein_lot().
+    """
+    quantity: Optional[int] = Field(None, ge=1)
+    purchaseDate: Optional[str] = None
+    expiryDate: Optional[str] = None
+    notes: Optional[str] = None
+    batchNumber: Optional[str] = None
+

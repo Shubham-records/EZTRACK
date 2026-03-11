@@ -24,7 +24,7 @@ from core.dependencies import (
     get_current_gym, require_owner, require_owner_or_manager, get_caller_role
 )
 from core.security import get_password_hash
-from models.all_models import Gym, User, UserBranchAccess
+from models.all_models import Gym, User, UserBranchAccess, RefreshToken
 from schemas.staff import UserCreate, UserUpdate, UserResponse
 
 logger = logging.getLogger(__name__)
@@ -150,15 +150,26 @@ def update_staff(
     if data.activeBranchId is not None:
         user.activeBranchId = data.activeBranchId
     if data.branchIds is not None:
-        # Replace UserBranchAccess rows
-        db.query(UserBranchAccess).filter(UserBranchAccess.userId == user.id).delete()
-        for bid in data.branchIds:
-            uba = UserBranchAccess(
+        # P2-9: Smart branch update diff-based
+        existing_access = db.query(UserBranchAccess).filter(UserBranchAccess.userId == user.id).all()
+        existing_bids = {ba.branchId for ba in existing_access}
+        new_bids = set(data.branchIds)
+        
+        bids_to_remove = existing_bids - new_bids
+        bids_to_add = new_bids - existing_bids
+        
+        if bids_to_remove:
+            db.query(UserBranchAccess).filter(
+                UserBranchAccess.userId == user.id,
+                UserBranchAccess.branchId.in_(bids_to_remove)
+            ).delete(synchronize_session=False)
+            
+        for bid in bids_to_add:
+            db.add(UserBranchAccess(
                 userId=user.id,
                 branchId=bid,
                 gymId=current_gym.id,
-            )
-            db.add(uba)
+            ))
 
     if data.password:
         user.password = get_password_hash(data.password)
@@ -179,7 +190,12 @@ def delete_staff(
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner),   # OWNER only for deletions
 ):
-    """Delete a staff member. Only gym OWNERs can remove staff."""
+    """Delete a staff member. Only gym OWNERs can remove staff.
+
+    SEC-V-08: Immediately revokes all active RefreshTokens for the deleted user
+    so they cannot obtain new JWTs after deletion. Their current access token
+    (max 30-min lifetime) will still be valid until expiry, but cannot be renewed.
+    """
     user = db.query(User).filter(
         User.id == user_id,
         User.gymId == current_gym.id,
@@ -191,9 +207,20 @@ def delete_staff(
     from datetime import datetime, timezone
     user.isActive = False
     user.deletedAt = datetime.now(timezone.utc)
-    
-    # Remove their branch access immediately and revoke tokens (handled via auth endpoints for tokens typically or manual cleanup)
+
+    # Remove their branch access immediately
     db.query(UserBranchAccess).filter(UserBranchAccess.userId == user.id).delete()
-    
+
+    # SEC-V-08: Revoke all active refresh tokens so they cannot obtain new JWTs.
+    # Their current access token (30-min TTL) will expire naturally.
+    revoked_count = db.query(RefreshToken).filter(
+        RefreshToken.userId == user.id,
+        RefreshToken.isRevoked == False,
+    ).update({"isRevoked": True}, synchronize_session=False)
+
     db.commit()
+    logger.info(
+        "Staff '%s' (id=%s) deleted by gym %s — %d refresh token(s) revoked (SEC-V-08).",
+        user.username, user.id, current_gym.id, revoked_count,
+    )
     return None

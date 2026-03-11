@@ -8,7 +8,7 @@ from core.database import get_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
-from schemas.protein import ProteinCreate, ProteinUpdate, ProteinInlineUpdate, BulkProteinCreate, ProteinResponse
+from schemas.protein import ProteinCreate, ProteinUpdate, ProteinInlineUpdate, BulkProteinCreate, ProteinResponse, BulkDeleteRequest, ProteinLotCreate, ProteinLotUpdate
 from sqlalchemy.sql import func
 from core.audit_utils import log_audit, compute_diff
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder, get_signed_url_or_none
@@ -188,48 +188,59 @@ def get_protein_summary(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get protein stock summary statistics."""
-    proteins = db.query(ProteinStock).filter(
-        ProteinStock.gymId == current_gym.id,
-        ProteinStock.isDeleted == False
-    ).all()
+    """Get protein stock summary statistics.
+
+    SW-13 / PB-06: Replaced Python-loop aggregation with SQL aggregates.
+    Previously loaded ALL protein rows into memory — O(n) CPU + memory.
+    Now runs a single SQL GROUP aggregate — O(1) from application perspective.
+    """
     settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
     default_threshold = settings.lowStockThreshold if settings else 5
-    
-    total_items = len(proteins)
-    total_quantity = 0
-    total_stock_value = 0
-    total_potential_revenue = 0
-    low_stock_count = 0
-    brands = set()
-    
-    for p in proteins:
-        try:
-            qty = p.Quantity or 0
-            landing = p.LandingPrice or 0
-            selling = p.SellingPrice or 0
-            threshold = p.StockThreshold or default_threshold
-            
-            total_quantity += qty
-            total_stock_value += qty * landing
-            total_potential_revenue += qty * selling
-            
-            if qty < threshold:
-                low_stock_count += 1
-            
-            if p.Brand:
-                brands.add(p.Brand)
-        except (ValueError, TypeError):
-            pass
-    
+
+    # Single SQL aggregate — no Python iteration over rows
+    from sqlalchemy import case
+    agg = db.query(
+        func.count().label("total_items"),
+        func.coalesce(func.sum(ProteinStock.Quantity), 0).label("total_quantity"),
+        func.coalesce(
+            func.sum(ProteinStock.Quantity * ProteinStock.LandingPrice), 0
+        ).label("total_stock_value"),
+        func.coalesce(
+            func.sum(ProteinStock.Quantity * ProteinStock.SellingPrice), 0
+        ).label("total_potential_revenue"),
+        # Count items where Quantity < COALESCE(StockThreshold, default_threshold)
+        func.sum(
+            case(
+                (ProteinStock.Quantity < func.coalesce(ProteinStock.StockThreshold, default_threshold), 1),
+                else_=0
+            )
+        ).label("low_stock_count"),
+    ).filter(
+        ProteinStock.gymId == current_gym.id,
+        ProteinStock.isDeleted == False,
+    ).one()
+
+    # Unique brands — separate lightweight query (COUNT DISTINCT)
+    unique_brands = db.query(
+        func.count(func.distinct(ProteinStock.Brand))
+    ).filter(
+        ProteinStock.gymId == current_gym.id,
+        ProteinStock.isDeleted == False,
+        ProteinStock.Brand.isnot(None),
+        ProteinStock.Brand != "",
+    ).scalar() or 0
+
+    total_stock  = float(agg.total_stock_value or 0)
+    total_rev    = float(agg.total_potential_revenue or 0)
+
     return {
-        "totalItems": total_items,
-        "totalQuantity": total_quantity,
-        "totalStockValue": round(total_stock_value, 2),
-        "totalPotentialRevenue": round(total_potential_revenue, 2),
-        "potentialProfit": round(total_potential_revenue - total_stock_value, 2),
-        "lowStockCount": low_stock_count,
-        "uniqueBrands": len(brands)
+        "totalItems":           int(agg.total_items or 0),
+        "totalQuantity":        int(agg.total_quantity or 0),
+        "totalStockValue":      round(total_stock, 2),
+        "totalPotentialRevenue": round(total_rev, 2),
+        "potentialProfit":      round(total_rev - total_stock, 2),
+        "lowStockCount":        int(agg.low_stock_count or 0),
+        "uniqueBrands":         int(unique_brands),
     }
 
 
@@ -341,22 +352,15 @@ def bulk_create_proteins(
 
 @router.post("/bulk-delete")
 def bulk_delete_proteins(
-    data: dict,
+    data: BulkDeleteRequest,   # SW-06: typed, max 500 ids enforced by Pydantic
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    ids = data.get("ids", [])
-    if not ids:
-        raise HTTPException(status_code=400, detail="No IDs provided")
-
-    # SEC-NEW-04: Cap bulk deletes to prevent oversized IN-clause queries
-    MAX_BULK_DELETE = 500
-    if len(ids) > MAX_BULK_DELETE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Bulk delete limited to {MAX_BULK_DELETE} items per request. Got {len(ids)}.",
-        )
+    """SW-06: Replaced raw dict with BulkDeleteRequest schema.
+    Pydantic validates ids is a non-empty list of strings with at most 500 items.
+    """
+    ids = data.ids
 
     try:
         from datetime import datetime, timezone
@@ -699,7 +703,7 @@ def get_protein_lots(
 @router.post("/{protein_id}/lots")
 def create_protein_lot(
     protein_id: str,
-    data: dict,
+    data: ProteinLotCreate,   # SW-07: typed schema replaces raw dict
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
@@ -707,36 +711,25 @@ def create_protein_lot(
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
 
-    # SCH-NORM-03: Explicit cross-tenant guard before inserting ProteinLot.
-    # ProteinLot.gymId is denormalized from ProteinStock.gymId for query
-    # efficiency. The query above already enforces ownership, but this makes
-    # the invariant explicit so any future refactor can't silently drop it.
+    # SCH-NORM-03: Explicit cross-tenant guard
     if protein.gymId != current_gym.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Protein does not belong to this gym",
-        )
-
-    try:
-        quantity = int(data.get('quantity') or 0)
-    except (ValueError, TypeError):
-        quantity = 0
+        raise HTTPException(status_code=403, detail="Protein does not belong to this gym")
 
     lot = ProteinLot(
         gymId=current_gym.id,
         proteinId=protein_id,
-        lotNumber=data.get('lotNumber'),
-        quantity=quantity,
-        purchasePrice=float(data.get('purchasePrice')) if data.get('purchasePrice') else None,
-        sellingPrice=float(data.get('sellingPrice')) if data.get('sellingPrice') else None,
-        marginValue=float(data.get('marginValue')) if data.get('marginValue') else None,
-        offerPrice=float(data.get('offerPrice')) if data.get('offerPrice') else None,
-        expiryDate=parse_date(data.get('expiryDate')),
-        purchaseDate=parse_date(data.get('purchaseDate')),
+        quantity=data.quantity,
+        expiryDate=parse_date(data.expiryDate),
+        purchaseDate=parse_date(data.purchaseDate),
     )
+    # Apply optional fields only if present
+    if data.notes is not None:
+        lot.notes = data.notes
+    if data.batchNumber is not None:
+        lot.lotNumber = data.batchNumber
+
     db.add(lot)
     db.commit()
-    
     db.refresh(lot)
     db.refresh(protein)
 
@@ -754,7 +747,7 @@ def create_protein_lot(
 @router.put("/lots/{lot_id}")
 def update_protein_lot(
     lot_id: str,
-    data: dict,
+    data: ProteinLotUpdate,   # SW-07: typed schema replaces raw dict
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
@@ -764,24 +757,20 @@ def update_protein_lot(
 
     protein = db.query(ProteinStock).filter(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id).first()
 
-    prev_qty = lot.quantity or 0
-    try:
-        new_qty = int(data.get('quantity')) if data.get('quantity') is not None else prev_qty
-    except (ValueError, TypeError):
-        new_qty = prev_qty
+    update_data = data.model_dump(exclude_unset=True)
 
-    # update fields
-    for key in ['lotNumber', 'purchasePrice', 'sellingPrice', 'marginType', 'marginValue', 'offerPrice']:
-        if key in data:
-            setattr(lot, key, data.get(key))
-    if 'expiryDate' in data:
-        lot.expiryDate = parse_date(data.get('expiryDate'))
-    if 'purchaseDate' in data:
-        lot.purchaseDate = parse_date(data.get('purchaseDate'))
-    lot.quantity = new_qty
+    if 'quantity' in update_data and update_data['quantity'] is not None:
+        lot.quantity = update_data['quantity']
+    if 'expiryDate' in update_data:
+        lot.expiryDate = parse_date(update_data['expiryDate'])
+    if 'purchaseDate' in update_data:
+        lot.purchaseDate = parse_date(update_data['purchaseDate'])
+    if 'notes' in update_data:
+        lot.notes = update_data['notes']
+    if 'batchNumber' in update_data:
+        lot.lotNumber = update_data['batchNumber']
 
     db.commit()
-    
     db.refresh(lot)
     if protein:
         db.refresh(protein)

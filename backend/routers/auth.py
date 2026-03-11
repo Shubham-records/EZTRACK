@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.dependencies import get_current_gym
-from core.security import verify_password, create_access_token, get_password_hash
+from core.security import verify_password, create_access_token, get_password_hash, DUMMY_HASH
 from models.all_models import Gym, Branch, WhatsAppTemplate, RefreshToken, User
 from schemas.auth import LoginRequest, LoginResponse, SignupRequest, RefreshRequest, StaffLoginRequest
 from routers.whatsapp_templates import DEFAULT_TEMPLATES
@@ -110,9 +110,17 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     """
     Authenticate gym owner. Returns short-lived access_token + long-lived refresh_token.
     ARCH-10: Rate limited to 10 req/min/IP.
+    SEC-V-05: Always runs bcrypt comparison regardless of whether gym exists,
+    to prevent timing-based username enumeration.
     """
     gym = db.query(Gym).filter(Gym.username == body.username, Gym.isDeleted == False).first()
-    if not gym or not verify_password(body.password, gym.password):
+
+    # SEC-V-05: Always run a bcrypt comparison to equalize response time.
+    # If gym not found, verify against DUMMY_HASH (always False) — same cost as real verify.
+    stored_hash = gym.password if gym else DUMMY_HASH
+    password_ok = verify_password(body.password, stored_hash)
+
+    if not gym or not password_ok:
         # SEC-03: Use generic error — don't reveal whether username exists
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -142,18 +150,23 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
 def staff_login(body: StaffLoginRequest, request: Request, db: Session = Depends(get_db)):
     """
     SEC-NEW-01: Authenticate staff member. Returns JWT that includes both gymId AND userId.
+    SEC-V-05: Always runs bcrypt comparison regardless of whether gym/user exists.
     """
     gym = db.query(Gym).filter(Gym.id == body.gym_id, Gym.isDeleted == False).first()
-    if not gym:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    user = db.query(User).filter(
-        User.gymId == gym.id,
-        User.username == body.username,
-        User.isActive == True
-    ).first()
-    
-    if not user or not verify_password(body.password, user.password):
+    user = None
+    if gym:
+        user = db.query(User).filter(
+            User.gymId == gym.id,
+            User.username == body.username,
+            User.isActive == True
+        ).first()
+
+    # SEC-V-05: Always run bcrypt — use DUMMY_HASH when gym or user not found.
+    stored_hash = user.password if user else DUMMY_HASH
+    password_ok = verify_password(body.password, stored_hash)
+
+    if not gym or not user or not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"

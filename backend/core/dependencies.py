@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.config import settings
-from core.security import JWT_AUDIENCE, JWT_ISSUER  # SEC-NEW-02
+from core.security import JWT_AUDIENCE, JWT_ISSUER, decode_access_token  # SEC-NEW-02
 from models.all_models import Gym, User
 
 logger = logging.getLogger(__name__)
@@ -51,14 +51,8 @@ def get_current_gym(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        # SEC-NEW-02: Validate audience claim — rejects tokens from other services
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-            audience=JWT_AUDIENCE,
-            issuer=JWT_ISSUER,
-        )
+        # SEC-NEW-02 & SEC-V-06: Validate audience claim & support key rotation
+        payload = decode_access_token(token)
         gymId: str = payload.get("gymId")
         if gymId is None:
             raise credentials_exception
@@ -78,13 +72,7 @@ def _decode_payload(token: str) -> dict:
     SEC-NEW-02: Validates audience claim.
     """
     try:
-        return jwt.decode(
-            token,
-            settings.JWT_SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-            audience=JWT_AUDIENCE,   # SEC-NEW-02: reject foreign tokens
-            issuer=JWT_ISSUER,
-        )
+        return decode_access_token(token)
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -111,13 +99,21 @@ def get_caller_role(
     username: str = payload.get("username", "")
 
     if userId:
+        # SEC-V-08: Also check isActive — deleted staff members' access tokens
+        # must be rejected immediately, not allowed to run until natural expiry.
         user = db.query(User).filter(
-            User.id == userId, User.gymId == gymId
+            User.id == userId,
+            User.gymId == gymId,
+            User.isActive == True,   # SEC-V-08: blocks tokens for deleted staff
         ).first()
         if user:
             return (user.role or "STAFF", user.username)
-        # token has userId but no DB record → treat as STAFF for safety
-        return ("STAFF", username)
+        # userId in token but no active DB record → 401 (user deleted or invalid)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials — account inactive or not found.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     # Gym-owner token — no userId in payload
     gym = db.query(Gym).filter(Gym.id == gymId, Gym.isDeleted == False).first()

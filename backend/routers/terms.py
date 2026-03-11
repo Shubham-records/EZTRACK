@@ -19,15 +19,10 @@ def get_terms(
         TermsAndConditions.gymId == current_gym.id,
         TermsAndConditions.isActive == True
     )
-    
-    terms = query.order_by(TermsAndConditions.sortOrder.asc(), TermsAndConditions.createdAt.asc()).all()
-    
     if appliesTo:
-        # In SQLAlchemy with PostgreSQL ARRAY, we can check if the value is in the array.
-        # However, for simplicity and database agnostic approach, we can filter in Python or use any()
-        filtered_terms = [t for t in terms if appliesTo in (t.appliesTo or [])]
-        return filtered_terms
-        
+        query = query.filter(TermsAndConditions.appliesTo.any(appliesTo))
+
+    terms = query.order_by(TermsAndConditions.sortOrder.asc(), TermsAndConditions.createdAt.asc()).all()
     return terms
 
 

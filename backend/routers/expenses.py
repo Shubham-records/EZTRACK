@@ -9,7 +9,7 @@ from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
 from models.all_models import Gym, Expense
-from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse, BulkExpenseCreate
+from schemas.expense import ExpenseCreate, ExpenseUpdate, ExpenseResponse, BulkExpenseCreate, BulkDeleteRequest
 from core.audit_utils import log_audit
 from core.rate_limit import rate_limit
 
@@ -124,23 +124,16 @@ def bulk_create_expenses(
 
 @router.post("/bulk-delete")
 def bulk_delete_expenses(
-    data: dict,
+    data: BulkDeleteRequest,   # SW-06: typed, max 500 ids validated by Pydantic
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    """Bulk delete expenses. SEC-NEW-04: Requires MANAGER+, capped at 500, audit-logged."""
-    ids = data.get("ids", [])
-    if not ids:
-        raise HTTPException(status_code=400, detail="No IDs provided")
-
-    # SEC-NEW-04: Cap to prevent oversized IN-clause SQL queries
-    MAX_BULK_DELETE = 500
-    if len(ids) > MAX_BULK_DELETE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Bulk delete limited to {MAX_BULK_DELETE} items per request. Got {len(ids)}.",
-        )
+    """Bulk delete expenses. SEC-NEW-04: Requires MANAGER+, capped at 500, audit-logged.
+    SW-06: Replaced raw dict with BulkDeleteRequest schema — Pydantic validates
+    that ids is a non-empty list of strings with at most 500 items.
+    """
+    ids = data.ids
 
     try:
         from datetime import datetime, timezone
@@ -149,7 +142,7 @@ def bulk_delete_expenses(
             Expense.gymId == current_gym.id
         ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
         result = db.execute(stmt)
-        # SEC-NEW-04: Audit log for bulk hard-deletes
+        # SEC-NEW-04: Audit log for bulk soft-deletes
         log_audit(db, current_gym.id, "Expense", "bulk", "DELETE",
                   {"ids_count": result.rowcount, "requested_ids": len(ids)},
                   current_gym.username)

@@ -2,7 +2,7 @@ import logging
 from fastapi import Request
 from jose import jwt
 from core.config import settings
-from core.security import JWT_AUDIENCE, JWT_ISSUER
+from core.security import JWT_AUDIENCE, JWT_ISSUER, decode_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +19,7 @@ try:
             token = auth_header.replace("Bearer ", "")
             if token:
                 try:
-                    payload = jwt.decode(
-                        token, 
-                        settings.JWT_SECRET_KEY, 
-                        algorithms=[settings.ALGORITHM],
-                        audience=JWT_AUDIENCE,
-                        issuer=JWT_ISSUER
-                    )
+                    payload = decode_access_token(token)
                     gymId = payload.get("gymId")
                     if gymId:
                         return gymId

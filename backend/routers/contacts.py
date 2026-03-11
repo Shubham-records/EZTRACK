@@ -61,16 +61,21 @@ def get_contact(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
 ):
-    """Get single contact by ID."""
+    """Get single contact by ID.
+    SEC-V-09: isActive==True ensures soft-deleted contacts cannot be
+    retrieved by direct ID lookup (consistent with the list endpoint).
+    """
     contact = db.query(ExternalContact).filter(
         ExternalContact.id == contact_id,
-        ExternalContact.gymId == current_gym.id
+        ExternalContact.gymId == current_gym.id,
+        ExternalContact.isActive == True,  # SEC-V-09: block soft-deleted contact access
     ).first()
-    
+
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    
+
     return map_contact_response(contact)
+
 
 
 @router.post("", response_model=ExternalContactResponse, status_code=status.HTTP_201_CREATED)

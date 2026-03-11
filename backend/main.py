@@ -33,6 +33,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from routers import (
@@ -51,10 +52,22 @@ def init_db():
     """
     Create all tables that do not yet exist.
     Safe to run on every startup — SQLAlchemy checks IF NOT EXISTS.
-    For schema changes after initial deployment, use migrate.py.
+    For schema changes after initial deployment, use db_setup.py.
+
+    P0-2 / P0-3: install_indexes() also runs to ensure performance indexes
+    exist on every deploy. Uses IF NOT EXISTS — zero-cost no-op if indexes exist.
     """
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables verified / created.")
+
+    # Install performance indexes (safe on every startup — IF NOT EXISTS)
+    try:
+        from db_setup import install_indexes
+        install_indexes()
+    except Exception as exc:
+        # Non-fatal: indexes are for performance only. Log and continue.
+        logger.warning("Could not install performance indexes: %s", exc)
+
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
@@ -138,6 +151,11 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
+# ─── GZip Compression (P0-6 / PB-08) ─────────────────────────────────────────
+# Compress responses > 1KB. Reduces bandwidth ~60-80% for JSON lists.
+# minimum_size=1000 skips compression for tiny responses (health checks, etc.)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 
 # ─── HSTS Middleware (SEC-NEW-10) ─────────────────────────────────────────────
 
@@ -156,6 +174,36 @@ class HSTSMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(HSTSMiddleware)
+
+
+# ─── Request Body Size Limit (P0-7 / SEC-V-04) ───────────────────────────────
+# Reject requests with Content-Length > 10MB BEFORE reading the body.
+# Prevents OOM attacks via oversized uploads (the storage.py check runs AFTER
+# the entire file is read into memory — this guard fires before that).
+MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+class ContentSizeLimitMiddleware(BaseHTTPMiddleware):
+    """
+    P0-7 / SEC-V-04: Reject any request whose Content-Length header exceeds
+    MAX_REQUEST_BODY_SIZE (10 MB). SSE GET streams are excluded (no body).
+    Zero-payload requests are excluded (Content-Length: 0 or absent).
+    """
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                size = int(content_length)
+            except ValueError:
+                size = 0
+            if size > MAX_REQUEST_BODY_SIZE:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body too large. Maximum allowed size is 10 MB."},
+                )
+        return await call_next(request)
+
+app.add_middleware(ContentSizeLimitMiddleware)
 
 
 # ─── Request IP Middleware (SEC-NEW-08) ───────────────────────────────────────
@@ -240,6 +288,15 @@ def health_check():
 
 
 # ─── Dev Entry Point ──────────────────────────────────────────────────────────
+# Dev only. For 10K DAU production deploy, use:
+#
+#   SW-01: uvicorn main:app \
+#       --host 0.0.0.0 --port 8001 \
+#       --workers 4 \                     # 1 worker per vCPU
+#       --limit-concurrency 200 \         # max simultaneous connections
+#       --timeout-keep-alive 5            # release idle HTTP connections fast
+#
+# Do NOT use --reload in production.
 
 if __name__ == "__main__":
     import uvicorn

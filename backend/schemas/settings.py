@@ -60,3 +60,33 @@ class GymSettingsResponse(GymSettingsBase):
 
     class Config:
         from_attributes = True
+
+
+# ─── SW-08: Typed schemas for bulk pricing endpoints ─────────────────────────
+# Replaces raw `dict` params on the 3 bulk pricing POST endpoints.
+# Uses Dict[str, Dict[str, Any]] to preserve the flexible matrix format the
+# frontend sends while still enforcing a typed, validated wrapper object.
+
+from typing import Dict, Any
+
+
+class BulkPricingMatrixRequest(BaseModel):
+    """SW-08: Typed body for POST /settings/pricing/member-matrix/bulk.
+    Expected shape: { "Strength": { "Monthly": 1000, "Quarterly": 2700 }, ... }
+    """
+    matrix: Dict[str, Dict[str, Any]]
+
+
+class BulkProteinPricingRequest(BaseModel):
+    """SW-08: Typed body for POST /settings/pricing/protein-defaults/bulk.
+    Expected shape: { "ON": { "marginType": "percentage", "marginValue": 15 }, ... }
+    """
+    matrix: Dict[str, Dict[str, Any]]
+
+
+class BulkPTPricingRequest(BaseModel):
+    """SW-08: Typed body for POST /settings/pricing/pt-matrix/bulk.
+    Expected shape: { "1-on-1": { "Monthly": 3000 }, ... }
+    """
+    matrix: Dict[str, Dict[str, Any]]
+

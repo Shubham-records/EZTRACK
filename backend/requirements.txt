@@ -13,3 +13,4 @@ bcrypt==4.0.1
 slowapi        # ARCH-10: rate limiting on auth/sensitive endpoints
 Pillow         # SEC-10: image magic-byte validation + strip EXIF/payloads on upload
 cryptography   # SCH-07: Aadhaar Fernet AES encryption at rest
+alembic        # SW-10: production schema migrations

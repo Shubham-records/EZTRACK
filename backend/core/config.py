@@ -4,6 +4,7 @@ import os
 class Settings(BaseSettings):
     DATABASE_URL: str
     JWT_SECRET_KEY: str
+    JWT_SECRET_KEY_PREVIOUS: str | None = None
     ENCRYPTION_KEY: str
     ALGORITHM: str = "HS256"
     # SEC-03: Reduced from 720 (12 hours) → 30 minutes.

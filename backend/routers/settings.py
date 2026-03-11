@@ -5,7 +5,7 @@ from typing import List
 from core.database import get_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, GymSettings, PricingConfig
-from schemas.settings import GymSettingsCreate, GymSettingsUpdate, GymSettingsResponse
+from schemas.settings import GymSettingsCreate, GymSettingsUpdate, GymSettingsResponse, BulkPricingMatrixRequest, BulkProteinPricingRequest, BulkPTPricingRequest
 from schemas.pricing import PricingConfigCreate, PricingConfigUpdate, PricingConfigResponse
 from core.cache import invalidate_gym_settings
 
@@ -165,34 +165,33 @@ def get_member_pricing_matrix(
 
 @router.post("/pricing/member-matrix/bulk")
 def update_member_pricing_bulk(
-    data: dict,  # { "Strength": { "Monthly": 1000, "Quarterly": 2700 }, ... }
+    data: BulkPricingMatrixRequest,  # SW-08: typed; { "matrix": { "Strength": { "Monthly": 1000 } } }
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    """Bulk update member pricing matrix."""
-    for plan_type, periods in data.items():
+    """Bulk update member pricing matrix.
+    SW-08: Replaced raw dict with BulkPricingMatrixRequest. Body must be
+    { "matrix": { "<PlanType>": { "<PeriodType>": <price> } } }.
+    """
+    for plan_type, periods in data.matrix.items():
         for period_type, price in periods.items():
-            # Check if exists
             existing = db.query(PricingConfig).filter(
                 PricingConfig.gymId == current_gym.id,
                 PricingConfig.configType == "member",
                 PricingConfig.planType == plan_type,
                 PricingConfig.periodType == period_type
             ).first()
-            
             if existing:
                 existing.basePrice = float(price)
             else:
-                new_config = PricingConfig(
+                db.add(PricingConfig(
                     gymId=current_gym.id,
                     configType="member",
                     planType=plan_type,
                     periodType=period_type,
                     basePrice=float(price)
-                )
-                db.add(new_config)
-    
+                ))
     db.commit()
     return {"message": "Pricing updated successfully"}
 
@@ -251,35 +250,35 @@ def get_protein_pricing_defaults(
 
 @router.post("/pricing/protein-defaults/bulk")
 def update_protein_pricing_bulk(
-    data: dict,  # { "ON": { "marginType": "percentage", "marginValue": 15 }, ... }
+    data: BulkProteinPricingRequest,  # SW-08: typed; { "matrix": { "ON": { "marginType": ..., "marginValue": 15 } } }
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    """Bulk update protein pricing defaults by brand."""
-    for brand_name, config_data in data.items():
+    """Bulk update protein pricing defaults by brand.
+    SW-08: Replaced raw dict with BulkProteinPricingRequest. Body must be
+    { "matrix": { "<BrandName>": { "marginType": ..., "marginValue": ..., "offerDiscount": ... } } }.
+    """
+    for brand_name, config_data in data.matrix.items():
         existing = db.query(PricingConfig).filter(
             PricingConfig.gymId == current_gym.id,
             PricingConfig.configType == "protein",
             PricingConfig.brandName == brand_name
         ).first()
-        
         if existing:
-            existing.marginType = config_data.get("marginType", existing.marginType)
-            existing.marginValue = config_data.get("marginValue", existing.marginValue)
+            existing.marginType    = config_data.get("marginType", existing.marginType)
+            existing.marginValue   = config_data.get("marginValue", existing.marginValue)
             existing.offerDiscount = config_data.get("offerDiscount", existing.offerDiscount)
         else:
-            new_config = PricingConfig(
+            db.add(PricingConfig(
                 gymId=current_gym.id,
                 configType="protein",
                 brandName=brand_name,
-                basePrice=0,  # Not applicable for protein defaults
+                basePrice=0,
                 marginType=config_data.get("marginType"),
                 marginValue=config_data.get("marginValue"),
                 offerDiscount=config_data.get("offerDiscount", 0)
-            )
-            db.add(new_config)
-    
+            ))
     db.commit()
     return {"message": "Protein pricing defaults updated successfully"}
 
@@ -314,13 +313,16 @@ def get_pt_pricing_matrix(
 
 @router.post("/pricing/pt-matrix/bulk")
 def update_pt_pricing_bulk(
-    data: dict,  # { "1-on-1": { "Monthly": 3000 }, ... }
+    data: BulkPTPricingRequest,  # SW-08: typed; { "matrix": { "1-on-1": { "Monthly": 3000 } } }
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    """Bulk update personal training pricing matrix."""
-    for plan_type, periods in data.items():
+    """Bulk update personal training pricing matrix.
+    SW-08: Replaced raw dict with BulkPTPricingRequest. Body must be
+    { "matrix": { "<PlanType>": { "<PeriodType>": <price> } } }.
+    """
+    for plan_type, periods in data.matrix.items():
         for period_type, price in periods.items():
             existing = db.query(PricingConfig).filter(
                 PricingConfig.gymId == current_gym.id,
@@ -328,7 +330,6 @@ def update_pt_pricing_bulk(
                 PricingConfig.planType == plan_type,
                 PricingConfig.periodType == period_type
             ).first()
-            
             if existing:
                 existing.basePrice = float(price)
             else:

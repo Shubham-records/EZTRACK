@@ -57,3 +57,11 @@ class BulkExpenseCreate(BaseModel):
     def all_items(self) -> List[BulkExpenseItem]:
         """Return whichever list is populated (expenses or items)."""
         return self.expenses or self.items
+
+
+class BulkDeleteRequest(BaseModel):
+    """SW-06: Typed schema for bulk-delete endpoints.
+    Validates that ids is a list of strings, capped at 500 items.
+    Replaces raw dict params on bulk_delete_expenses and bulk_delete_proteins.
+    """
+    ids: List[str] = Field(..., min_length=1, max_length=500)

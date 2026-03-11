@@ -166,48 +166,8 @@ CREATE TRIGGER trg_validate_invoice_items
     EXECUTE FUNCTION validate_invoice_items();
 """
 
-# SCH-05: User.branchIds JSON FK validation.
-# Ensures every branch ID in the JSON array actually exists in the Branch table
-# AND belongs to the same gym, preventing orphaned cross-gym branch references.
-TRIGGER_USER_BRANCH_IDS_VALIDATION = """
-CREATE OR REPLACE FUNCTION validate_user_branch_ids()
-RETURNS TRIGGER AS $$
-DECLARE
-    branch_id TEXT;
-    branch_count INTEGER;
-BEGIN
-    -- NULL or empty array is fine (global access)
-    IF NEW."branchIds" IS NULL OR jsonb_array_length(NEW."branchIds"::jsonb) = 0 THEN
-        RETURN NEW;
-    END IF;
-
-    -- Check each branch ID exists AND belongs to the same gym
-    FOR branch_id IN SELECT jsonb_array_elements_text(NEW."branchIds"::jsonb)
-    LOOP
-        SELECT COUNT(*) INTO branch_count
-          FROM "Branch"
-         WHERE id = branch_id
-           AND "gymId" = NEW."gymId"
-           AND "isActive" = TRUE;
-
-        IF branch_count = 0 THEN
-            RAISE EXCEPTION
-                'User.branchIds contains invalid branch_id % (not found in gym % or inactive)',
-                branch_id, NEW."gymId";
-        END IF;
-    END LOOP;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_validate_user_branch_ids ON "User";
-CREATE TRIGGER trg_validate_user_branch_ids
-    BEFORE INSERT OR UPDATE ON "User"
-    FOR EACH ROW
-    EXECUTE FUNCTION validate_user_branch_ids();
-"""
-
+# SCH-05 (Legacy): User.branchIds JSON FK validation was removed as the column
+# was dropped in favor of the normalized UserBranchAccess junction table (P1-8).
 
 # ─── P13: AuditLog Monthly Partitioning ──────────────────────────────────────
 # Run ONCE when AuditLog reaches ~100K rows (typically 12 months after launch).
@@ -461,13 +421,11 @@ def install_db_objects():
         ("ARCH-07  ProteinStock.Quantity auto-sync trigger",   TRIGGER_PROTEIN_QUANTITY_SYNC),
         ("SEC-12   Gym hard-delete prevention rule",           GYM_HARD_DELETE_RULE),
         ("SCH-04   Invoice.items JSON schema validation",      TRIGGER_INVOICE_ITEMS_VALIDATION),
-        ("SCH-05   User.branchIds FK validation trigger",      TRIGGER_USER_BRANCH_IDS_VALIDATION),
     ]
 
     with engine.connect() as conn:
         for label, sql in objects:
             try:
-                # Execute each multi-statement block as a single transaction
                 conn.execute(text(sql))
                 conn.commit()
                 print(f"   ✅ {label}")
@@ -476,6 +434,66 @@ def install_db_objects():
                 print(f"   ❌ {label}")
                 print(f"      Error: {exc}")
 
+    print()
+
+
+# ─── P0-2 / P0-3: Performance Indexes ────────────────────────────────────────
+# P0-2: Composite indexes on commonly filtered column pairs.
+# P0-3: Partial indexes that EXCLUDE soft-deleted rows (~40% smaller indexes).
+# All use CREATE INDEX IF NOT EXISTS — safe to run on every deploy.
+
+PERFORMANCE_INDEXES = [
+    # Member (25% of traffic)
+    ("ix_member_gym_notdeleted",
+     'CREATE INDEX IF NOT EXISTS ix_member_gym_notdeleted ON "Member" ("gymId") WHERE "isDeleted" = false;'),
+    ("ix_member_gym_due",
+     'CREATE INDEX IF NOT EXISTS ix_member_gym_due ON "Member" ("gymId", "NextDuedate") WHERE "isDeleted" = false;'),
+    # Invoice (12% of traffic)
+    ("ix_invoice_gym_notdeleted",
+     'CREATE INDEX IF NOT EXISTS ix_invoice_gym_notdeleted ON "Invoice" ("gymId") WHERE "isDeleted" = false;'),
+    ("ix_invoice_gym_status_due",
+     'CREATE INDEX IF NOT EXISTS ix_invoice_gym_status_due ON "Invoice" ("gymId", status, "dueDate") WHERE "isDeleted" = false;'),
+    ("ix_invoice_gym_created",
+     'CREATE INDEX IF NOT EXISTS ix_invoice_gym_created ON "Invoice" ("gymId", "createdAt" DESC) WHERE "isDeleted" = false;'),
+    ("ix_invoice_member",
+     'CREATE INDEX IF NOT EXISTS ix_invoice_member ON "Invoice" ("memberId") WHERE "memberId" IS NOT NULL;'),
+    # PaymentEvent
+    ("ix_payment_event_invoice",
+     'CREATE INDEX IF NOT EXISTS ix_payment_event_invoice ON "PaymentEvent" ("invoiceId", "paidAt");'),
+    # Expense
+    ("ix_expense_gym_date",
+     'CREATE INDEX IF NOT EXISTS ix_expense_gym_date ON "Expense" ("gymId", "date" DESC) WHERE "isDeleted" = false;'),
+    # ProteinStock
+    ("ix_protein_gym_notdeleted",
+     'CREATE INDEX IF NOT EXISTS ix_protein_gym_notdeleted ON "ProteinStock" ("gymId") WHERE "isDeleted" = false;'),
+    ("ix_protein_gym_quantity",
+     'CREATE INDEX IF NOT EXISTS ix_protein_gym_quantity ON "ProteinStock" ("gymId", "Quantity") WHERE "isDeleted" = false;'),
+    # RefreshToken
+    ("ix_refresh_token_expires",
+     'CREATE INDEX IF NOT EXISTS ix_refresh_token_expires ON "RefreshToken" ("expiresAt") WHERE "isRevoked" = false;'),
+    ("ix_refresh_token_user",
+     'CREATE INDEX IF NOT EXISTS ix_refresh_token_user ON "RefreshToken" ("userId") WHERE "isRevoked" = false;'),
+    # AuditLog (belt-and-suspenders alongside model-defined index)
+    ("ix_audit_gym_created",
+     'CREATE INDEX IF NOT EXISTS ix_audit_gym_created ON "AuditLog" ("gymId", "createdAt" DESC);'),
+]
+
+
+def install_indexes():
+    """
+    P0-2 / P0-3: Install performance + partial indexes.
+    Safe to run on every startup — IF NOT EXISTS makes this a no-op when indexes exist.
+    """
+    print("📊  Installing performance indexes (P0-2 / P0-3) …")
+    with engine.connect() as conn:
+        for label, sql in PERFORMANCE_INDEXES:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                print(f"   ✅ {label}")
+            except Exception as exc:
+                conn.rollback()
+                print(f"   ⚠️  {label}: {exc}")
     print()
 
 
@@ -523,6 +541,12 @@ if __name__ == "__main__":
         partition_auditlog()
     else:
         # Normal: Full drop + recreate (DEV only)
+        if "--yes-i-am-sure" not in sys.argv:
+            print("❌  Refusing to run destructive operation.")
+            print("    This script DROPS ALL TABLES and deletes all data.")
+            print("    If you are sure, run: python dev_reset_db.py --yes-i-am-sure")
+            sys.exit(1)
+
         print("=" * 60)
         print("  EZTRACK — Clean-Slate DB Migration")
         print("=" * 60)
@@ -531,6 +555,7 @@ if __name__ == "__main__":
         drop_all_tables()
         create_all_tables()
         install_db_objects()
+        install_indexes()   # P0-2 / P0-3: performance indexes
         verify_tables()
 
         print()
@@ -540,3 +565,4 @@ if __name__ == "__main__":
         print()
         print("  Tip: When AuditLog exceeds 100K rows (~12 months), run:")
         print("       python migrate.py --partition")
+

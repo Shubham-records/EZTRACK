@@ -148,6 +148,11 @@ class User(Base):
     branchAccess = relationship("UserBranchAccess", back_populates="user",
                                 cascade="all, delete-orphan")
 
+    @property
+    def branchIds(self):
+        """P1-8: Dynamic property replaces the old JSON column."""
+        return [ba.branchId for ba in self.branchAccess]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UserBranchAccess  (P12: replaces User.branchIds JSON — normalized junction table)
@@ -294,6 +299,11 @@ class Invoice(Base):
             "\"paymentMode\" IS NULL OR \"paymentMode\" IN ('CASH', 'UPI', 'CARD', 'BANK')",
             name="ck_invoice_payment_mode"
         ),
+        # SCH-REC-04 (P2-6): Financial integrity constraints
+        CheckConstraint("total >= 0", name="ck_invoice_total_positive"),
+        CheckConstraint("\"paidAmount\" >= 0", name="ck_invoice_paid_positive"),
+        # Prevent paidAmount from exceeding total
+        CheckConstraint("\"paidAmount\" <= total", name="ck_invoice_paid_le_total"),
     )
 
     id     = Column(String, primary_key=True, default=generate_uuid)
@@ -364,6 +374,8 @@ class PaymentEvent(Base):
             "\"paymentMode\" IN ('CASH', 'UPI', 'CARD', 'BANK')",
             name="ck_payment_event_mode"
         ),
+        # SCH-REC-04 (P2-6): Financial integrity constraints
+        CheckConstraint("amount >= 0", name="ck_payment_event_amount_positive"),
     )
 
     id        = Column(String, primary_key=True, default=generate_uuid)
@@ -552,6 +564,9 @@ class ProteinLot(Base):
     __tablename__ = "ProteinLot"
     __table_args__ = (
         Index("ix_lot_gym_protein", "gymId", "proteinId"),
+        # SCH-REC-04 (P2-6): Financial/Inventory integrity constraints
+        CheckConstraint("quantity >= 0", name="ck_proteinlot_qty_positive"),
+        CheckConstraint("\"purchasePrice\" >= 0 OR \"purchasePrice\" IS NULL", name="ck_proteinlot_price_positive"),
     )
 
     id        = Column(String, primary_key=True, default=generate_uuid)
@@ -679,6 +694,8 @@ class Expense(Base):
     __table_args__ = (
         Index("ix_expense_gym_date",     "gymId", "date"),
         Index("ix_expense_gym_category", "gymId", "category"),
+        # SCH-REC-04 (P2-6): Financial integrity constraints
+        CheckConstraint("amount >= 0", name="ck_expense_amount_positive"),
     )
 
     id    = Column(String, primary_key=True, default=generate_uuid)

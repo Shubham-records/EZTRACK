@@ -36,12 +36,16 @@ from models.all_models import (
     Gym, Member, Invoice, ProteinStock, ProteinLot, Expense, GymSettings, GymDailySummary
 )
 from core.rate_limit import rate_limit
+from core.alert_utils import (
+    make_expiry_alert, make_low_stock_alert, make_overdue_balance_alert, sort_alerts
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-SSE_INTERVAL_SECONDS = 60   # Push every 1 minute
-_SUMMARY_STALE_SECONDS = 300  # ARCH-NEW-02: recompute after 5 minutes
+SSE_INTERVAL_SECONDS    = 60    # Push every 1 minute
+SSE_MAX_DURATION_SECONDS = 1800  # P0-5: Force reconnect after 30 min — prevents zombie connections
+_SUMMARY_STALE_SECONDS  = 300   # ARCH-NEW-02: recompute after 5 minutes
 
 
 # ─── Shared stats computation ────────────────────────────────────────────────
@@ -457,9 +461,19 @@ async def dashboard_stream(
     gym_id = current_gym.id
 
     async def event_generator():
+        """
+        P0-5: Streams stats events to the client.
+        Auto-closes after SSE_MAX_DURATION_SECONDS (30 min) to prevent zombie connections.
+        Frontend should listen for the 'reconnect' event and re-establish the stream.
+        """
         queue = await stream_manager.subscribe(gym_id)
+        connected_at = asyncio.get_event_loop().time()
         try:
             while True:
+                # P0-5: Force reconnect after max duration
+                if asyncio.get_event_loop().time() - connected_at > SSE_MAX_DURATION_SECONDS:
+                    yield "event: reconnect\ndata: {\"reason\": \"max_duration\"}\n\n"
+                    break
                 data = await queue.get()
                 yield data
         except asyncio.CancelledError:
@@ -521,18 +535,7 @@ def get_dashboard_alerts(
             continue
         try:
             days_diff = (m.NextDuedate - today).days
-            if days_diff < 0:
-                msg, severity = f"Expired {abs(days_diff)} days ago", "high"
-            elif days_diff == 0:
-                msg, severity = "Expires today", "high"
-            else:
-                msg = f"Expires in {days_diff} days"
-                severity = "high" if days_diff <= 3 else "medium"
-            alerts.append({
-                "type": "expiry", "severity": severity,
-                "title": f"{m.Name}: {msg}",
-                "entityId": m.id, "entityType": "member_expiry",
-            })
+            alerts.append(make_expiry_alert(m.id, m.Name or "Member", days_diff))
         except Exception:
             continue
 
@@ -550,13 +553,7 @@ def get_dashboard_alerts(
     ).all()
     for p in low_stock_proteins:
         qty = p.Quantity or 0
-        threshold = p.StockThreshold or default_stock_threshold
-        name = p.ProductName or p.Brand or "Unknown"
-        alerts.append({
-            "type": "low_stock", "severity": "medium",
-            "title": f"{name} is low ({qty} remaining)",
-            "entityId": p.id, "entityType": "protein",
-        })
+        alerts.append(make_low_stock_alert(p.id, p.ProductName, p.Brand, qty))
 
     # 3. Overdue pending balances
     pending = db.query(Invoice).filter(
@@ -567,13 +564,9 @@ def get_dashboard_alerts(
     ).all()
     for pb in pending:
         balance = float(pb.total or 0) - float(pb.paidAmount or 0)
-        alerts.append({
-            "type": "overdue_balance", "severity": "high",
-            "title": f"Overdue ₹{balance:.0f} ({pb.customerName or 'Customer'})",
-            "entityId": pb.id, "entityType": "pending_balance",
-        })
+        alerts.append(make_overdue_balance_alert(pb.id, pb.customerName, balance))
 
-    alerts.sort(key=lambda x: 0 if x["severity"] == "high" else 1)
+    sort_alerts(alerts)
     return {"count": len(alerts), "alerts": alerts[:20]}
 
 
