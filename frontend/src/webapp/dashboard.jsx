@@ -73,13 +73,23 @@ export default function Dashboard() {
 
         const [statsRes, invoicesRes, expensesRes] = await Promise.all([
           fetch('/api/dashboard/stats', { headers }),
-          fetch('/api/invoices', { headers }),
-          fetch('/api/expenses', { headers })
+          fetch('/api/invoices', { 
+            headers: { ...headers, 'X-Page-Size': '1000' } 
+          }),
+          fetch('/api/expenses', { 
+            headers: { ...headers, 'X-Page-Size': '1000' } 
+          })
         ]);
 
         if (statsRes.ok) setStats(await statsRes.json());
-        if (invoicesRes.ok) setInvoices(await invoicesRes.json());
-        if (expensesRes.ok) setExpenses(await expensesRes.json());
+        if (invoicesRes.ok) {
+          const res = await invoicesRes.json();
+          setInvoices(res.data || []);
+        }
+        if (expensesRes.ok) {
+          const res = await expensesRes.json();
+          setExpenses(res.data || []);
+        }
       } catch (e) {
         console.error("Failed to fetch dashboard data", e);
       } finally {

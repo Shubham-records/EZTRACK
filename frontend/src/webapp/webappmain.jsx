@@ -78,18 +78,24 @@ export default function WebappMain() {
 
   const fetchAllExpenses = async () => {
     let allData = [];
-    let skip = 0;
-    const limit = 50;
+    let page = 1;
+    const pageSize = 100;
     try {
       while (true) {
-        const res = await fetch(`/api/expenses?limit=${limit}&skip=${skip}`, { headers: getAuthHeaders() });
+        const res = await fetch('/api/expenses', { 
+          headers: { 
+            ...getAuthHeaders(), 
+            'X-Page': page.toString(), 
+            'X-Page-Size': pageSize.toString() 
+          } 
+        });
         if (!res.ok) break;
-        const data = await res.json();
-        const batch = Array.isArray(data) ? data : (data.data || []);
+        const result = await res.json();
+        const batch = Array.isArray(result) ? result : (result.data || []);
         if (batch.length === 0) break;
         allData = [...allData, ...batch];
-        if (batch.length < limit) break;
-        skip += limit;
+        if (batch.length < pageSize) break;
+        page++;
       }
     } catch (e) {
       console.error("Error fetching expenses", e);
@@ -99,18 +105,24 @@ export default function WebappMain() {
 
   const fetchAllInvoices = async () => {
     let allData = [];
-    let skip = 0;
-    const limit = 50;
+    let page = 1;
+    const pageSize = 100;
     try {
       while (true) {
-        const res = await fetch(`/api/invoices?limit=${limit}&skip=${skip}`, { headers: getAuthHeaders() });
+        const res = await fetch('/api/invoices', { 
+          headers: { 
+            ...getAuthHeaders(), 
+            'X-Page': page.toString(), 
+            'X-Page-Size': pageSize.toString() 
+          } 
+        });
         if (!res.ok) break;
-        const data = await res.json();
-        const batch = Array.isArray(data) ? data : (data.data || []);
+        const result = await res.json();
+        const batch = Array.isArray(result) ? result : (result.data || []);
         if (batch.length === 0) break;
         allData = [...allData, ...batch];
-        if (batch.length < limit) break;
-        skip += limit;
+        if (batch.length < pageSize) break;
+        page++;
       }
     } catch (e) {
       console.error("Error fetching invoices", e);
@@ -194,11 +206,11 @@ export default function WebappMain() {
           return;
         }
 
-        const response = await fetch(`/api/members/?page=1&page_size=30`, {
+        const response = await fetch('/api/members/', {
           headers: {
-            Authorization: `Bearer ${jwtToken}`,
-            'Content-Type': 'application/json',
-            'X-Database-Name': dbName
+            ...getAuthHeaders(),
+            'X-Page': '1',
+            'X-Page-Size': '30'
           }
         });
 
@@ -232,11 +244,11 @@ export default function WebappMain() {
           return;
         }
 
-        const response = await fetch(`/api/proteins/?page=1&page_size=30`, {
+        const response = await fetch('/api/proteins/', {
           headers: {
-            Authorization: `Bearer ${jwtToken}`,
-            'Content-Type': 'application/json',
-            'X-Database-Name': dbName
+            ...getAuthHeaders(),
+            'X-Page': '1',
+            'X-Page-Size': '30'
           }
         });
 

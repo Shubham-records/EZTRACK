@@ -63,7 +63,7 @@ export default function WebappSidebar({ clickedBUTTON }) {
         const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
         if (!token) return;
 
-        const res = await fetch('/api/branch-details', {
+        const res = await fetch('/api/branch-details?include_logo=true', {
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -76,21 +76,8 @@ export default function WebappSidebar({ clickedBUTTON }) {
             gymName: data.gymName || 'EZTRACK',
             slogan: data.slogan || '',
           });
-          if (data.hasLogo) {
-            try {
-              const logoRes = await fetch('/api/branch-details/logo', {
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  'X-Database-Name': dbName,
-                }
-              });
-              if (logoRes.ok) {
-                const blob = await logoRes.blob();
-                setGymLogoUrl(URL.createObjectURL(blob));
-              }
-            } catch (logoErr) {
-              console.error("Failed to fetch logo", logoErr);
-            }
+          if (data.hasLogo && data.logoUrl) {
+            setGymLogoUrl(data.logoUrl);
           }
         }
       } catch (e) {

@@ -175,7 +175,7 @@ export default function AdminSettings() {
     // ---- Gym Details ----
     const fetchGymDetails = async () => {
         try {
-            const res = await fetch('/api/branch-details', { headers: getAuthHeaders() });
+            const res = await fetch('/api/branch-details?include_logo=true', { headers: getAuthHeaders() });
             if (res.ok) {
                 const data = await res.json();
                 setGymDetails({
@@ -191,20 +191,8 @@ export default function AdminSettings() {
                     pincode: data.pincode || '',
                     phoneCountryCode: data.phoneCountryCode || '+91',
                 });
-                if (data.hasLogo) {
-                    try {
-                        const token = localStorage.getItem('eztracker_jwt_access_control_token');
-                        const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
-                        const logoRes = await fetch('/api/branch-details/logo', {
-                            headers: { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName }
-                        });
-                        if (logoRes.ok) {
-                            const blob = await logoRes.blob();
-                            setGymLogoPreview(URL.createObjectURL(blob));
-                        }
-                    } catch (logoErr) {
-                        console.error('Failed to fetch logo', logoErr);
-                    }
+                if (data.hasLogo && data.logoUrl) {
+                    setGymLogoPreview(data.logoUrl);
                 }
             }
         } catch (e) {
@@ -471,7 +459,7 @@ export default function AdminSettings() {
             const res = await fetch(url, {
                 method,
                 headers: getAuthHeaders(),
-                body: JSON.stringify({ ...termForm, isActive: true })
+                body: JSON.stringify({ ...termForm, isActive: true, sortOrder: 0 })
             });
             if (res.ok) {
                 fetchTerms();

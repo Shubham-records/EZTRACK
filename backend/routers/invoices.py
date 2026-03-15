@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from core.database import get_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, Invoice, Member, PaymentEvent
-from schemas.invoice import InvoiceCreate, InvoiceResponse
+from schemas.invoice import InvoiceCreate, InvoiceResponse, PendingCreate
+from schemas.payment import PaymentRecord
 from core.audit_utils import log_audit
 from core.rate_limit import rate_limit
 
@@ -65,15 +66,17 @@ def map_invoice_response(invoice: Invoice):
 @router.get("")
 @router.get("/")
 def get_invoices(
-    limit: int = 100,
-    offset: int = 0,
+    page: int = 1,
+    page_size: int = 30,
     status_filter: Optional[str] = None,   # PENDING | PARTIAL | PAID
     member_id: Optional[str] = None,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
-):
-    """ARCH-06: Paginated invoice list. max limit=500."""
-    limit = min(limit, 500)
+    ):
+    """ARCH-06: Paginated invoice list. max page_size=500."""
+    page_size = max(1, min(page_size, 500))
+    offset = (page - 1) * page_size
+
     q = db.query(Invoice).filter(
         Invoice.gymId == current_gym.id,
         Invoice.isDeleted == False,   # SCH-08: soft-delete
@@ -82,13 +85,18 @@ def get_invoices(
         q = q.filter(Invoice.status == status_filter.upper())
     if member_id:
         q = q.filter(Invoice.memberId == member_id)
+
     total = q.count()
-    invoices = q.order_by(Invoice.invoiceDate.desc()).offset(offset).limit(limit).all()
+    invoices = q.order_by(Invoice.invoiceDate.desc()).offset(offset).limit(page_size).all()
+    
+    total_pages = (total + page_size - 1) // page_size if page_size > 0 else 1
+
     return {
+        "data": [map_invoice_response(i) for i in invoices],
         "total": total,
-        "limit": limit,
-        "offset": offset,
-        "items": [map_invoice_response(i) for i in invoices],
+        "page": page,
+        "pageSize": page_size,
+        "totalPages": total_pages,
     }
 
 
@@ -100,7 +108,7 @@ def create_invoice(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-02: MANAGER+ can create invoices
-):
+    ):
     # SCH-NORM-01: Cross-tenant guard — prevent invoices being attributed to
     # members of a different gym. Invoice.gymId is denormalized for query
     # efficiency, but without this check a stale/malicious memberId could
@@ -249,7 +257,7 @@ def bulk_delete_invoices(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager)
-):
+    ):
     """Bulk delete invoices (soft-delete)"""
     ids = data.get("ids", [])
     if not ids:
@@ -291,7 +299,7 @@ def update_invoice(
     data: InvoiceUpdateRequest,   # SEC-04: typed schema, not raw dict
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
-):
+    ):
     invoice_id = data.id
     if not invoice_id:
         raise HTTPException(status_code=400, detail="Invoice ID required")
@@ -327,7 +335,7 @@ def delete_invoice(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-02: MANAGER+ only
-):
+    ):
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.gymId == current_gym.id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -346,7 +354,7 @@ def get_payment_history(
     invoice_id: str,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db)
-):
+    ):
     invoice = db.query(Invoice).filter(
         Invoice.id == invoice_id,
         Invoice.gymId == current_gym.id
@@ -376,7 +384,7 @@ def pay_invoice(
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-02: MANAGER+ can record payments
-):
+    ):
     invoice = db.query(Invoice).filter(
         Invoice.id == invoice_id,
         Invoice.gymId == current_gym.id
@@ -438,7 +446,6 @@ def pay_invoice(
 # ─── Pending Sub-Router ───────────────────────────────────────────────────────
 
 import urllib.parse
-from schemas.payment import PaymentRecord
 
 pending_router = APIRouter(prefix="/pending")
 
@@ -488,6 +495,47 @@ def get_pending_balances(
     
     invoices = query.order_by(Invoice.dueDate).all()
     return [map_invoice_to_pending(inv) for inv in invoices]
+
+@pending_router.post("")
+@pending_router.post("/")
+def create_pending_balance(
+    data: PendingCreate,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
+):
+    """Create a new pending balance (simplified invoice)."""
+    # Simply create an invoice with one item representing the generic balance
+    # We store the "EntityName" in customerName on the Invoice
+    new_invoice = Invoice(
+        gymId=current_gym.id,
+        customerName=data.entityName,
+        items=[{
+            "description": f"Pending Balance ({data.entityType})",
+            "quantity": 1,
+            "rate": data.amount,
+            "amount": data.amount
+        }],
+        subTotal=data.amount,
+        total=data.amount,
+        status="PENDING",
+        paymentMode="CASH",
+        invoiceDate=datetime.now(),
+        dueDate=data.dueDate,
+        paidAmount=0,
+        editReason=data.notes or f"Manual pending entry for {data.entityType}",
+        lastEditedBy=current_gym.username
+    )
+    
+    db.add(new_invoice)
+    db.flush()
+    
+    log_audit(db, current_gym.id, "Invoice", new_invoice.id, "CREATE_PENDING", 
+              {"name": data.entityName, "amount": data.amount}, 
+              current_gym.username)
+    
+    db.commit()
+    return map_invoice_to_pending(new_invoice)
 
 @pending_router.get("/summary")
 def get_pending_summary(

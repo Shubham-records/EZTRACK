@@ -8,8 +8,21 @@ import {
 import * as XLSX from 'xlsx';
 
 const cardStyle = "bg-surface-light dark:bg-surface-dark p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm";
-const COLORS = ['#14b8a6', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const COLORS = ['#14b8a6', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+// Helper to parse dates like DD/MM/YYYY
+function parseInternalDate(dateStr) {
+    if (!dateStr) return null;
+    if (dateStr instanceof Date) return dateStr;
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+        // Assume DD/MM/YYYY
+        return new Date(parts[2], parts[1] - 1, parts[0]);
+    }
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? null : d;
+}
 
 export default function Analytics() {
     const { showToast } = useToast();
@@ -129,19 +142,35 @@ export default function Analytics() {
 
     const fetchAllData = async () => {
         try {
+            const headers = getAuthHeaders();
             const [membersRes, invoicesRes, proteinsRes, expensesRes, pendingRes] = await Promise.all([
-                fetch('/api/members', { headers: getAuthHeaders() }),
-                fetch('/api/invoices', { headers: getAuthHeaders() }),
-                fetch('/api/proteins', { headers: getAuthHeaders() }),
-                fetch('/api/expenses', { headers: getAuthHeaders() }),
-                fetch('/api/pending', { headers: getAuthHeaders() })
+                fetch('/api/members', { 
+                    headers: { ...headers, 'X-Page-Size': '1000' } 
+                }),
+                fetch('/api/invoices', { 
+                    headers: { ...headers, 'X-Page-Size': '1000' } 
+                }),
+                fetch('/api/proteins', { 
+                    headers: { ...headers, 'X-Page-Size': '1000' } 
+                }),
+                fetch('/api/expenses', { 
+                    headers: { ...headers, 'X-Page-Size': '1000' } 
+                }),
+                fetch('/api/invoices/pending', { headers })
             ]);
 
-            const members = membersRes.ok ? await membersRes.json() : [];
-            const invoices = invoicesRes.ok ? await invoicesRes.json() : [];
-            const proteins = proteinsRes.ok ? await proteinsRes.json() : [];
-            const expenses = expensesRes.ok ? await expensesRes.json() : [];
-            const pending = pendingRes.ok ? await pendingRes.json() : [];
+            const membersData = membersRes.ok ? await membersRes.json() : [];
+            const invoicesData = invoicesRes.ok ? await invoicesRes.json() : [];
+            const proteinsData = proteinsRes.ok ? await proteinsRes.json() : [];
+            const expensesData = expensesRes.ok ? await expensesRes.json() : [];
+            const pendingData = pendingRes.ok ? await pendingRes.json() : [];
+
+            // Handle paginated structure (result.data) or fallback to plain array
+            const members = Array.isArray(membersData) ? membersData : (membersData.data || []);
+            const invoices = Array.isArray(invoicesData) ? invoicesData : (invoicesData.data || []);
+            const proteins = Array.isArray(proteinsData) ? proteinsData : (proteinsData.data || []);
+            const expenses = Array.isArray(expensesData) ? expensesData : (expensesData.data || []);
+            const pending = Array.isArray(pendingData) ? pendingData : (pendingData.data || []);
 
             // Store raw data for filters
             setRawData({ members, invoices, proteins, expenses, pending });
@@ -178,8 +207,8 @@ export default function Analytics() {
                 if (m.PlanType) planData[m.PlanType] = (planData[m.PlanType] || 0) + 1;
 
                 if (m.DateOfJoining || m.createdAt) {
-                    const joinDate = new Date(m.DateOfJoining || m.createdAt);
-                    if (joinDate.getMonth() === thisMonth && joinDate.getFullYear() === thisYear) {
+                    const joinDate = parseInternalDate(m.DateOfJoining || m.createdAt);
+                    if (joinDate && joinDate.getMonth() === thisMonth && joinDate.getFullYear() === thisYear) {
                         newThisMonth++;
                     }
                 }
@@ -191,8 +220,8 @@ export default function Analytics() {
             let newLastMonth = 0;
             members.forEach(m => {
                 if (m.DateOfJoining || m.createdAt) {
-                    const joinDate = new Date(m.DateOfJoining || m.createdAt);
-                    if (joinDate.getMonth() === prevMonth && joinDate.getFullYear() === prevYear) {
+                    const joinDate = parseInternalDate(m.DateOfJoining || m.createdAt);
+                    if (joinDate && joinDate.getMonth() === prevMonth && joinDate.getFullYear() === prevYear) {
                         newLastMonth++;
                     }
                 }
@@ -203,13 +232,8 @@ export default function Analytics() {
             const expiringIn30Days = [];
             members.forEach(m => {
                 if (m.MembershipExpiryDate || m.NextDuedate) {
-                    const expiryStr = m.MembershipExpiryDate || m.NextDuedate;
-                    let expiryDate;
-                    if (expiryStr.includes('/')) {
-                        expiryDate = new Date(expiryStr.split('/').reverse().join('-'));
-                    } else {
-                        expiryDate = new Date(expiryStr);
-                    }
+                    const expiryDate = parseInternalDate(m.MembershipExpiryDate || m.NextDuedate);
+                    if (!expiryDate) return;
                     const daysUntil = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
                     if (daysUntil > 0 && daysUntil <= 7) expiringIn7Days.push({ ...m, daysUntil });
                     else if (daysUntil > 7 && daysUntil <= 30) expiringIn30Days.push({ ...m, daysUntil });
@@ -222,8 +246,8 @@ export default function Analytics() {
                 d.setMonth(d.getMonth() - i);
                 const monthName = d.toLocaleString('default', { month: 'short' });
                 const count = members.filter(m => {
-                    const joinDate = new Date(m.DateOfJoining || m.createdAt);
-                    return joinDate.getMonth() === d.getMonth() && joinDate.getFullYear() === d.getFullYear();
+                    const joinDate = parseInternalDate(m.DateOfJoining || m.createdAt);
+                    return joinDate && joinDate.getMonth() === d.getMonth() && joinDate.getFullYear() === d.getFullYear();
                 }).length;
                 monthlyGrowth.push({ month: monthName, members: count });
             }
@@ -270,12 +294,14 @@ export default function Analytics() {
                 revenueByPayment[payMode] = (revenueByPayment[payMode] || 0) + amount;
 
                 if (inv.date || inv.createdAt || inv.invoiceDate) {
-                    const date = new Date(inv.invoiceDate || inv.date || inv.createdAt);
-                    if (date.getMonth() === thisMonth && date.getFullYear() === thisYear) {
-                        thisMonthRevenue += amount;
-                    }
-                    if (date.getMonth() === prevMonth && date.getFullYear() === prevYear) {
-                        lastMonthRevenue += amount;
+                    const date = parseInternalDate(inv.invoiceDate || inv.date || inv.createdAt);
+                    if (date) {
+                        if (date.getMonth() === thisMonth && date.getFullYear() === thisYear) {
+                            thisMonthRevenue += amount;
+                        }
+                        if (date.getMonth() === prevMonth && date.getFullYear() === prevYear) {
+                            lastMonthRevenue += amount;
+                        }
                     }
                 }
             });
@@ -285,8 +311,8 @@ export default function Analytics() {
                 d.setMonth(d.getMonth() - i);
                 const monthName = d.toLocaleString('default', { month: 'short' });
                 const monthTotal = invoices.filter(inv => {
-                    const date = new Date(inv.invoiceDate || inv.date || inv.createdAt);
-                    return date.getMonth() === d.getMonth() && date.getFullYear() === d.getFullYear();
+                    const date = parseInternalDate(inv.invoiceDate || inv.date || inv.createdAt);
+                    return date && date.getMonth() === d.getMonth() && date.getFullYear() === d.getFullYear();
                 }).reduce((sum, inv) => sum + (inv.total || 0), 0);
                 monthlyRevenue.push({ month: monthName, revenue: monthTotal });
             }
@@ -375,8 +401,8 @@ export default function Analytics() {
                 d.setMonth(d.getMonth() - i);
                 const monthName = d.toLocaleString('default', { month: 'short' });
                 const monthTotal = expenses.filter(exp => {
-                    const date = new Date(exp.date);
-                    return date.getMonth() === d.getMonth() && date.getFullYear() === d.getFullYear();
+                    const date = parseInternalDate(exp.date);
+                    return date && date.getMonth() === d.getMonth() && date.getFullYear() === d.getFullYear();
                 }).reduce((sum, exp) => sum + (exp.amount || 0), 0);
                 monthlyExpenses.push({ month: monthName, expenses: monthTotal });
             }
@@ -394,8 +420,8 @@ export default function Analytics() {
 
                 // Track days overdue
                 if (p.dueDate) {
-                    const dueDate = new Date(p.dueDate);
-                    const daysDiff = Math.floor((new Date() - dueDate) / (1000 * 60 * 60 * 24));
+                    const dueDate = parseInternalDate(p.dueDate);
+                    const daysDiff = dueDate ? Math.floor((new Date() - dueDate) / (1000 * 60 * 60 * 24)) : -1;
                     if (daysDiff > 0) {
                         overdueCount++;
                         if (daysDiff <= 30) agingBuckets['0-30'] += remaining;

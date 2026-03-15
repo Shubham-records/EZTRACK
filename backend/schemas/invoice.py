@@ -48,3 +48,12 @@ class InvoiceResponse(InvoiceBase):
 
     class Config:
         from_attributes = True
+
+
+class PendingCreate(BaseModel):
+    entityType: str  # 'member' or 'protein'
+    entityName: str
+    phone: Optional[str] = None
+    amount: float
+    dueDate: Optional[date] = None
+    notes: Optional[str] = None

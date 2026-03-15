@@ -376,8 +376,8 @@ function InvoiceDetailModal({ invoice, onClose, onNavigateToMember, onRefresh })
                                     customerName: invoice.customerName || member?.Name,
                                     customerWhatsapp: member?.Whatsapp,
                                     customerPhone: member?.Mobile,
-                                }, {}, []);
-                                doc.save(`Invoice_${invoice.customerName || 'Customer'}_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`);
+                                }, branchDetails, gymSettings, termsPoints);
+                                doc.save(`Invoice_${invoice.customerName || member?.Name || 'Customer'}_${new Date().toLocaleDateString().replace(/\//g, '-')}.pdf`);
                                 showToast('Invoice PDF downloaded!', 'success');
                             } catch (err) {
                                 console.error(err);
@@ -397,7 +397,7 @@ function InvoiceDetailModal({ invoice, onClose, onNavigateToMember, onRefresh })
                                     ...invoice,
                                     customerName: invoice.customerName || member?.Name,
                                     customerWhatsapp: phone,
-                                }, {}, []);
+                                }, branchDetails, gymSettings, termsPoints);
                                 const pdfBlob = doc.output('blob');
                                 shareViaWhatsApp(phone, pdfBlob, {
                                     customerName: invoice.customerName || member?.Name,
@@ -448,6 +448,9 @@ export default function Invoices({ initialFilter = '', highlightInvoiceId = '', 
     const [confirmModal, setConfirmModal] = useState({ isOpen: false, action: null, title: '', message: '' });
     const [currentPage, setCurrentPage] = useState(1);
     const [blinkId, setBlinkId] = useState('');
+    const [branchDetails, setBranchDetails] = useState({});
+    const [gymSettings, setGymSettings] = useState({});
+    const [termsPoints, setTermsPoints] = useState([]);
     const itemsPerPage = 30;
 
     const getAuthHeaders = useCallback(() => {
@@ -456,7 +459,38 @@ export default function Invoices({ initialFilter = '', highlightInvoiceId = '', 
         return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Database-Name': dbName };
     }, []);
 
-    useEffect(() => { fetchInvoices(); }, []);
+    useEffect(() => { 
+        fetchInvoices(); 
+        fetchDetailsForPDF();
+    }, []);
+
+    const fetchDetailsForPDF = async () => {
+        try {
+            const token = localStorage.getItem('eztracker_jwt_access_control_token');
+            const dbName = localStorage.getItem('eztracker_jwt_databaseName_control_token');
+            const headers = { Authorization: `Bearer ${token}`, 'X-Database-Name': dbName };
+
+            const [branchRes, settingsRes, termsRes, logoRes] = await Promise.all([
+                fetch('/api/branch-details', { headers }),
+                fetch('/api/settings', { headers }),
+                fetch('/api/terms', { headers }),
+                fetch('/api/branch-details/logo/base64', { headers })
+            ]);
+
+            if (branchRes.ok) {
+                const branchData = await branchRes.json();
+                if (logoRes.ok) {
+                    const logoData = await logoRes.json();
+                    branchData.logoBase64 = logoData.logo;
+                }
+                setBranchDetails(branchData);
+            }
+            if (settingsRes.ok) setGymSettings(await settingsRes.json());
+            if (termsRes.ok) setTermsPoints(await termsRes.json());
+        } catch (error) {
+            console.error('Failed to fetch PDF details', error);
+        }
+    };
 
     // Highlight (blink) the newly created invoice after load
     useEffect(() => {
@@ -480,16 +514,26 @@ export default function Invoices({ initialFilter = '', highlightInvoiceId = '', 
         }
     }, [highlightInvoiceId, loading, invoices]);
 
-    const fetchInvoices = async (skip = 0, currentData = []) => {
+    const fetchInvoices = async (page = 1, currentData = []) => {
         try {
-            const limit = 50;
-            const res = await fetch(`/api/invoices?limit=${limit}&skip=${skip}`, { headers: getAuthHeaders() });
+            const pageSize = 100;
+            const res = await fetch('/api/invoices', { 
+                headers: { 
+                    ...getAuthHeaders(),
+                    'X-Page': page.toString(),
+                    'X-Page-Size': pageSize.toString()
+                } 
+            });
             if (res.ok) {
-                const data = await res.json();
-                const newData = Array.isArray(data) ? data : (data.data || []);
+                const result = await res.json();
+                const newData = Array.isArray(result) ? result : (result.data || []);
                 const allData = [...currentData, ...newData];
                 setInvoices(allData);
-                if (newData.length === limit) setTimeout(() => fetchInvoices(skip + limit, allData), 100);
+                
+                // If we got a full page, fetch the next one recursively to populate the local filterable list
+                if (newData.length === pageSize) {
+                    setTimeout(() => fetchInvoices(page + 1, allData), 100);
+                }
             }
         } catch { showToast('Failed to fetch invoices', 'error'); }
         finally { setLoading(false); }

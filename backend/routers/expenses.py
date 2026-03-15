@@ -33,13 +33,15 @@ def get_expenses(
     category: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    limit: int = 100,
-    offset: int = 0,
+    page: int = 1,
+    page_size: int = 30,
     current_gym: Gym = Depends(get_current_gym),
     db: Session = Depends(get_db),
 ):
-    """ARCH-06: Paginated expenses. max limit=500."""
-    limit = min(limit, 500)
+    """ARCH-06: Paginated expenses. max page_size=500."""
+    page_size = max(1, min(page_size, 500))
+    offset = (page - 1) * page_size
+
     query = db.query(Expense).filter(
         Expense.gymId == current_gym.id,
         Expense.isDeleted == False
@@ -53,12 +55,16 @@ def get_expenses(
         query = query.filter(Expense.date <= parse_date(end_date))
 
     total = query.count()
-    expenses = query.order_by(Expense.date.desc()).offset(offset).limit(limit).all()
+    expenses = query.order_by(Expense.date.desc()).offset(offset).limit(page_size).all()
+    
+    total_pages = (total + page_size - 1) // page_size if page_size > 0 else 1
+
     return {
+        "data": [map_expense_response(e) for e in expenses],
         "total": total,
-        "limit": limit,
-        "offset": offset,
-        "items": [map_expense_response(e) for e in expenses],
+        "page": page,
+        "pageSize": page_size,
+        "totalPages": total_pages,
     }
 
 

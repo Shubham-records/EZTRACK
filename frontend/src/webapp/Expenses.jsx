@@ -53,18 +53,24 @@ export default function Expenses({ initialFilter = '' }) {
         fetchCategories();
     }, []);
 
-    const fetchExpenses = async (skip = 0, currentData = []) => {
+    const fetchExpenses = async (page = 1, currentData = []) => {
         try {
-            const limit = 50;
-            const res = await fetch(`/api/expenses?limit=${limit}&skip=${skip}`, { headers: getAuthHeaders() });
+            const pageSize = 100;
+            const res = await fetch('/api/expenses', { 
+                headers: { 
+                    ...getAuthHeaders(),
+                    'X-Page': page.toString(),
+                    'X-Page-Size': pageSize.toString()
+                } 
+            });
             if (res.ok) {
-                const data = await res.json();
-                const newData = Array.isArray(data) ? data : (data.data || []);
+                const result = await res.json();
+                const newData = Array.isArray(result) ? result : (result.data || []);
                 const allData = [...currentData, ...newData];
                 setExpenses(allData);
 
-                if (newData.length === limit) {
-                    setTimeout(() => fetchExpenses(skip + limit, allData), 100);
+                if (newData.length === pageSize) {
+                    setTimeout(() => fetchExpenses(page + 1, allData), 100);
                 }
             }
         } catch (error) {

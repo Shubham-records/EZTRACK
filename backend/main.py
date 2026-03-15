@@ -121,6 +121,38 @@ except ImportError:
     logger.warning("slowapi not installed — rate limiting DISABLED. Run: pip install slowapi")
 
 
+# ─── Pagination Header Middleware ─────────────────────────────────────────────
+
+class PaginationHeaderMiddleware(BaseHTTPMiddleware):
+    """
+    Translates X-Page and X-Page-Size headers into query parameters.
+    This allows the frontend to keep URLs clean while the backend's
+    existing Query-param dependencies remain functional.
+    """
+    async def dispatch(self, request: Request, call_next):
+        from urllib.parse import urlencode, parse_qs
+        
+        x_page = request.headers.get("X-Page")
+        x_page_size = request.headers.get("X-Page-Size")
+        
+        if x_page or x_page_size:
+            # Parse existing query string
+            query_params = parse_qs(request.scope.get('query_string', b'').decode())
+            
+            # Update with header values if not already present in query (Query takes precedence)
+            if x_page and 'page' not in query_params:
+                query_params['page'] = [x_page]
+            if x_page_size and 'page_size' not in query_params:
+                query_params['page_size'] = [x_page_size]
+            
+            # Re-encode and update scope
+            request.scope['query_string'] = urlencode(query_params, doseq=True).encode()
+            
+        return await call_next(request)
+
+app.add_middleware(PaginationHeaderMiddleware)
+
+
 # ─── CORS (SEC-09) ───────────────────────────────────────────────────────────
 
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001")

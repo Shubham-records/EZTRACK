@@ -47,9 +47,9 @@ export default function PendingBalances() {
 
     const fetchBalances = async () => {
         try {
-            let url = '/api/pending';
+            let url = '/api/invoices/pending';
             if (filter === 'overdue') {
-                url = '/api/pending/overdue';
+                url = '/api/invoices/pending/overdue';
             } else if (filter !== 'all') {
                 url += `?status_filter=${filter}`;
             }
@@ -68,7 +68,7 @@ export default function PendingBalances() {
 
     const fetchSummary = async () => {
         try {
-            const res = await fetch('/api/pending/summary', { headers: getAuthHeaders() });
+            const res = await fetch('/api/invoices/pending/summary', { headers: getAuthHeaders() });
             if (res.ok) {
                 const data = await res.json();
                 setSummary(data);
@@ -81,7 +81,7 @@ export default function PendingBalances() {
     const handleAddBalance = async (e) => {
         e.preventDefault();
         try {
-            const res = await fetch('/api/pending', {
+            const res = await fetch('/api/invoices/pending', {
                 method: 'POST',
                 headers: getAuthHeaders(),
                 body: JSON.stringify({
@@ -104,7 +104,7 @@ export default function PendingBalances() {
     const handlePayment = async (e) => {
         e.preventDefault();
         try {
-            const res = await fetch(`/api/pending/${showPayModal.id}/pay`, {
+            const res = await fetch(`/api/invoices/pending/${showPayModal.id}/pay`, {
                 method: 'POST',
                 headers: getAuthHeaders(),
                 body: JSON.stringify({
@@ -127,7 +127,7 @@ export default function PendingBalances() {
 
     const sendWhatsAppReminder = async (balance) => {
         try {
-            const res = await fetch(`/api/pending/${balance.id}/whatsapp-link`, { headers: getAuthHeaders() });
+            const res = await fetch(`/api/invoices/pending/${balance.id}/whatsapp-link`, { headers: getAuthHeaders() });
             if (res.ok) {
                 const data = await res.json();
                 window.open(data.link, '_blank');

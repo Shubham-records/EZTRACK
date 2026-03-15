@@ -80,20 +80,29 @@ export default function AuditLogs() {
     };
 
     const renderChanges = (log) => {
-        if (!log.changedFields || log.changedFields.length === 0) return null;
+        if (!log.changes || typeof log.changes !== 'object') return null;
+        const changedFields = Object.keys(log.changes);
+        if (changedFields.length === 0) return null;
 
         return (
             <div className="mt-3 space-y-2">
                 <p className="text-xs font-bold text-zinc-500 uppercase">Changed Fields</p>
                 <div className="space-y-1">
-                    {log.changedFields.map((field, idx) => {
-                        const before = log.beforeData?.[field];
-                        const after = log.afterData?.[field];
+                    {changedFields.map((field, idx) => {
+                        const change = log.changes[field];
+                        // Some logs might be just { field: newValue } for CREATE
+                        const before = change && typeof change === 'object' && 'from' in change ? change.from : null;
+                        const after = change && typeof change === 'object' && 'to' in change ? change.to : change;
+
                         return (
                             <div key={idx} className="flex items-center gap-2 text-sm">
                                 <span className="font-medium text-zinc-700 dark:text-zinc-300 w-32">{field}:</span>
-                                <span className="text-rose-500 line-through">{JSON.stringify(before) || 'null'}</span>
-                                <span className="text-zinc-400">→</span>
+                                {log.action === 'UPDATE' && (
+                                    <>
+                                        <span className="text-rose-500 line-through">{JSON.stringify(before) || 'null'}</span>
+                                        <span className="text-zinc-400">→</span>
+                                    </>
+                                )}
                                 <span className="text-emerald-500">{JSON.stringify(after) || 'null'}</span>
                             </div>
                         );

@@ -120,10 +120,7 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
         ? `/api/members`
         : `/api/proteins`;
 
-      const params = new URLSearchParams({
-        page: page.toString(),
-        page_size: (pageSizeOverride || serverPageSize).toString(),
-      });
+      const params = new URLSearchParams();
       if (search) params.set('search', search);
 
       const response = await fetch(`${baseUrl}?${params}`, {
@@ -131,6 +128,8 @@ export default function TableComponent({ gymmemberdata, allColumns, onUpdateData
           Authorization: `Bearer ${jwtToken}`,
           'Content-Type': 'application/json',
           'X-Database-Name': eztracker_jwt_databaseName_control_token,
+          'X-Page': page.toString(),
+          'X-Page-Size': (pageSizeOverride || serverPageSize).toString(),
         },
       });
 
