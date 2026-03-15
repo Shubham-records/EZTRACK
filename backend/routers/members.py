@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func, String
 from typing import List, Optional
@@ -97,6 +97,10 @@ def map_member_response(member: Member, admission_expiry_days: int = 365, decryp
     m_dict.update(status_info)
     # Keep MembershipStatus as an alias of computed_status for backward-compat with frontend
     m_dict['MembershipStatus'] = status_info['computed_status']
+
+    from core.storage import get_signed_url_or_none
+    m_dict['imageUrl'] = get_signed_url_or_none(getattr(member, 'imageUrl', None))
+
     return m_dict
 
 @router.get("/generate-client-number")
@@ -476,7 +480,12 @@ def bulk_update_members(
     return {"message": f"Updated {updated_count} members", "count": updated_count}
 
 @router.post("/re-admission", status_code=status.HTTP_200_OK)
-def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+def re_admission(
+    data: MemberCreate, 
+    current_gym: Gym = Depends(get_current_gym), 
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
+):
     """Re-activate a member and create invoice"""
     # Find existing member by receipt number (client ID)
     if not data.MembershipReceiptnumber:
@@ -622,7 +631,12 @@ def re_admission(data: MemberCreate, current_gym: Gym = Depends(get_current_gym)
     }
 
 @router.post("/renewal", status_code=status.HTTP_200_OK)
-def renew_member(data: MemberCreate, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+def renew_member(
+    data: MemberCreate, 
+    current_gym: Gym = Depends(get_current_gym), 
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
+):
     """Renew a member's plan and create invoice"""
     if not data.MembershipReceiptnumber:
         raise HTTPException(status_code=400, detail="Client ID (MembershipReceiptnumber) required for renewal")
@@ -968,7 +982,12 @@ def update_member_put(
 
 # PATCH /update — matches Next.js exactly (ID in body)
 @router.patch("/update", response_model=MemberResponse)
-def update_member_body(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+def update_member_body(
+    data: dict, 
+    current_gym: Gym = Depends(get_current_gym), 
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
+):
     member_id = data.get("id")
     if not member_id:
         raise HTTPException(status_code=400, detail="Member ID required")
@@ -1015,6 +1034,86 @@ def update_member_body(data: dict, current_gym: Gym = Depends(get_current_gym), 
     db.refresh(member)
     
     return map_member_response(member)
+
+
+@router.post("/{member_id}/image")
+async def upload_member_image(
+    member_id: str,
+    file: UploadFile = File(...),
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
+):
+    """Upload profile photo for a member using object storage."""
+    from core.storage import upload_image, delete_image, StorageFolder, get_signed_url
+
+    member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    image_bytes = await file.read()
+
+    # Delete old image if exists
+    if getattr(member, 'imageUrl', None):
+        delete_image(member.imageUrl)
+
+    storage_key = upload_image(image_bytes, folder=StorageFolder.MEMBERS, mime_type=file.content_type)
+    
+    member.imageUrl = storage_key
+    member.hasImage = True
+    member.lastEditedBy = current_gym.username
+    member.editReason = "Uploaded Profile Photo"
+
+    log_audit(db, current_gym.id, "Member", member.id, "UPDATE", {"action": "Image Upload"}, current_gym.username)
+    db.commit()
+
+    return {"message": "Image uploaded successfully", "imageUrl": get_signed_url(storage_key)}
+
+
+@router.get("/{member_id}/image")
+def get_member_image(
+    member_id: str,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db)
+):
+    """Get signed URL for member profile photo."""
+    from core.storage import get_signed_url
+    from fastapi.responses import RedirectResponse
+
+    member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+    
+    if not member or not getattr(member, 'imageUrl', None):
+        raise HTTPException(status_code=404, detail="Image not found")
+        
+    return RedirectResponse(get_signed_url(member.imageUrl))
+
+
+@router.delete("/{member_id}/image", status_code=status.HTTP_204_NO_CONTENT)
+def delete_member_image(
+    member_id: str,
+    current_gym: Gym = Depends(get_current_gym),
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
+):
+    """Remove member profile photo."""
+    from core.storage import delete_image
+    
+    member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    if getattr(member, 'imageUrl', None):
+        delete_image(member.imageUrl)
+
+    member.imageUrl = None
+    member.hasImage = False
+    member.lastEditedBy = current_gym.username
+    member.editReason = "Removed Profile Photo"
+
+    log_audit(db, current_gym.id, "Member", member.id, "UPDATE", {"action": "Image Deleted"}, current_gym.username)
+    db.commit()
+    
+    return None
 
 @router.get("/client/{client_number}", response_model=MemberResponse)
 def get_member_by_client_number(client_number: int, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):

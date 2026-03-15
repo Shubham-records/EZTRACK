@@ -203,6 +203,7 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
         summary.updatedAt         = datetime.now()
         db.commit()
     except Exception:
+        db.rollback()
         pass  # Summary upsert is best-effort — never fail the stats response
 
     return result
@@ -440,7 +441,11 @@ class GymStreamManager:
             summary.lowStockCount     = stats["lowStockItems"]         # model col: lowStockCount
             summary.updatedAt         = datetime.now()
 
-            await db.commit()
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                pass
             return stats
 
 stream_manager = GymStreamManager()
@@ -716,6 +721,7 @@ def reconcile_payments(
         LEFT JOIN "PaymentEvent" pe ON pe."invoiceId" = i.id
         WHERE i."gymId" = :gym_id
           AND i."isDeleted" = FALSE
+          AND i.status IN ('PENDING', 'PARTIAL')
         GROUP BY i.id, i."paidAmount"
         HAVING ABS(i."paidAmount" - COALESCE(SUM(pe.amount), 0)) > 0.01
     """), {"gym_id": current_gym.id}).fetchall()

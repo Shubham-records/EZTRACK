@@ -103,6 +103,11 @@ def create_staff(
             )
             db.add(uba)
 
+    from core.audit_utils import log_audit
+    log_audit(db, current_gym.id, "Staff", new_user.id, "CREATE",
+              {"username": new_user.username, "role": new_user.role},
+              current_gym.username)
+
     db.commit()
     db.refresh(new_user)
     logger.info("New staff '%s' (role=%s) created for gym %s", new_user.username, new_user.role, current_gym.id)
@@ -174,6 +179,11 @@ def update_staff(
     if data.password:
         user.password = get_password_hash(data.password)
 
+    from core.audit_utils import log_audit
+    log_audit(db, current_gym.id, "Staff", user.id, "UPDATE",
+              {"role": data.role, "branchAccess": data.branchIds, "password_changed": bool(data.password)},
+              caller_username)
+
     db.commit()
     db.refresh(user)
     logger.info(
@@ -217,6 +227,11 @@ def delete_staff(
         RefreshToken.userId == user.id,
         RefreshToken.isRevoked == False,
     ).update({"isRevoked": True}, synchronize_session=False)
+
+    from core.audit_utils import log_audit
+    log_audit(db, current_gym.id, "Staff", user.id, "DELETE",
+              {"username": user.username, "role": user.role},
+              current_gym.username)
 
     db.commit()
     logger.info(

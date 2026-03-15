@@ -41,22 +41,42 @@ DEFAULT_TEMPLATES = {
     "Protein": "Hi {customerName}! 🙏 Thank you for your purchase from {gymName}! Please find your invoice attached. Fuel your fitness! 💪",
 }
 
+import time
 
-_initialized_gyms: set[str] = set()
+_initialized_gyms: dict[str, float] = {}
+CACHE_TTL = 3600 * 24  # 24 hours
 
+def _is_initialized(gym_id: str) -> bool:
+    now = time.time()
+    if gym_id in _initialized_gyms:
+        if now - _initialized_gyms[gym_id] < CACHE_TTL:
+            return True
+        else:
+            del _initialized_gyms[gym_id]
+            
+    # Cleanup expired entries periodically to prevent memory leaks
+    if len(_initialized_gyms) > 1000:
+        expired = [k for k, v in _initialized_gyms.items() if now - v >= CACHE_TTL]
+        for k in expired:
+            del _initialized_gyms[k]
+            
+    return False
+
+def _set_initialized(gym_id: str) -> None:
+    _initialized_gyms[gym_id] = time.time()
 
 def ensure_default_templates(gym_id: str, db: Session):
     """Create default templates for a gym if they don't exist.
-    Uses in-memory cache to skip the DB check after first initialization per process.
+    Uses in-memory cache with TTL to skip the DB check after first initialization.
     """
-    if gym_id in _initialized_gyms:
+    if _is_initialized(gym_id):
         return
 
     count = db.query(WhatsAppTemplate).filter(
         WhatsAppTemplate.gymId == gym_id
     ).count()
     if count >= len(DEFAULT_TEMPLATES):
-        _initialized_gyms.add(gym_id)
+        _set_initialized(gym_id)
         return  # Already initialised, skip all work
 
     existing = db.query(WhatsAppTemplate).filter(
@@ -75,7 +95,7 @@ def ensure_default_templates(gym_id: str, db: Session):
             db.add(template)
 
     db.commit()
-    _initialized_gyms.add(gym_id)
+    _set_initialized(gym_id)
 
 
 @router.get("")

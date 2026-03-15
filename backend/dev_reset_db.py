@@ -54,52 +54,72 @@ except Exception as exc:
 # Fires on every INSERT / UPDATE / DELETE on ProteinLot.
 # This eliminates the desync bug where ProteinStock.Quantity drifted from actual lots.
 TRIGGER_PROTEIN_QUANTITY_SYNC = """
-CREATE OR REPLACE FUNCTION sync_protein_stock_quantity()
+CREATE OR REPLACE FUNCTION sync_protein_stock_quantity_bulk()
 RETURNS TRIGGER AS $$
-DECLARE
-    target_protein_id TEXT;
-    new_quantity INTEGER;
 BEGIN
-    -- Determine which ProteinStock to update
-    IF TG_OP = 'DELETE' THEN
-        target_protein_id := OLD."proteinId";
-    ELSE
-        target_protein_id := NEW."proteinId";
-    END IF;
-
-    -- Recompute from all remaining lots
-    SELECT COALESCE(SUM(quantity), 0)
-      INTO new_quantity
-      FROM "ProteinLot"
-     WHERE "proteinId" = target_protein_id;
-
+    -- WA-01: Bulk trigger optimization to reduce write IOPS on batch lot operations.
+    -- We recompute ProteinStock.Quantity for any proteinId involved in the transition tables.
+    WITH changed_proteins AS (
+        SELECT "proteinId" FROM changed_lots
+    )
     UPDATE "ProteinStock"
-       SET "Quantity" = new_quantity,
-           "updatedAt" = NOW()
-     WHERE id = target_protein_id;
-
-    -- If this was a lot transfer (UPDATE changed proteinId), also sync old protein
-    IF TG_OP = 'UPDATE' AND OLD."proteinId" <> NEW."proteinId" THEN
+    SET "Quantity" = (
         SELECT COALESCE(SUM(quantity), 0)
-          INTO new_quantity
-          FROM "ProteinLot"
-         WHERE "proteinId" = OLD."proteinId";
+        FROM "ProteinLot"
+        WHERE "proteinId" = "ProteinStock".id
+    ),
+    "updatedAt" = NOW()
+    WHERE id IN (SELECT "proteinId" FROM changed_proteins);
 
-        UPDATE "ProteinStock"
-           SET "Quantity" = new_quantity,
-               "updatedAt" = NOW()
-         WHERE id = OLD."proteinId";
-    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
 
-    RETURN NEW;
+-- Due to PostgreSQL transition table requirements, we need separate triggers for INSERT/UPDATE/DELETE.
+-- Update additionally uses a separate function to read from both OLD and NEW transition tables.
+
+CREATE OR REPLACE FUNCTION sync_protein_stock_quantity_bulk_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    WITH changed_proteins AS (
+        SELECT "proteinId" FROM new_lots
+        UNION
+        SELECT "proteinId" FROM old_lots
+    )
+    UPDATE "ProteinStock"
+    SET "Quantity" = (
+        SELECT COALESCE(SUM(quantity), 0)
+        FROM "ProteinLot"
+        WHERE "proteinId" = "ProteinStock".id
+    ),
+    "updatedAt" = NOW()
+    WHERE id IN (SELECT "proteinId" FROM changed_proteins);
+
+    RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_sync_protein_quantity ON "ProteinLot";
-CREATE TRIGGER trg_sync_protein_quantity
-    AFTER INSERT OR UPDATE OR DELETE ON "ProteinLot"
-    FOR EACH ROW
-    EXECUTE FUNCTION sync_protein_stock_quantity();
+DROP TRIGGER IF EXISTS trg_sync_protein_quantity_insert ON "ProteinLot";
+CREATE TRIGGER trg_sync_protein_quantity_insert
+    AFTER INSERT ON "ProteinLot"
+    REFERENCING NEW TABLE AS changed_lots
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION sync_protein_stock_quantity_bulk();
+
+DROP TRIGGER IF EXISTS trg_sync_protein_quantity_update ON "ProteinLot";
+CREATE TRIGGER trg_sync_protein_quantity_update
+    AFTER UPDATE ON "ProteinLot"
+    REFERENCING NEW TABLE AS new_lots OLD TABLE AS old_lots
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION sync_protein_stock_quantity_bulk_update();
+
+DROP TRIGGER IF EXISTS trg_sync_protein_quantity_delete ON "ProteinLot";
+CREATE TRIGGER trg_sync_protein_quantity_delete
+    AFTER DELETE ON "ProteinLot"
+    REFERENCING OLD TABLE AS changed_lots
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION sync_protein_stock_quantity_bulk();
 """
 
 # SEC-12: Prevent hard-delete of Gym rows at PostgreSQL level.

@@ -51,14 +51,17 @@ logger = logging.getLogger(__name__)
 def init_db():
     """
     Create all tables that do not yet exist.
-    Safe to run on every startup — SQLAlchemy checks IF NOT EXISTS.
-    For schema changes after initial deployment, use db_setup.py.
-
-    P0-2 / P0-3: install_indexes() also runs to ensure performance indexes
-    exist on every deploy. Uses IF NOT EXISTS — zero-cost no-op if indexes exist.
+    
+    SW-10: Retired Base.metadata.create_all for production environments.
+    Production uses Alembic migrations entirely.
     """
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables verified / created.")
+    env_name = os.getenv("VERCEL_ENV", "development").lower()
+    
+    if env_name != "production":
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables verified / created (DEV mode).")
+    else:
+        logger.info("Production mode: skipping Base.metadata.create_all. Using Alembic.")
 
     # Install performance indexes (safe on every startup — IF NOT EXISTS)
     try:

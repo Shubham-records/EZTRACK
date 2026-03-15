@@ -298,7 +298,8 @@ def get_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym), db
 def update_invoice(
     data: InvoiceUpdateRequest,   # SEC-04: typed schema, not raw dict
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
     ):
     invoice_id = data.id
     if not invoice_id:
@@ -609,7 +610,8 @@ def record_payment(
     pending_id: str,
     payment: PaymentRecord,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rbac=Depends(require_owner_or_manager),
 ):
     """Record a payment against pending balance (invoice).
     Uses the same logic as pay_invoice internally.

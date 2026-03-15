@@ -13,8 +13,11 @@ try:
     def get_gym_id_from_token(request: Request) -> str:
         """
         Extract gymId for rate limit keying. Falls back to IP.
+        SEC-V-02: Track by both gymId and IP to prevent distributed attacks.
         """
         auth_header = request.headers.get("Authorization", "")
+        ip_addr = get_remote_address(request)
+        
         if auth_header.startswith("Bearer "):
             token = auth_header.replace("Bearer ", "")
             if token:
@@ -22,11 +25,11 @@ try:
                     payload = decode_access_token(token)
                     gymId = payload.get("gymId")
                     if gymId:
-                        return gymId
+                        return f"{gymId}:{ip_addr}"
                 except Exception:
                     pass
                     
-        return get_remote_address(request)
+        return ip_addr
 
     limiter = Limiter(key_func=get_gym_id_from_token)
     
