@@ -1,14 +1,16 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import update, delete
 from sqlalchemy import or_, func, String
 from typing import List, Optional
 from datetime import datetime, date, timedelta
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager, require_owner
 from core.date_utils import parse_date, format_date
-from core.cache import get_gym_settings
+from core.cache import get_gym_settings, get_async_gym_settings
 from core.aadhaar_crypto import encrypt_aadhaar, decrypt_aadhaar, hash_aadhaar, mask_aadhaar
 from models.all_models import Gym, Member, Invoice, GymSettings, PaymentEvent, GymSubscription
 from schemas.member import MemberCreate, MemberResponse, MemberUpdate
@@ -104,16 +106,21 @@ def map_member_response(member: Member, admission_expiry_days: int = 365, decryp
     return m_dict
 
 @router.get("/generate-client-number")
-def generate_client_number(current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+async def generate_client_number(current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
     """Generate the next available client number.
     Uses SELECT ... FOR UPDATE to serialize concurrent requests per gym.
     """
     try:
         # Lock the gym row to serialize concurrent receipt number generation
-        db.query(Gym).filter(Gym.id == current_gym.id).with_for_update().first()
-        max_number = db.query(func.max(Member.MembershipReceiptnumber)).filter(
+        gym_stmt = select(Gym).where(Gym.id == current_gym.id).with_for_update()
+        await db.execute(gym_stmt)
+        
+        max_num_stmt = select(func.max(Member.MembershipReceiptnumber)).where(
             Member.gymId == current_gym.id,
-        ).scalar()
+        )
+        max_res = await db.execute(max_num_stmt)
+        max_number = max_res.scalar()
+        
         next_number = (max_number or 0) + 1
         return {"clientNumber": next_number}
     except Exception as e:
@@ -124,27 +131,27 @@ def generate_client_number(current_gym: Gym = Depends(get_current_gym), db: Sess
 @router.get("")
 @router.get("/")
 @rate_limit("200/minute")
-def get_members(
+async def get_members(
     request: Request,
     page: int = 1,
     page_size: int = 30,
     search: str = "",
     status_filter: str = "",
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     # ARCH-06: Enforce max page_size=500, no page_size=0 bypass
     page_size = max(1, min(page_size, 500))
     # FIX: use cache.py (10-min TTL) instead of raw DB query for GymSettings
-    settings = get_gym_settings(current_gym.id, db)
+    settings = await get_async_gym_settings(current_gym.id, db)
     admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
 
-    query = db.query(Member).filter(Member.gymId == current_gym.id)
+    stmt = select(Member).where(Member.gymId == current_gym.id)
 
     # Apply search filter at DB level
     if search:
         search_term = f"%{search}%"
-        query = query.filter(
+        stmt = stmt.where(
             or_(
                 Member.Name.ilike(search_term),
                 Member.Mobile.ilike(search_term),
@@ -154,14 +161,17 @@ def get_members(
         )
 
     if status_filter:
-        query = query.filter(Member.computed_status == status_filter)
+        stmt = stmt.where(Member.computed_status == status_filter)
 
     offset = (page - 1) * page_size
     
     # PB-04: Cursor/Window pagination. 
     # Use window function to fetch total count in the same query without a full table scan N+1.
-    query = query.add_columns(func.count().over().label('_total_count'))
-    results = query.order_by(Member.createdAt.desc()).offset(offset).limit(page_size).all()
+    stmt = stmt.add_columns(func.count().over().label('_total_count'))
+    stmt = stmt.order_by(Member.createdAt.desc()).offset(offset).limit(page_size)
+    
+    res = await db.execute(stmt)
+    results = res.all() # .all() returns a list of Row objects since we used add_columns
     
     total = results[0]._total_count if results else 0
     members = [r.Member for r in results]
@@ -179,18 +189,20 @@ def get_members(
 
 @router.get("/export", dependencies=[Depends(require_owner)])
 @rate_limit("5/minute")
-def export_members(
+async def export_members(
     request: Request,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Gated export endpoint for gym owners. Limited to 1000 records."""
-    settings = get_gym_settings(current_gym.id, db)
+    settings = await get_async_gym_settings(current_gym.id, db)
     admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
     
-    members = db.query(Member).filter(
+    stmt = select(Member).where(
         Member.gymId == current_gym.id
-    ).order_by(Member.createdAt.desc()).limit(1000).all()
+    ).order_by(Member.createdAt.desc()).limit(1000)
+    res = await db.execute(stmt)
+    members = res.scalars().all()
     
     return {
         "data":       [map_member_response(m, admission_expiry_days, decrypt=False) for m in members],  # PB-01: no Fernet decrypt in export list
@@ -202,7 +214,7 @@ def export_members(
 
 
 @router.post("/search-duplicates")
-def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+async def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
     """Search for potential duplicates based on Name, Mobile, Whatsapp, or Aadhaar.
 
     SEC-NEW-09: Returns minimal fields only — {id, Name, masked_phone}.
@@ -235,10 +247,12 @@ def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), d
         return []
 
     # Find matches
-    matches = db.query(Member).filter(
+    stmt = select(Member).where(
         Member.gymId == current_gym.id,
         or_(*conditions)
-    ).all()
+    )
+    res = await db.execute(stmt)
+    matches = res.scalars().all()
 
     # SEC-NEW-09: Return minimal safe fields only — no phone numbers, no addresses, no Aadhaar
     return [
@@ -251,7 +265,7 @@ def search_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), d
     ]
 
 @router.post("/check-duplicates")
-def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+async def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
     """Check for duplicate members before import. Uses batched queries instead of N+1."""
     members_list = data.get("members", [])
     conflicts = []
@@ -269,19 +283,23 @@ def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db
     # Two queries instead of N
     existing_by_name = {}
     if all_names:
-        rows = db.query(Member).filter(
+        n_stmt = select(Member).where(
             Member.gymId == current_gym.id,
             Member.Name.in_(all_names),
-        ).all()
+        )
+        n_res = await db.execute(n_stmt)
+        rows = n_res.scalars().all()
         for r in rows:
             existing_by_name[r.Name] = r
 
     existing_by_phone = {}
     if all_phones:
-        rows = db.query(Member).filter(
+        p_stmt = select(Member).where(
             Member.gymId == current_gym.id,
             or_(Member.Mobile.in_(all_phones), Member.Whatsapp.in_(all_phones)),
-        ).all()
+        )
+        p_res = await db.execute(p_stmt)
+        rows = p_res.scalars().all()
         for r in rows:
             if r.Mobile:
                 existing_by_phone[r.Mobile] = r
@@ -328,25 +346,31 @@ def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gym), db
 
 @router.post("/bulk-create")
 @rate_limit("5/minute")
-def bulk_create_members(
+async def bulk_create_members(
     request: Request,
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     """Bulk create members from import. Requires MANAGER+."""
     members_list = data.get("members", [])
 
     # SEC-14: Enforce maxMembers subscription limit for bulk import
-    subscription = db.query(GymSubscription).filter(
+    sub_stmt = select(GymSubscription).where(
         GymSubscription.gymId == current_gym.id
-    ).first()
+    )
+    sub_res = await db.execute(sub_stmt)
+    subscription = sub_res.scalars().first()
+    
     if subscription and subscription.maxMembers and subscription.maxMembers > 0:
-        current_count = db.query(func.count(Member.id)).filter(
+        c_stmt = select(func.count(Member.id)).where(
             Member.gymId == current_gym.id,
             Member.isDeleted == False,
-        ).scalar() or 0
+        )
+        c_res = await db.execute(c_stmt)
+        current_count = c_res.scalar() or 0
+        
         remaining = subscription.maxMembers - current_count
         if remaining <= 0:
             raise HTTPException(
@@ -399,15 +423,15 @@ def bulk_create_members(
             logger.error("Bulk member create failed for row: %s", type(e).__name__, exc_info=False)
             continue
     
-    db.commit()
+    await db.commit()
     return {"message": f"Created {created_count} members", "count": created_count}
 
 
 @router.post("/bulk-delete")
-def bulk_delete_members(
+async def bulk_delete_members(
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """Bulk delete members (soft-delete)"""
@@ -421,24 +445,24 @@ def bulk_delete_members(
         from datetime import datetime, timezone
         
         # Soft delete instead of hard delete
-        stmt = Member.__table__.update().where(
+        stmt = update(Member).where(
             Member.id.in_(ids),
             Member.gymId == current_gym.id
         ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
         
-        result = db.execute(stmt)
-        db.commit()
+        result = await db.execute(stmt)
+        await db.commit()
         return {"message": f"Deleted {result.rowcount} members", "count": result.rowcount}
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/bulk-update")
-def bulk_update_members(
+async def bulk_update_members(
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     """Bulk update members from import merge. Requires MANAGER+."""
@@ -450,7 +474,9 @@ def bulk_update_members(
         if not member_id:
             continue
             
-        member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+        stmt = select(Member).where(Member.id == member_id, Member.gymId == current_gym.id)
+        res = await db.execute(stmt)
+        member = res.scalars().first()
         if not member:
             continue
         
@@ -476,14 +502,14 @@ def bulk_update_members(
         member.editReason = 'Bulk Update/Merge'
         updated_count += 1
     
-    db.commit()
+    await db.commit()
     return {"message": f"Updated {updated_count} members", "count": updated_count}
 
 @router.post("/re-admission", status_code=status.HTTP_200_OK)
-def re_admission(
+async def re_admission(
     data: MemberCreate, 
     current_gym: Gym = Depends(get_current_gym), 
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     """Re-activate a member and create invoice"""
@@ -491,10 +517,12 @@ def re_admission(
     if not data.MembershipReceiptnumber:
         raise HTTPException(status_code=400, detail="Client ID (MembershipReceiptnumber) required for re-admission")
         
-    member = db.query(Member).filter(
+    stmt = select(Member).where(
         Member.MembershipReceiptnumber == data.MembershipReceiptnumber,
         Member.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    member = res.scalars().first()
     
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
@@ -613,16 +641,16 @@ def re_admission(
 
     # ONE commit for both member update + invoice (atomic)
     try:
-        db.flush()  # populate IDs for audit
+        await db.flush()  # populate IDs for audit
         log_audit(db, current_gym.id, "Member", member.id, "UPDATE",
                   {"action": "Re-Admission", "PlanType": data.PlanType, "PlanPeriod": data.PlanPeriod},
                   current_gym.username)
-        db.commit()
+        await db.commit()
     except Exception:
-        db.rollback()
+        await db.rollback()
         raise
 
-    db.refresh(member)
+    # await db.refresh(member)
     return {
         "message": "Re-instate member successfully",
         "id": member.id,
@@ -631,20 +659,22 @@ def re_admission(
     }
 
 @router.post("/renewal", status_code=status.HTTP_200_OK)
-def renew_member(
+async def renew_member(
     data: MemberCreate, 
     current_gym: Gym = Depends(get_current_gym), 
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     """Renew a member's plan and create invoice"""
     if not data.MembershipReceiptnumber:
         raise HTTPException(status_code=400, detail="Client ID (MembershipReceiptnumber) required for renewal")
     
-    member = db.query(Member).filter(
+    stmt = select(Member).where(
         Member.MembershipReceiptnumber == data.MembershipReceiptnumber,
         Member.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    member = res.scalars().first()
     
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
@@ -739,16 +769,16 @@ def renew_member(
 
     # ONE commit for both member update + invoice (atomic)
     try:
-        db.flush()
+        await db.flush()
         log_audit(db, current_gym.id, "Member", member.id, "UPDATE",
                   {"action": "Renewal", "PlanType": data.PlanType, "PlanPeriod": data.PlanPeriod},
                   current_gym.username)
-        db.commit()
+        await db.commit()
     except Exception:
-        db.rollback()
+        await db.rollback()
         raise
 
-    db.refresh(member)
+    # await db.refresh(member)
     return {
         "message": "Renewal successful",
         "id": member.id,
@@ -758,22 +788,26 @@ def renew_member(
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
-def create_member(
+async def create_member(
     data: MemberCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-01: MANAGER+ can create members
 ):
     """Create a new member (admission). SEC-14: Enforces subscription maxMembers limit."""
     # SEC-14: Enforce subscription maxMembers limit
-    subscription = db.query(GymSubscription).filter(
+    sub_stmt = select(GymSubscription).where(
         GymSubscription.gymId == current_gym.id
-    ).first()
+    )
+    sub_res = await db.execute(sub_stmt)
+    subscription = sub_res.scalars().first()
     if subscription and subscription.maxMembers and subscription.maxMembers > 0:
-        current_count = db.query(func.count(Member.id)).filter(
+        c_stmt = select(func.count(Member.id)).where(
             Member.gymId == current_gym.id,
             Member.isDeleted == False,
-        ).scalar() or 0
+        )
+        c_res = await db.execute(c_stmt)
+        current_count = c_res.scalar() or 0
         if current_count >= subscription.maxMembers:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -787,11 +821,13 @@ def create_member(
         raw_aadhar = str(data.Aadhaar).strip()
         # Dedup: check if this Aadhaar is already in this gym
         aadhaar_hash = hash_aadhaar(raw_aadhar)
-        existing_aadhaar = db.query(Member).filter(
+        ext_stmt = select(Member).where(
             Member.gymId == current_gym.id,
             Member.AadhaarHash == aadhaar_hash,
             Member.isDeleted == False,
-        ).first()
+        )
+        ext_res = await db.execute(ext_stmt)
+        existing_aadhaar = ext_res.scalars().first()
         if existing_aadhaar:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -830,7 +866,7 @@ def create_member(
     )
 
     db.add(new_member)
-    db.flush()  # Populate ID
+    await db.flush()  # Populate ID
 
     # Create Invoice with breakdown
     if data.LastPaymentAmount and data.LastPaymentAmount > 0:
@@ -920,8 +956,8 @@ def create_member(
               {"Name": data.Name, "PlanType": data.PlanType, "PlanPeriod": data.PlanPeriod},
               current_gym.username)
     
-    db.commit()
-    db.refresh(new_member)
+    await db.commit()
+    # await db.refresh(new_member)
     
     response_data = map_member_response(new_member)
     # Return custom dict structure as per Next.js
@@ -933,14 +969,16 @@ def create_member(
     }
 
 @router.put("/{id}", response_model=MemberResponse)
-def update_member_put(
+async def update_member_put(
     id: str,
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-01: MANAGER+ can update members
 ):
-    member = db.query(Member).filter(Member.id == id, Member.gymId == current_gym.id).first()
+    stmt = select(Member).where(Member.id == id, Member.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    member = res.scalars().first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
         
@@ -976,23 +1014,25 @@ def update_member_put(
     
     if changed:
         log_audit(db, current_gym.id, "Member", member.id, "UPDATE", changed, current_gym.username)
-    db.commit()
-    db.refresh(member)
+    await db.commit()
+    # await db.refresh(member)
     return map_member_response(member)
 
 # PATCH /update — matches Next.js exactly (ID in body)
 @router.patch("/update", response_model=MemberResponse)
-def update_member_body(
+async def update_member_body(
     data: dict, 
     current_gym: Gym = Depends(get_current_gym), 
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     member_id = data.get("id")
     if not member_id:
         raise HTTPException(status_code=400, detail="Member ID required")
     
-    member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+    stmt = select(Member).where(Member.id == member_id, Member.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    member = res.scalars().first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
         
@@ -1030,8 +1070,8 @@ def update_member_body(
     
     if changed:
         log_audit(db, current_gym.id, "Member", member.id, "UPDATE", changed, current_gym.username)
-    db.commit()
-    db.refresh(member)
+    await db.commit()
+    # await db.refresh(member)
     
     return map_member_response(member)
 
@@ -1041,13 +1081,15 @@ async def upload_member_image(
     member_id: str,
     file: UploadFile = File(...),
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     """Upload profile photo for a member using object storage."""
     from core.storage import upload_image, delete_image, StorageFolder, get_signed_url
 
-    member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+    stmt = select(Member).where(Member.id == member_id, Member.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    member = res.scalars().first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
@@ -1065,22 +1107,24 @@ async def upload_member_image(
     member.editReason = "Uploaded Profile Photo"
 
     log_audit(db, current_gym.id, "Member", member.id, "UPDATE", {"action": "Image Upload"}, current_gym.username)
-    db.commit()
+    await db.commit()
 
     return {"message": "Image uploaded successfully", "imageUrl": get_signed_url(storage_key)}
 
 
 @router.get("/{member_id}/image")
-def get_member_image(
+async def get_member_image(
     member_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get signed URL for member profile photo."""
     from core.storage import get_signed_url
     from fastapi.responses import RedirectResponse
 
-    member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+    stmt = select(Member).where(Member.id == member_id, Member.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    member = res.scalars().first()
     
     if not member or not getattr(member, 'imageUrl', None):
         raise HTTPException(status_code=404, detail="Image not found")
@@ -1089,16 +1133,18 @@ def get_member_image(
 
 
 @router.delete("/{member_id}/image", status_code=status.HTTP_204_NO_CONTENT)
-def delete_member_image(
+async def delete_member_image(
     member_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     """Remove member profile photo."""
     from core.storage import delete_image
     
-    member = db.query(Member).filter(Member.id == member_id, Member.gymId == current_gym.id).first()
+    stmt = select(Member).where(Member.id == member_id, Member.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    member = res.scalars().first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
@@ -1111,40 +1157,44 @@ def delete_member_image(
     member.editReason = "Removed Profile Photo"
 
     log_audit(db, current_gym.id, "Member", member.id, "UPDATE", {"action": "Image Deleted"}, current_gym.username)
-    db.commit()
+    await db.commit()
     
     return None
 
 @router.get("/client/{client_number}", response_model=MemberResponse)
-def get_member_by_client_number(client_number: int, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+async def get_member_by_client_number(client_number: int, current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
     """Get member details by client number (receipt number)"""
-    member = db.query(Member).filter(
+    stmt = select(Member).where(
         Member.MembershipReceiptnumber == client_number,
         Member.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    member = res.scalars().first()
 
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
     # FIX: use cache (10-min TTL)
-    settings = get_gym_settings(current_gym.id, db)
+    settings = await get_async_gym_settings(current_gym.id, db)
     admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
     return map_member_response(member, admission_expiry_days)
 
 
 @router.get("/{member_id}", response_model=MemberResponse)
-def get_member_by_id(member_id: str, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+async def get_member_by_id(member_id: str, current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
     """Get a single member by their UUID (used by invoice detail view)"""
-    member = db.query(Member).filter(
+    stmt = select(Member).where(
         Member.id == member_id,
         Member.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    member = res.scalars().first()
 
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
     # FIX: use cache (10-min TTL)
-    settings = get_gym_settings(current_gym.id, db)
+    settings = await get_async_gym_settings(current_gym.id, db)
     admission_expiry_days = settings.admissionExpiryDays if settings and settings.admissionExpiryDays else 365
     return map_member_response(member, admission_expiry_days)
 

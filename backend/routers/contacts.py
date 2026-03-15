@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import func
 from typing import List, Optional
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, ExternalContact
 from schemas.contact import ExternalContactCreate, ExternalContactUpdate, ExternalContactResponse
@@ -19,27 +21,32 @@ def map_contact_response(c: ExternalContact):
 
 @router.get("")
 @router.get("/")
-def get_contacts(
+async def get_contacts(
     contact_type: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get all external contacts."""
-    query = db.query(ExternalContact).filter(
+    stmt = select(ExternalContact).where(
         ExternalContact.gymId == current_gym.id,
         ExternalContact.isActive == True
     )
     
     if contact_type:
-        query = query.filter(ExternalContact.contactType == contact_type)
+        stmt = stmt.where(ExternalContact.contactType == contact_type)
         
-    total = query.count()
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    count_res = await db.execute(count_stmt)
+    total = count_res.scalar()
+
     limit = max(1, min(page_size, 100))
     offset = (max(1, page) - 1) * limit
     
-    contacts = query.order_by(ExternalContact.name).offset(offset).limit(limit).all()
+    stmt = stmt.order_by(ExternalContact.name).offset(offset).limit(limit)
+    res = await db.execute(stmt)
+    contacts = res.scalars().all()
     
     return {
         "items": [map_contact_response(c) for c in contacts],
@@ -50,26 +57,35 @@ def get_contacts(
 
 
 @router.get("/types")
-def get_contact_types():
-    """Get list of contact types."""
-    return ["vendor", "service", "consultant", "partner", "other"]
+async def get_contact_types():
+    """Get list of contact types (Customer, Vendor, Supplier, etc.)."""
+    return [
+        "Customer",
+        "Vendor",
+        "Supplier", 
+        "Contractor",
+        "Partner",
+        "Other"
+    ]
 
 
 @router.get("/{contact_id}", response_model=ExternalContactResponse)
-def get_contact(
+async def get_contact(
     contact_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get single contact by ID.
     SEC-V-09: isActive==True ensures soft-deleted contacts cannot be
     retrieved by direct ID lookup (consistent with the list endpoint).
     """
-    contact = db.query(ExternalContact).filter(
+    stmt = select(ExternalContact).where(
         ExternalContact.id == contact_id,
         ExternalContact.gymId == current_gym.id,
         ExternalContact.isActive == True,  # SEC-V-09: block soft-deleted contact access
-    ).first()
+    )
+    res = await db.execute(stmt)
+    contact = res.scalars().first()
 
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -80,33 +96,35 @@ def get_contact(
 
 @router.post("", response_model=ExternalContactResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ExternalContactResponse, status_code=status.HTTP_201_CREATED)
-def create_contact(
+async def create_contact(
     data: ExternalContactCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """Create a new external contact."""
     contact = ExternalContact(gymId=current_gym.id, **data.model_dump())
     db.add(contact)
-    db.commit()
-    db.refresh(contact)
+    await db.commit()
+    # await db.refresh(contact)
     return map_contact_response(contact)
 
 
 @router.put("/{contact_id}", response_model=ExternalContactResponse)
-def update_contact(
+async def update_contact(
     contact_id: str,
     data: ExternalContactUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """Update an external contact."""
-    contact = db.query(ExternalContact).filter(
+    stmt = select(ExternalContact).where(
         ExternalContact.id == contact_id,
         ExternalContact.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    contact = res.scalars().first()
     
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -115,27 +133,29 @@ def update_contact(
     for key, value in update_data.items():
         setattr(contact, key, value)
     
-    db.commit()
-    db.refresh(contact)
+    await db.commit()
+    # await db.refresh(contact)
     return map_contact_response(contact)
 
 
 @router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_contact(
+async def delete_contact(
     contact_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """Soft delete an external contact."""
-    contact = db.query(ExternalContact).filter(
+    stmt = select(ExternalContact).where(
         ExternalContact.id == contact_id,
         ExternalContact.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    contact = res.scalars().first()
     
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     
     contact.isActive = False
-    db.commit()
+    await db.commit()
     return None

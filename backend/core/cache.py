@@ -34,6 +34,8 @@ from threading import Lock
 from types import SimpleNamespace
 
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +115,49 @@ def get_gym_settings(gym_id: str, db: Session):
         _settings_cache[gym_id] = {"data": data_snapshot, "ts": datetime.now()}
 
     logger.debug("GymSettings cache miss for gym %s — refreshed from DB", gym_id)
+    return _dict_to_namespace(data_snapshot)
+
+
+async def get_async_gym_settings(gym_id: str, db: AsyncSession):
+    """
+    Async equivalent of get_gym_settings.
+    """
+    with _lock:
+        cached = _settings_cache.get(gym_id)
+        if cached:
+            age = (datetime.now() - cached["ts"]).total_seconds()
+            if age < TTL_SECONDS:
+                return _dict_to_namespace(cached["data"])
+
+    from models.all_models import GymSettings
+    settings_stmt = select(GymSettings).where(GymSettings.gymId == gym_id)
+    settings_res = await db.execute(settings_stmt)
+    settings = settings_res.scalars().first()
+
+    if not settings:
+        settings = GymSettings(gymId=gym_id)
+        db.add(settings)
+        try:
+            await db.commit()
+            # await db.refresh(settings)  # not strictly needed here since we only read columns we set
+        except Exception:
+            await db.rollback()
+            retry_stmt = select(GymSettings).where(GymSettings.gymId == gym_id)
+            retry_res = await db.execute(retry_stmt)
+            settings = retry_res.scalars().first()
+            if not settings:
+                from schemas.settings import GymSettingsBase
+                try:
+                    defaults = GymSettingsBase().model_dump()
+                except Exception:
+                    defaults = GymSettingsBase().dict()
+                settings = GymSettings(gymId=gym_id, **defaults)
+
+    data_snapshot = _orm_to_dict(settings)
+    with _lock:
+        _settings_cache[gym_id] = {"data": data_snapshot, "ts": datetime.now()}
+
+    logger.debug("GymSettings cache miss for gym %s — refreshed from Async DB", gym_id)
     return _dict_to_namespace(data_snapshot)
 
 

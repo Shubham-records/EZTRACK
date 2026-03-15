@@ -314,11 +314,11 @@ app.include_router(whatsapp_templates.router, prefix="/api/whatsapp-templates", 
 # ─── Health ───────────────────────────────────────────────────────────────────
 
 @app.get("/")
-def read_root():
+async def read_root():
     return {"message": "EZTRACK API v2", "status": "ok"}
 
 @app.get("/health")
-def health_check():
+async def health_check():
     return {"status": "ok"}
 
 

@@ -1,12 +1,13 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import List, Optional
 from datetime import datetime, timedelta
 import random
 import os
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym, require_owner
 from models.all_models import Gym, Member, ProteinStock, Expense, Invoice, AuditLog
 
@@ -17,7 +18,7 @@ router = APIRouter()
 
 
 @router.get("/")
-def get_audit_logs(
+async def get_audit_logs(
     entity_type: Optional[str] = None,
     entity_id: Optional[str] = None,
     action: Optional[str] = None,
@@ -25,7 +26,7 @@ def get_audit_logs(
     until: Optional[str] = None,
     limit: int = 100,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Get audit logs with optional filtering.
@@ -62,20 +63,22 @@ def get_audit_logs(
 
     limit = min(limit, 500)
 
-    query = db.query(AuditLog).filter(
+    stmt = select(AuditLog).where(
         AuditLog.gymId == current_gym.id,
         AuditLog.createdAt >= since_dt,
         AuditLog.createdAt <= until_dt,
     )
 
     if entity_type:
-        query = query.filter(AuditLog.entityType == entity_type)
+        stmt = stmt.where(AuditLog.entityType == entity_type)
     if entity_id:
-        query = query.filter(AuditLog.entityId == entity_id)
+        stmt = stmt.where(AuditLog.entityId == entity_id)
     if action:
-        query = query.filter(AuditLog.action == action)
+        stmt = stmt.where(AuditLog.action == action)
 
-    logs = query.order_by(AuditLog.createdAt.desc()).limit(limit).all()
+    stmt = stmt.order_by(AuditLog.createdAt.desc()).limit(limit)
+    res = await db.execute(stmt)
+    logs = res.scalars().all()
 
     return [
         {
@@ -99,26 +102,30 @@ def get_entity_types():
 
 
 @router.get("/price-history/{protein_id}")
-def get_price_history(
+async def get_price_history(
     protein_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get price change history for a protein product."""
     # SEC-06: Verify the protein belongs to the requesting gym (IDOR prevention)
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
 
-    logs = db.query(AuditLog).filter(
+    stmt_logs = select(AuditLog).where(
         AuditLog.gymId == current_gym.id,
         AuditLog.entityType == "ProteinStock",
         AuditLog.entityId == protein_id,
         AuditLog.action == "UPDATE"
-    ).order_by(AuditLog.createdAt.desc()).all()
+    ).order_by(AuditLog.createdAt.desc())
+    res_logs = await db.execute(stmt_logs)
+    logs = res_logs.scalars().all()
     
     price_changes = []
     for log in logs:

@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import List, Optional
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, TermsAndConditions
 from schemas.terms import TermsCreate, TermsUpdate, TermsResponse
@@ -10,28 +11,30 @@ router = APIRouter()
 
 @router.get("", response_model=List[TermsResponse])
 @router.get("/", response_model=List[TermsResponse])
-def get_terms(
+async def get_terms(
     appliesTo: Optional[str] = None,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    query = db.query(TermsAndConditions).filter(
+    stmt = select(TermsAndConditions).where(
         TermsAndConditions.gymId == current_gym.id,
         TermsAndConditions.isActive == True
     )
     if appliesTo:
-        query = query.filter(TermsAndConditions.appliesTo.any(appliesTo))
+        stmt = stmt.where(TermsAndConditions.appliesTo.any(appliesTo))
 
-    terms = query.order_by(TermsAndConditions.sortOrder.asc(), TermsAndConditions.createdAt.asc()).all()
+    stmt = stmt.order_by(TermsAndConditions.sortOrder.asc(), TermsAndConditions.createdAt.asc())
+    res = await db.execute(stmt)
+    terms = res.scalars().all()
     return terms
 
 
 @router.post("", response_model=TermsResponse)
 @router.post("/", response_model=TermsResponse)
-def create_term(
+async def create_term(
     data: TermsCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     new_term = TermsAndConditions(
@@ -42,23 +45,25 @@ def create_term(
         isActive=data.isActive
     )
     db.add(new_term)
-    db.commit()
-    db.refresh(new_term)
+    await db.commit()
+    # await db.refresh(new_term)
     return new_term
 
 
 @router.put("/{term_id}", response_model=TermsResponse)
-def update_term(
+async def update_term(
     term_id: str,
     data: TermsUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    term = db.query(TermsAndConditions).filter(
+    stmt = select(TermsAndConditions).where(
         TermsAndConditions.id == term_id,
         TermsAndConditions.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    term = res.scalars().first()
     
     if not term:
         raise HTTPException(status_code=404, detail="Term not found")
@@ -67,26 +72,28 @@ def update_term(
     for key, value in update_data.items():
         setattr(term, key, value)
         
-    db.commit()
-    db.refresh(term)
+    await db.commit()
+    # await db.refresh(term)
     return term
 
 
 @router.delete("/{term_id}")
-def delete_term(
+async def delete_term(
     term_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    term = db.query(TermsAndConditions).filter(
+    stmt = select(TermsAndConditions).where(
         TermsAndConditions.id == term_id,
         TermsAndConditions.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    term = res.scalars().first()
     
     if not term:
         raise HTTPException(status_code=404, detail="Term not found")
         
     term.isActive = False
-    db.commit()
+    await db.commit()
     return {"message": "Term deleted successfully"}

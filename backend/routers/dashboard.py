@@ -26,12 +26,13 @@ from datetime import datetime, timedelta, date
 
 from fastapi import APIRouter, Depends, status, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from sqlalchemy import func, text, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import func, text
 
-from core.database import get_db, SessionLocal, AsyncSessionLocal
+from core.database import get_db, get_async_db, AsyncSessionLocal
 from core.dependencies import get_current_gym
-from core.cache import get_gym_settings
+from core.cache import get_async_gym_settings
 from models.all_models import (
     Gym, Member, Invoice, ProteinStock, ProteinLot, Expense, GymSettings, GymDailySummary
 )
@@ -52,7 +53,7 @@ _SUMMARY_STALE_SECONDS  = 300   # ARCH-NEW-02: recompute after 5 minutes
 # Used by both /stats (one-shot) and /stream (SSE). Kept as a plain function
 # so it can be called directly in sync routes OR via asyncio.to_thread in SSE.
 
-def _compute_stats(gym_id: str, db: Session) -> dict:
+async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
     """
     ARCH-NEW-02: Compute dashboard stats, using GymDailySummary as a cache.
 
@@ -71,10 +72,12 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
     week_end    = today + timedelta(days=7)
 
     # ── ARCH-NEW-02: Try reading from GymDailySummary cache ───────────────────
-    summary = db.query(GymDailySummary).filter(
+    summary_stmt = select(GymDailySummary).where(
         GymDailySummary.gymId == gym_id,
         GymDailySummary.summaryDate == today,
-    ).first()
+    )
+    summary_res = await db.execute(summary_stmt)
+    summary = summary_res.scalars().first()
 
     if summary and summary.updatedAt:
         age_seconds = (datetime.now() - summary.updatedAt).total_seconds()
@@ -82,8 +85,8 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
             # Cache hit — return from summary table (no heavy aggregates)
             return {
                 "activeMembers":    summary.activeMembers or 0,
-                "expiringToday":    0,  # not stored in summary — cheap query
-                "expiringThisWeek": 0,
+                "expiringToday":    summary.expiringToday or 0,
+                "expiringThisWeek": 0,  # not stored in summary — OMIT to avoid expensive live count on cache hit
                 "todayCollection":  round(float(summary.totalIncome or 0), 2),
                 "weekCollection":   round(float(summary.weekToDateIncome or 0), 2),
                 "monthCollection":  round(float(summary.monthToDateIncome or 0), 2),
@@ -93,79 +96,79 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
                 "netProfit":        round(
                     float(summary.monthToDateIncome or 0) - float(summary.totalExpenses or 0), 2
                 ),
-                "lowStockItems":    0,
+                "lowStockItems":    summary.lowStockCount or 0,
                 "lastUpdated":      summary.updatedAt.isoformat(),
                 "_source":          "summary_cache",
             }
 
     # ── Cache miss — compute from live tables ──────────────────────────────────
-    active_members = db.query(func.count(Member.id)).filter(
+    active_members = (await db.execute(select(func.count(Member.id)).where(
         Member.gymId == gym_id,
         Member.computed_status == "Active",
         Member.isDeleted == False,
-    ).scalar() or 0
+    ))).scalar() or 0
 
-    expiring_today = db.query(func.count(Member.id)).filter(
+    expiring_today = (await db.execute(select(func.count(Member.id)).where(
         Member.gymId == gym_id,
         Member.NextDuedate == today,
         Member.isDeleted == False,
-    ).scalar() or 0
+    ))).scalar() or 0
 
-    expiring_this_week = db.query(func.count(Member.id)).filter(
+    expiring_this_week = (await db.execute(select(func.count(Member.id)).where(
         Member.gymId == gym_id,
         Member.NextDuedate >= today,
         Member.NextDuedate <= week_end,
         Member.computed_status == "Active",
         Member.isDeleted == False,
-    ).scalar() or 0
+    ))).scalar() or 0
 
-    today_collection = db.query(func.sum(Invoice.total)).filter(
+    today_collection = (await db.execute(select(func.sum(Invoice.total)).where(
         Invoice.gymId == gym_id,
         Invoice.invoiceDate >= today_start,
         Invoice.isDeleted == False,
-    ).scalar() or 0.0
+    ))).scalar() or 0.0
 
-    week_collection = db.query(func.sum(Invoice.total)).filter(
+    week_collection = (await db.execute(select(func.sum(Invoice.total)).where(
         Invoice.gymId == gym_id,
         Invoice.invoiceDate >= week_start,
         Invoice.isDeleted == False,
-    ).scalar() or 0.0
+    ))).scalar() or 0.0
 
-    month_collection = db.query(func.sum(Invoice.total)).filter(
+    month_collection = (await db.execute(select(func.sum(Invoice.total)).where(
         Invoice.gymId == gym_id,
         Invoice.invoiceDate >= month_start,
         Invoice.isDeleted == False,
-    ).scalar() or 0.0
+    ))).scalar() or 0.0
 
-    pending_balance = db.query(
+    pending_balance = (await db.execute(select(
         func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0))
-    ).filter(
+    ).where(
         Invoice.gymId == gym_id,
         Invoice.status.in_(["PENDING", "PARTIAL"]),
         Invoice.isDeleted == False,
-    ).scalar() or 0.0
+    ))).scalar() or 0.0
 
-    month_expenses = db.query(func.sum(Expense.amount)).filter(
+    month_expenses = (await db.execute(select(func.sum(Expense.amount)).where(
         Expense.gymId == gym_id,
         Expense.date >= month_start.date(),
         Expense.isDeleted == False,
-    ).scalar() or 0.0
+    ))).scalar() or 0.0
 
-    today_expenses = db.query(func.sum(Expense.amount)).filter(
+    today_expenses = (await db.execute(select(func.sum(Expense.amount)).where(
         Expense.gymId == gym_id,
         Expense.date == today,
         Expense.isDeleted == False,
-    ).scalar() or 0.0
+    ))).scalar() or 0.0
 
-    settings        = get_gym_settings(gym_id, db)
+    settings        = await get_async_gym_settings(gym_id, db)
     default_thresh  = (getattr(settings, "lowStockThreshold", None) or 5)
 
-    low_stock_count = db.query(func.count(ProteinLot.id)).join(
+    low_stock_count = (await db.execute(select(func.count(ProteinLot.id)).join(
         ProteinStock, ProteinLot.proteinId == ProteinStock.id
-    ).filter(
+    ).where(
         ProteinLot.gymId == gym_id,
         ProteinLot.quantity < func.coalesce(ProteinStock.StockThreshold, default_thresh),
-    ).scalar() or 0
+    ))).scalar() or 0
 
     result = {
         "activeMembers":    active_members,
@@ -185,12 +188,8 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
 
     # ── ARCH-NEW-02: Upsert into GymDailySummary so SSE can use it as cache ──
     try:
-        summary = db.query(GymDailySummary).filter(
-            GymDailySummary.gymId == gym_id,
-            GymDailySummary.summaryDate == datetime.now().date(),
-        ).first()
         if not summary:
-            summary = GymDailySummary(gymId=gym_id, summaryDate=datetime.now().date())
+            summary = GymDailySummary(gymId=gym_id, summaryDate=today)
             db.add(summary)
         summary.activeMembers     = result["activeMembers"]
         summary.expiringToday     = result["expiringToday"]
@@ -201,148 +200,17 @@ def _compute_stats(gym_id: str, db: Session) -> dict:
         summary.totalExpenses     = result["monthExpenses"]
         summary.lowStockCount     = result["lowStockItems"]
         summary.updatedAt         = datetime.now()
-        db.commit()
-    except Exception:
-        db.rollback()
+        await db.commit()
+    except Exception as e:
+        logger.error(f"Error upserting gym summary: {e}")
+        await db.rollback()
         pass  # Summary upsert is best-effort — never fail the stats response
 
     return result
 
 
-async def _compute_stats_async(gym_id: str, db: AsyncSessionLocal) -> dict:
-    """Compute all dashboard stats via an async session (fixes ARCH-NEW-01)."""
-    today       = datetime.now().date()
-    today_start = datetime.combine(today, datetime.min.time())
-    week_start  = datetime.combine(today - timedelta(days=today.weekday()), datetime.min.time())
-    month_start = datetime.combine(today.replace(day=1), datetime.min.time())
-    week_end    = today + timedelta(days=7)
+# Removed _compute_stats_async and _stats_from_summary as logic is now consolidated in _compute_stats.
 
-    active_members = (await db.execute(
-        select(func.count(Member.id)).filter(
-            Member.gymId == gym_id,
-            Member.computed_status == "Active",
-            Member.isDeleted == False,
-        )
-    )).scalar() or 0
-
-    expiring_today = (await db.execute(
-        select(func.count(Member.id)).filter(
-            Member.gymId == gym_id,
-            Member.NextDuedate == today,
-            Member.isDeleted == False,
-        )
-    )).scalar() or 0
-
-    expiring_this_week = (await db.execute(
-        select(func.count(Member.id)).filter(
-            Member.gymId == gym_id,
-            Member.NextDuedate >= today,
-            Member.NextDuedate <= week_end,
-            Member.computed_status == "Active",
-            Member.isDeleted == False,
-        )
-    )).scalar() or 0
-
-    today_collection = (await db.execute(
-        select(func.sum(Invoice.total)).filter(
-            Invoice.gymId == gym_id,
-            Invoice.invoiceDate >= today_start,
-            Invoice.isDeleted == False,
-        )
-    )).scalar() or 0.0
-
-    week_collection = (await db.execute(
-        select(func.sum(Invoice.total)).filter(
-            Invoice.gymId == gym_id,
-            Invoice.invoiceDate >= week_start,
-            Invoice.isDeleted == False,
-        )
-    )).scalar() or 0.0
-
-    month_collection = (await db.execute(
-        select(func.sum(Invoice.total)).filter(
-            Invoice.gymId == gym_id,
-            Invoice.invoiceDate >= month_start,
-            Invoice.isDeleted == False,
-        )
-    )).scalar() or 0.0
-
-    pending_balance = (await db.execute(
-        select(func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0))).filter(
-            Invoice.gymId == gym_id,
-            Invoice.status.in_(["PENDING", "PARTIAL"]),
-            Invoice.isDeleted == False,
-        )
-    )).scalar() or 0.0
-
-    month_expenses = (await db.execute(
-        select(func.sum(Expense.amount)).filter(
-            Expense.gymId == gym_id,
-            Expense.date >= month_start.date(),
-            Expense.isDeleted == False,
-        )
-    )).scalar() or 0.0
-
-    today_expenses = (await db.execute(
-        select(func.sum(Expense.amount)).filter(
-            Expense.gymId == gym_id,
-            Expense.date == today,
-            Expense.isDeleted == False,
-        )
-    )).scalar() or 0.0
-
-    # Auto-resolve defaults since we avoid inter-mixing sync cache models in async streams 
-    settings = (await db.execute(
-        select(GymSettings).filter(GymSettings.gymId == gym_id)
-    )).scalar()
-    default_thresh = (getattr(settings, "lowStockThreshold", None) or 5) if getattr(settings, "id", None) else 5
-
-    low_stock_count = (await db.execute(
-        select(func.count(ProteinLot.id)).join(
-            ProteinStock, ProteinLot.proteinId == ProteinStock.id
-        ).filter(
-            ProteinLot.gymId == gym_id,
-            ProteinLot.quantity < func.coalesce(ProteinStock.StockThreshold, default_thresh),
-        )
-    )).scalar() or 0
-
-    return {
-        "activeMembers":    active_members,
-        "expiringToday":    expiring_today,
-        "expiringThisWeek": expiring_this_week,
-        "todayCollection":  round(float(today_collection), 2),
-        "weekCollection":   round(float(week_collection), 2),
-        "monthCollection":  round(float(month_collection), 2),
-        "pendingBalance":   round(float(pending_balance), 2),
-        "todayExpenses":    round(float(today_expenses), 2),
-        "monthExpenses":    round(float(month_expenses), 2),
-        "netProfit":        round(float(month_collection) - float(month_expenses), 2),
-        "lowStockItems":    low_stock_count,
-        "lastUpdated":      datetime.now().isoformat(),
-    }
-
-
-def _stats_from_summary(summary: GymDailySummary) -> dict:
-    """Helper to deserialize stats from GymDailySummary.
-    ARCH-NEW-02 fix: field names aligned to actual model columns:
-      totalIncome → todayCollection proxy, weekToDateIncome, monthToDateIncome,
-      totalExpenses, pendingBalance, lowStockCount.
-    """
-    return {
-        "activeMembers":    summary.activeMembers or 0,
-        "expiringToday":    summary.expiringToday or 0,
-        "expiringThisWeek": 0,   # not stored in model — omit from cache hit
-        "todayCollection":  float(summary.totalIncome or 0),
-        "weekCollection":   float(summary.weekToDateIncome or 0),
-        "monthCollection":  float(summary.monthToDateIncome or 0),
-        "pendingBalance":   float(summary.pendingBalance or 0),
-        "todayExpenses":    0,   # not stored in model — omit from cache hit
-        "monthExpenses":    float(summary.totalExpenses or 0),
-        "netProfit":        round(float(summary.monthToDateIncome or 0) - float(summary.totalExpenses or 0), 2),
-        "lowStockItems":    summary.lowStockCount or 0,
-        "lastUpdated":      summary.updatedAt.isoformat(),
-        "_source":          "summary_cache",
-    }
 
 
 # ─── SSE Stream Manager (ARCH-NEW-02 Fix) ─────────────────────────────────────
@@ -397,56 +265,9 @@ class GymStreamManager:
             logger.error(f"[SSE] Gym {gym_id} pump error: {e}")
 
     async def _fetch_or_compute(self, gym_id: str) -> dict:
-        """ARCH-NEW-02: Check cache before hitting live tables.
-        BUGFIX: use summaryDate (not .date) to match GymDailySummary model column.
-        BUGFIX: upsert uses model column names (totalIncome, weekToDateIncome, etc.)
-        """
+        """Consolidates cache and live compute into _compute_stats."""
         async with AsyncSessionLocal() as db:
-            # 1. Try hitting the Summary table first (fresher than 5 min)
-            stale_threshold = datetime.now() - timedelta(minutes=5)
-            summary = (await db.execute(
-                select(GymDailySummary).filter(
-                    GymDailySummary.gymId == gym_id,
-                    GymDailySummary.summaryDate == date.today(),   # FIXED: was .date
-                    GymDailySummary.updatedAt > stale_threshold
-                )
-            )).scalar_one_or_none()
-
-            if summary:
-                return _stats_from_summary(summary)
-
-            # 2. Cache miss — run live aggregate queries
-            stats = await _compute_stats_async(gym_id, db)
-
-            # 3. Upsert into GymDailySummary using correct column names
-            summary = (await db.execute(
-                select(GymDailySummary).filter(
-                    GymDailySummary.gymId == gym_id,
-                    GymDailySummary.summaryDate == date.today(),   # FIXED: was .date
-                )
-            )).scalar_one_or_none()
-
-            if not summary:
-                summary = GymDailySummary(gymId=gym_id, summaryDate=date.today())  # FIXED: was date=
-                db.add(summary)
-
-            # FIXED: map stats keys to actual model column names
-            summary.activeMembers     = stats["activeMembers"]
-            summary.expiringToday     = stats["expiringToday"]
-            summary.totalIncome       = stats["todayCollection"]       # model col: totalIncome
-            summary.weekToDateIncome  = stats["weekCollection"]        # model col: weekToDateIncome
-            summary.monthToDateIncome = stats["monthCollection"]       # model col: monthToDateIncome
-            summary.pendingBalance    = stats["pendingBalance"]
-            summary.totalExpenses     = stats["monthExpenses"]         # model col: totalExpenses
-            summary.lowStockCount     = stats["lowStockItems"]         # model col: lowStockCount
-            summary.updatedAt         = datetime.now()
-
-            try:
-                await db.commit()
-            except Exception:
-                await db.rollback()
-                pass
-            return stats
+            return await _compute_stats(gym_id, db)
 
 stream_manager = GymStreamManager()
 
@@ -500,25 +321,25 @@ async def dashboard_stream(
 # ─── One-shot stats (fallback / initial load) ─────────────────────────────────
 
 @router.get("/stats")
-def get_dashboard_stats(
+async def get_dashboard_stats(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
     """One-shot stats endpoint. Use /stream for live updates."""
-    return _compute_stats(current_gym.id, db)
+    return await _compute_stats(current_gym.id, db)
 
 
 # ─── Alerts ──────────────────────────────────────────────────────────────────
 
 @router.get("/alerts")
-def get_dashboard_alerts(
+async def get_dashboard_alerts(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
     """Member expiry + low stock + overdue balance alerts."""
     today    = datetime.now().date()
     alerts   = []
-    settings = get_gym_settings(current_gym.id, db)
+    settings = await get_async_gym_settings(current_gym.id, db)
 
     default_stock_threshold = settings.lowStockThreshold if settings else 0
     expiry_range  = (settings.expiryRange or 0) if settings else 0
@@ -527,13 +348,16 @@ def get_dashboard_alerts(
     # 1. Member expiry alerts
     grace_cutoff = today - timedelta(days=grace_period)
     alert_end    = today + timedelta(days=expiry_range)
-    members = db.query(Member).filter(
+    
+    stmt_members = select(Member).where(
         Member.gymId == current_gym.id,
         Member.NextDuedate.isnot(None),
         Member.NextDuedate >= grace_cutoff,
         Member.NextDuedate <= alert_end,
         Member.isDeleted == False,
-    ).all()
+    )
+    res_members = await db.execute(stmt_members)
+    members = res_members.scalars().all()
 
     for m in members:
         if not m.NextDuedate:
@@ -545,28 +369,33 @@ def get_dashboard_alerts(
             continue
 
     # 2. Low stock — SQL aggregate, no Python loop over all proteins (ARCH-02 fix)
-    from sqlalchemy import func
-    low_stock_proteins = db.query(
+    stmt_low_stock = select(
         ProteinStock.id,
         ProteinStock.ProductName,
         ProteinStock.Brand,
         ProteinStock.Quantity,
         ProteinStock.StockThreshold,
-    ).filter(
+    ).where(
         ProteinStock.gymId == current_gym.id,
         ProteinStock.Quantity < func.coalesce(ProteinStock.StockThreshold, default_stock_threshold),
-    ).all()
+    )
+    res_low_stock = await db.execute(stmt_low_stock)
+    low_stock_proteins = res_low_stock.all()
+    
     for p in low_stock_proteins:
         qty = p.Quantity or 0
         alerts.append(make_low_stock_alert(p.id, p.ProductName, p.Brand, qty))
 
     # 3. Overdue pending balances
-    pending = db.query(Invoice).filter(
+    stmt_pending = select(Invoice).where(
         Invoice.gymId == current_gym.id,
         Invoice.status.in_(["PENDING", "PARTIAL"]),
         Invoice.dueDate < today,
         Invoice.isDeleted == False,
-    ).all()
+    )
+    res_pending = await db.execute(stmt_pending)
+    pending = res_pending.scalars().all()
+    
     for pb in pending:
         balance = float(pb.total or 0) - float(pb.paidAmount or 0)
         alerts.append(make_overdue_balance_alert(pb.id, pb.customerName, balance))
@@ -578,17 +407,20 @@ def get_dashboard_alerts(
 # ─── Recent activity ──────────────────────────────────────────────────────────
 
 @router.get("/recent-activity")
-def get_recent_activity(
+async def get_recent_activity(
     limit: int = 10,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
     activities = []
 
-    recent_invoices = db.query(Invoice).filter(
+    stmt_inv = select(Invoice).where(
         Invoice.gymId == current_gym.id,
         Invoice.isDeleted == False,
-    ).order_by(Invoice.createdAt.desc()).limit(limit).all()
+    ).order_by(Invoice.createdAt.desc()).limit(limit)
+    res_inv = await db.execute(stmt_inv)
+    recent_invoices = res_inv.scalars().all()
+    
     for inv in recent_invoices:
         activities.append({
             "type": "invoice",
@@ -598,10 +430,13 @@ def get_recent_activity(
             "entityId": inv.id,
         })
 
-    recent_members = db.query(Member).filter(
+    stmt_mem = select(Member).where(
         Member.gymId == current_gym.id,
         Member.isDeleted == False,
-    ).order_by(Member.createdAt.desc()).limit(limit).all()
+    ).order_by(Member.createdAt.desc()).limit(limit)
+    res_mem = await db.execute(stmt_mem)
+    recent_members = res_mem.scalars().all()
+    
     for m in recent_members:
         activities.append({
             "type": "member",
@@ -618,9 +453,9 @@ def get_recent_activity(
 # ─── Stock alerts ─────────────────────────────────────────────────────────────
 
 @router.get("/stock-alerts")
-def get_dashboard_stock_alerts(
+async def get_dashboard_stock_alerts(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
     """
     SCH-NEW-04: Previously O(N) Python loop over all lots.
@@ -628,7 +463,7 @@ def get_dashboard_stock_alerts(
     1. Low stock: JOIN ProteinLot+ProteinStock, filter quantity < threshold in SQL
     2. Expiring: filter lot.expiryDate <= today+warning_days in SQL
     """
-    settings = get_gym_settings(current_gym.id, db)
+    settings = await get_async_gym_settings(current_gym.id, db)
     default_threshold   = settings.lowStockThreshold if settings else 5
     expiry_warning_days = (settings.expiryWarningDays or 30) if settings else 30
 
@@ -636,7 +471,7 @@ def get_dashboard_stock_alerts(
     expiry_end = today + timedelta(days=expiry_warning_days)
 
     # SCH-NEW-04: SQL-level low-stock filter (was O(N) Python loop)
-    low_stock_rows = db.query(
+    stmt_low_stock = select(
         ProteinLot.id.label("lotId"),
         ProteinLot.lotNumber,
         ProteinLot.quantity,
@@ -649,10 +484,12 @@ def get_dashboard_stock_alerts(
         ProteinStock.SellingPrice.label("proteinSellingPrice"),
     ).join(
         ProteinStock, ProteinLot.proteinId == ProteinStock.id
-    ).filter(
+    ).where(
         ProteinLot.gymId == current_gym.id,
         ProteinLot.quantity < func.coalesce(ProteinStock.StockThreshold, default_threshold),
-    ).all()
+    )
+    res_low_stock = await db.execute(stmt_low_stock)
+    low_stock_rows = res_low_stock.all()
 
     low_stock_lots = []
     for row in low_stock_rows:
@@ -667,7 +504,7 @@ def get_dashboard_stock_alerts(
         })
 
     # SCH-NEW-04: SQL-level expiry filter
-    expiring_rows = db.query(
+    stmt_expiring = select(
         ProteinLot.id.label("lotId"),
         ProteinLot.lotNumber,
         ProteinLot.quantity,
@@ -677,11 +514,13 @@ def get_dashboard_stock_alerts(
         ProteinStock.Flavour,
     ).join(
         ProteinStock, ProteinLot.proteinId == ProteinStock.id
-    ).filter(
+    ).where(
         ProteinLot.gymId == current_gym.id,
         ProteinLot.expiryDate.isnot(None),
         ProteinLot.expiryDate <= expiry_end,
-    ).order_by(ProteinLot.expiryDate).all()
+    ).order_by(ProteinLot.expiryDate)
+    res_expiring = await db.execute(stmt_expiring)
+    expiring_rows = res_expiring.all()
 
     expiring_lots = []
     for row in expiring_rows:
@@ -705,16 +544,16 @@ def get_dashboard_stock_alerts(
 # ─── Payment reconciliation (ARCH-03, on-demand) ─────────────────────────────
 
 @router.post("/reconcile-payments", status_code=status.HTTP_200_OK)
-def reconcile_payments(
+async def reconcile_payments(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
     """
     ARCH-03: Detect and fix Invoice.paidAmount drift vs SUM(PaymentEvent.amount).
     Scoped to the current gym — never touches other gyms' data.
     Call this manually when you suspect payment inconsistencies.
     """
-    rows = db.execute(text("""
+    res = await db.execute(text("""
         SELECT i.id, i."paidAmount",
                COALESCE(SUM(pe.amount), 0) AS actual_paid
         FROM "Invoice" i
@@ -724,12 +563,13 @@ def reconcile_payments(
           AND i.status IN ('PENDING', 'PARTIAL')
         GROUP BY i.id, i."paidAmount"
         HAVING ABS(i."paidAmount" - COALESCE(SUM(pe.amount), 0)) > 0.01
-    """), {"gym_id": current_gym.id}).fetchall()
+    """), {"gym_id": current_gym.id})
+    rows = res.fetchall()
 
     corrected = []
     for row in rows:
         inv_id, stored_paid, actual_paid = row
-        db.execute(
+        await db.execute(
             text('UPDATE "Invoice" SET "paidAmount" = :p WHERE id = :id'),
             {"p": float(actual_paid), "id": inv_id},
         )
@@ -743,7 +583,7 @@ def reconcile_payments(
             inv_id, stored_paid, actual_paid, current_gym.id,
         )
 
-    db.commit()
+    await db.commit()
     return {
         "corrected": len(corrected),
         "details":   corrected,

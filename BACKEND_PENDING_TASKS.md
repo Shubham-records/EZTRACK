@@ -10,7 +10,23 @@ This document tracks the remaining items and recommendations from the backend ar
 
 | ID | Title | Description | Priority |
 | :--- | :--- | :--- | :--- |
-| **SW-01** | **Async ORM Conversion** | Convert hot-path routes to `async def` and use `AsyncSessionLocal`. Currently, most routes use synchronous SQLAlchemy. | High |
+| **SW-01** | **Async ORM Conversion** | Convert hot-path routes to `async def` and use `AsyncSessionLocal` one-by-one. (Pending: auth, dashboard, invoices, members, staff, proteins, etc). | High |
+
+### SW-01: Async Conversion Tracker
+- [x] `auth.py`
+- [x] `members.py`
+- [x] `staff.py`
+- [x] `proteins.py`
+- [x] `invoices.py`
+- [x] `settings.py`
+- [x] `expenses.py`
+- [x] `contacts.py`
+- [x] `automation.py`
+- [x] `audit.py`
+- [x] `branch_details.py`
+- [x] `whatsapp_templates.py`
+- [x] `terms.py`
+- [x] `dashboard.py`
 | ~~**SW-09**~~ | ~~**Package Structure**~~ | ~~Add `__init__.py` to `core/` and `routers/` directories to ensure proper package behavior in production.~~ | ~~Medium~~ |
 | ~~**SW-10**~~ | ~~**Production Migrations**~~ | ~~Fully transition to Alembic for schema changes. Retire `Base.metadata.create_all` for production environments.~~ | ~~High~~ |
 | ~~**SW-16**~~ | ~~**Unbounded Cache Growth**~~ | ~~Implement a cleanup or TTL strategy for `_initialized_gyms` in `whatsapp_templates.py` to prevent memory leaks over months.~~ | ~~Low~~ |

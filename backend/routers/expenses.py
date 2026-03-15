@@ -1,10 +1,12 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import update, func
 from typing import List, Optional
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
@@ -29,33 +31,40 @@ def map_expense_response(expense: Expense):
 
 @router.get("")
 @router.get("/")
-def get_expenses(
+async def get_expenses(
     category: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     page: int = 1,
     page_size: int = 30,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
     """ARCH-06: Paginated expenses. max page_size=500."""
     page_size = max(1, min(page_size, 500))
     offset = (page - 1) * page_size
 
-    query = db.query(Expense).filter(
+    stmt = select(Expense).where(
         Expense.gymId == current_gym.id,
         Expense.isDeleted == False
     )
 
     if category:
-        query = query.filter(Expense.category == category)
+        stmt = stmt.where(Expense.category == category)
     if start_date:
-        query = query.filter(Expense.date >= parse_date(start_date))
+        stmt = stmt.where(Expense.date >= parse_date(start_date))
     if end_date:
-        query = query.filter(Expense.date <= parse_date(end_date))
+        stmt = stmt.where(Expense.date <= parse_date(end_date))
 
-    total = query.count()
-    expenses = query.order_by(Expense.date.desc()).offset(offset).limit(page_size).all()
+    # Get total count
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    count_res = await db.execute(count_stmt)
+    total = count_res.scalar()
+
+    # Get paginated data
+    stmt = stmt.order_by(Expense.date.desc()).offset(offset).limit(page_size)
+    res = await db.execute(stmt)
+    expenses = res.scalars().all()
     
     total_pages = (total + page_size - 1) // page_size if page_size > 0 else 1
 
@@ -70,10 +79,10 @@ def get_expenses(
 
 @router.post("", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
-def create_expense(
+async def create_expense(
     data: ExpenseCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-03: MANAGER+ only
 ):
     """Create a new expense record."""
@@ -81,22 +90,22 @@ def create_expense(
     expense_data['date'] = parse_date(expense_data.get('date'))
     expense = Expense(gymId=current_gym.id, **expense_data)
     db.add(expense)
-    db.flush()
+    await db.flush()
     log_audit(db, current_gym.id, "Expense", expense.id, "CREATE",
               {"category": expense.category, "amount": expense.amount},
               current_gym.username)
-    db.commit()
-    db.refresh(expense)
+    await db.commit()
+    # await db.refresh(expense)
     return map_expense_response(expense)
 
 
 @router.post("/bulk-create")
 @rate_limit("5/minute")
-def bulk_create_expenses(
+async def bulk_create_expenses(
     request: Request,
     data: BulkExpenseCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-03: MANAGER+ only
 ):
     """Bulk create expenses from import.
@@ -124,15 +133,15 @@ def bulk_create_expenses(
             logger.error("Bulk expense create error: %s", type(e).__name__, exc_info=False)
             continue
 
-    db.commit()
+    await db.commit()
     return {"message": f"Created {created_count} expenses", "count": created_count}
 
 
 @router.post("/bulk-delete")
-def bulk_delete_expenses(
+async def bulk_delete_expenses(
     data: BulkDeleteRequest,   # SW-06: typed, max 500 ids validated by Pydantic
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """Bulk delete expenses. SEC-NEW-04: Requires MANAGER+, capped at 500, audit-logged.
@@ -143,37 +152,39 @@ def bulk_delete_expenses(
 
     try:
         from datetime import datetime, timezone
-        stmt = Expense.__table__.update().where(
+        stmt = update(Expense).where(
             Expense.id.in_(ids),
             Expense.gymId == current_gym.id
         ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
-        result = db.execute(stmt)
+        result = await db.execute(stmt)
         # SEC-NEW-04: Audit log for bulk soft-deletes
         log_audit(db, current_gym.id, "Expense", "bulk", "DELETE",
                   {"ids_count": result.rowcount, "requested_ids": len(ids)},
                   current_gym.username)
-        db.commit()
+        await db.commit()
         return {"message": f"Deleted {result.rowcount} expenses", "count": result.rowcount}
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error("Bulk expense delete error: %s", type(e).__name__, exc_info=True)
         raise HTTPException(status_code=500, detail="Bulk delete failed. Please try again.")
 
 
 @router.put("/{expense_id}", response_model=ExpenseResponse)
-def update_expense(
+async def update_expense(
     expense_id: str,
     data: ExpenseUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-03: MANAGER+ only
 ):
     """Update an expense record."""
-    expense = db.query(Expense).filter(
+    stmt = select(Expense).where(
         Expense.id == expense_id,
         Expense.gymId == current_gym.id,
         Expense.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    expense = res.scalars().first()
     
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
@@ -186,24 +197,26 @@ def update_expense(
     
     log_audit(db, current_gym.id, "Expense", expense.id, "UPDATE",
               update_data, current_gym.username)
-    db.commit()
-    db.refresh(expense)
+    await db.commit()
+    # await db.refresh(expense)
     return map_expense_response(expense)
 
 
 @router.delete("/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_expense(
+async def delete_expense(
     expense_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """Delete an expense record."""
-    expense = db.query(Expense).filter(
+    stmt = select(Expense).where(
         Expense.id == expense_id,
         Expense.gymId == current_gym.id,
         Expense.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    expense = res.scalars().first()
     
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
@@ -214,7 +227,7 @@ def delete_expense(
     from datetime import datetime, timezone
     expense.isDeleted = True
     expense.deletedAt = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     return None
 
 
@@ -223,14 +236,16 @@ async def upload_receipt(
     expense_id: str,
     file: UploadFile = File(...),
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Upload receipt image for an expense — stored in object storage (not DB)."""
-    expense = db.query(Expense).filter(
+    stmt = select(Expense).where(
         Expense.id == expense_id,
         Expense.gymId == current_gym.id,
         Expense.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    expense = res.scalars().first()
 
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
@@ -250,7 +265,7 @@ async def upload_receipt(
     expense.receiptUrl      = storage_key
     expense.receiptMimeType = file.content_type
     expense.hasReceipt      = True
-    db.commit()
+    await db.commit()
 
     return {
         "message":    "Receipt uploaded successfully",
@@ -259,21 +274,23 @@ async def upload_receipt(
 
 
 @router.get("/{expense_id}/receipt")
-def get_receipt(
+async def get_receipt(
     expense_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Get a fresh signed URL for an expense receipt.
     Returns a redirect to the signed URL so the browser fetches the image
     directly from object storage — no binary data passes through the API.
     """
-    expense = db.query(Expense).filter(
+    stmt = select(Expense).where(
         Expense.id == expense_id,
         Expense.gymId == current_gym.id,
         Expense.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    expense = res.scalars().first()
 
     if not expense or not expense.receiptUrl:
         raise HTTPException(status_code=404, detail="Receipt not found")
@@ -284,11 +301,11 @@ def get_receipt(
 
 
 @router.get("/summary")
-def get_expense_summary(
+async def get_expense_summary(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get expense summary by category.
     BUG-02 fix: parse date strings before comparing with Date column.
@@ -296,11 +313,11 @@ def get_expense_summary(
     """
     from sqlalchemy import func
 
-    query = db.query(
+    stmt = select(
         Expense.category,
         func.sum(Expense.amount).label("category_total"),
         func.count(Expense.id).label("category_count"),
-    ).filter(
+    ).where(
         Expense.gymId == current_gym.id,
         Expense.isDeleted == False,
     )
@@ -309,13 +326,15 @@ def get_expense_summary(
     if start_date:
         parsed_start = parse_date(start_date)
         if parsed_start:
-            query = query.filter(Expense.date >= parsed_start)
+            stmt = stmt.where(Expense.date >= parsed_start)
     if end_date:
         parsed_end = parse_date(end_date)
         if parsed_end:
-            query = query.filter(Expense.date <= parsed_end)
+            stmt = stmt.where(Expense.date <= parsed_end)
 
-    rows = query.group_by(Expense.category).all()
+    stmt = stmt.group_by(Expense.category)
+    res = await db.execute(stmt)
+    rows = res.all()
 
     summary = {r.category: round(float(r.category_total or 0), 2) for r in rows}
     total   = round(sum(summary.values()), 2)
@@ -344,6 +363,6 @@ EXPENSE_CATEGORIES = [
 
 
 @router.get("/categories")
-def get_expense_categories():
+async def get_expense_categories():
     """Get list of expense categories."""
     return EXPENSE_CATEGORIES

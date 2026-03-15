@@ -1,10 +1,11 @@
 import html
 import re
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import Optional
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym
 from core.rate_limit import rate_limit
 from models.all_models import Gym, WhatsAppTemplate
@@ -65,23 +66,26 @@ def _is_initialized(gym_id: str) -> bool:
 def _set_initialized(gym_id: str) -> None:
     _initialized_gyms[gym_id] = time.time()
 
-def ensure_default_templates(gym_id: str, db: Session):
+from sqlalchemy import func
+
+async def ensure_default_templates(gym_id: str, db: AsyncSession):
     """Create default templates for a gym if they don't exist.
     Uses in-memory cache with TTL to skip the DB check after first initialization.
     """
     if _is_initialized(gym_id):
         return
 
-    count = db.query(WhatsAppTemplate).filter(
-        WhatsAppTemplate.gymId == gym_id
-    ).count()
+    count_stmt = select(func.count(WhatsAppTemplate.id)).where(WhatsAppTemplate.gymId == gym_id)
+    count_res = await db.execute(count_stmt)
+    count = count_res.scalar() or 0
+
     if count >= len(DEFAULT_TEMPLATES):
         _set_initialized(gym_id)
         return  # Already initialised, skip all work
 
-    existing = db.query(WhatsAppTemplate).filter(
-        WhatsAppTemplate.gymId == gym_id
-    ).all()
+    stmt_all = select(WhatsAppTemplate).where(WhatsAppTemplate.gymId == gym_id)
+    res_all = await db.execute(stmt_all)
+    existing = res_all.scalars().all()
     existing_types = {t.templateType for t in existing}
 
     for t_type, t_msg in DEFAULT_TEMPLATES.items():
@@ -94,21 +98,21 @@ def ensure_default_templates(gym_id: str, db: Session):
             )
             db.add(template)
 
-    db.commit()
+    await db.commit()
     _set_initialized(gym_id)
 
 
 @router.get("")
-def get_all_templates(
+async def get_all_templates(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get all WhatsApp templates for this gym. Creates defaults if none exist."""
-    ensure_default_templates(current_gym.id, db)
+    await ensure_default_templates(current_gym.id, db)
 
-    templates = db.query(WhatsAppTemplate).filter(
-        WhatsAppTemplate.gymId == current_gym.id
-    ).all()
+    stmt = select(WhatsAppTemplate).where(WhatsAppTemplate.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    templates = res.scalars().all()
 
     return [
         {
@@ -122,18 +126,20 @@ def get_all_templates(
 
 
 @router.get("/{template_type}")
-def get_template_by_type(
+async def get_template_by_type(
     template_type: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get a specific template by type."""
-    ensure_default_templates(current_gym.id, db)
+    await ensure_default_templates(current_gym.id, db)
 
-    template = db.query(WhatsAppTemplate).filter(
+    stmt = select(WhatsAppTemplate).where(
         WhatsAppTemplate.gymId == current_gym.id,
         WhatsAppTemplate.templateType == template_type
-    ).first()
+    )
+    res = await db.execute(stmt)
+    template = res.scalars().first()
 
     if not template:
         raise HTTPException(status_code=404, detail=f"Template for '{template_type}' not found")
@@ -147,20 +153,22 @@ def get_template_by_type(
 
 
 @router.put("/{template_type}")
-def update_template(
+async def update_template(
     template_type: str,
     data: WhatsAppTemplateUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Create or update a template for a specific type."""
     if template_type not in VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid type. Must be one of: {VALID_TYPES}")
 
-    template = db.query(WhatsAppTemplate).filter(
+    stmt = select(WhatsAppTemplate).where(
         WhatsAppTemplate.gymId == current_gym.id,
         WhatsAppTemplate.templateType == template_type
-    ).first()
+    )
+    res = await db.execute(stmt)
+    template = res.scalars().first()
 
     if not template:
         if data.messageTemplate:
@@ -179,8 +187,8 @@ def update_template(
         if data.isActive is not None:
             template.isActive = data.isActive
 
-    db.commit()
-    db.refresh(template)
+    await db.commit()
+    # await db.refresh(template)
 
     return {
         "id": template.id,
@@ -192,11 +200,11 @@ def update_template(
 
 @router.post("/preview")
 @rate_limit("30/minute")
-def preview_template(
+async def preview_template(
     request: Request,
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
     """Preview a rendered template. Returns PLAIN TEXT — never HTML.
     SEC-11: All substitution values are HTML-escaped before insertion.

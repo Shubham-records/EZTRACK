@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import Optional
 from datetime import datetime, timedelta
 import urllib.parse
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym
 from models.all_models import Gym, Member, ProteinStock, Invoice
 
@@ -12,22 +13,24 @@ router = APIRouter()
 
 
 @router.get("/expiring-memberships")
-def get_expiring_memberships(
+async def get_expiring_memberships(
     days: int = 7,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get memberships expiring within the specified days."""
     today = datetime.now().date()
     end_date = today + timedelta(days=days)
 
     # FIX: filter using computed_status expression (DB-level CASE, not stored column)
-    members = db.query(Member).filter(
+    stmt = select(Member).where(
         Member.gymId == current_gym.id,
         Member.computed_status == "Active",
         Member.NextDuedate >= today,
         Member.NextDuedate <= end_date,
-    ).all()
+    )
+    res = await db.execute(stmt)
+    members = res.scalars().all()
 
     expiring = []
     for m in members:
@@ -47,17 +50,20 @@ def get_expiring_memberships(
 
 
 @router.get("/low-stock-items")
-def get_low_stock_items(
+async def get_low_stock_items(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get products with low stock."""
     from sqlalchemy import func
-    proteins = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False,
         ProteinStock.Quantity < func.coalesce(ProteinStock.StockThreshold, 5)
-    ).order_by(ProteinStock.Quantity.asc()).all()
+    ).order_by(ProteinStock.Quantity.asc())
+    
+    res = await db.execute(stmt)
+    proteins = res.scalars().all()
 
     low_stock = []
     for p in proteins:
@@ -73,20 +79,22 @@ def get_low_stock_items(
 
 
 @router.get("/overdue-payments")
-def get_overdue_payments(
+async def get_overdue_payments(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get overdue pending payments. P9: Use date() comparison to avoid timezone drift."""
     # P9: dueDate is TIMESTAMPTZ — compare using today's date to avoid 5.5-hour IST offset
     today = datetime.now().date()
 
-    pending = db.query(Invoice).filter(
+    stmt = select(Invoice).where(
         Invoice.gymId == current_gym.id,
         Invoice.status.in_(["PENDING", "PARTIAL"]),
         Invoice.dueDate < today,
         Invoice.isDeleted == False,
-    ).all()
+    )
+    res = await db.execute(stmt)
+    pending = res.scalars().all()
 
     return [{
         "id":         p.id,
@@ -99,22 +107,26 @@ def get_overdue_payments(
 
 
 @router.get("/smart-suggestions")
-def get_smart_suggestions(
+async def get_smart_suggestions(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Generate smart suggestions based on current data."""
     suggestions = []
     today = datetime.now().date()
     upcoming = today + timedelta(days=3)
 
+    from sqlalchemy import func
+
     # FIX: push expiry window filter to DB using computed_status expression
-    expiring_soon = db.query(Member).filter(
+    stmt1 = select(func.count(Member.id)).where(
         Member.gymId == current_gym.id,
         Member.computed_status == "Active",
         Member.NextDuedate >= today,
         Member.NextDuedate <= upcoming,
-    ).count()
+    )
+    res1 = await db.execute(stmt1)
+    expiring_soon = res1.scalar() or 0
 
     if expiring_soon > 0:
         suggestions.append({
@@ -124,12 +136,13 @@ def get_smart_suggestions(
             "action":  "view_expiring",
         })
 
-    from sqlalchemy import func
-    low_stock_count = db.query(func.count(ProteinStock.id)).filter(
+    stmt2 = select(func.count(ProteinStock.id)).where(
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False,
         ProteinStock.Quantity < func.coalesce(ProteinStock.StockThreshold, 5)
-    ).scalar() or 0
+    )
+    res2 = await db.execute(stmt2)
+    low_stock_count = res2.scalar() or 0
 
     if low_stock_count > 0:
         suggestions.append({
@@ -139,12 +152,14 @@ def get_smart_suggestions(
             "action":  "view_low_stock",
         })
 
-    overdue = db.query(Invoice).filter(
+    stmt3 = select(func.count(Invoice.id)).where(
         Invoice.gymId == current_gym.id,
         Invoice.status.in_(["PENDING", "PARTIAL"]),
         Invoice.dueDate < today,   # P9: today is already datetime.now().date() above
         Invoice.isDeleted == False,
-    ).count()
+    )
+    res3 = await db.execute(stmt3)
+    overdue = res3.scalar() or 0
 
     if overdue > 0:
         suggestions.append({
@@ -158,10 +173,10 @@ def get_smart_suggestions(
 
 
 @router.post("/bulk-whatsapp-reminder")
-def generate_bulk_whatsapp_links(
+async def generate_bulk_whatsapp_links(
     reminder_type: str = "expiring",   # 'expiring' | 'overdue'
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Generate WhatsApp links for bulk reminders."""
     links = []
@@ -171,12 +186,14 @@ def generate_bulk_whatsapp_links(
         end_date = today + timedelta(days=7)
 
         # FIX: DB-level filter using computed_status + NextDuedate range
-        members = db.query(Member).filter(
+        stmt = select(Member).where(
             Member.gymId == current_gym.id,
             Member.computed_status == "Active",
             Member.NextDuedate >= today,
             Member.NextDuedate <= end_date,
-        ).all()
+        )
+        res = await db.execute(stmt)
+        members = res.scalars().all()
 
         for m in members:
             exp_date = m.NextDuedate    # Native Date
@@ -204,12 +221,15 @@ def generate_bulk_whatsapp_links(
                 })
 
     elif reminder_type == "overdue":
-        pending = db.query(Invoice).filter(
+        from sqlalchemy.orm import joinedload
+        stmt = select(Invoice).options(joinedload(Invoice.member)).where(
             Invoice.gymId == current_gym.id,
             Invoice.status.in_(["PENDING", "PARTIAL"]),
             Invoice.dueDate < datetime.now().date(),  # P9: date comparison avoids IST offset
             Invoice.isDeleted == False,
-        ).all()
+        )
+        res = await db.execute(stmt)
+        pending = res.scalars().all()
 
         for p in pending:
             phone = None

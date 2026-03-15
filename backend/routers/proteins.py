@@ -2,9 +2,12 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import Response, RedirectResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import update, delete
 from typing import List, Optional
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
@@ -88,32 +91,33 @@ def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
 
 @router.get("")
 @router.get("/")
-def get_proteins(
+async def get_proteins(
     page: int = 1,
     page_size: int = 30,
     search: str = "",
     brand: Optional[str] = None,
     low_stock_only: Optional[bool] = False,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get proteins with server-side pagination."""
     # Get gym settings for default threshold
-    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    settings_res = await db.execute(select(GymSettings).where(GymSettings.gymId == current_gym.id))
+    settings = settings_res.scalars().first()
     default_threshold = settings.lowStockThreshold if settings else 5
     
-    query = db.query(ProteinStock).filter(
+    query = select(ProteinStock).where(
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False
     )
     
     if brand:
-        query = query.filter(ProteinStock.Brand == brand)
+        query = query.where(ProteinStock.Brand == brand)
     
     if search:
         search_term = f"%{search}%"
         from sqlalchemy import or_
-        query = query.filter(
+        query = query.where(
             or_(
                 ProteinStock.ProductName.ilike(search_term),
                 ProteinStock.Brand.ilike(search_term),
@@ -122,16 +126,24 @@ def get_proteins(
         )
     
     if low_stock_only:
-        query = query.filter(ProteinStock.Quantity < ProteinStock.StockThreshold)
+        query = query.where(ProteinStock.Quantity < ProteinStock.StockThreshold)
     
-    total = query.count()
+    # Needs two queries for async count and data
+    from sqlalchemy import func
+    count_query = select(func.count()).select_from(query.subquery())
+    total_res = await db.execute(count_query)
+    total = total_res.scalar() or 0
     
     if page_size > 0:
         offset = (page - 1) * page_size
-        proteins = query.order_by(ProteinStock.createdAt.desc()).offset(offset).limit(page_size).all()
+        query = query.order_by(ProteinStock.createdAt.desc()).offset(offset).limit(page_size)
+        proteins_res = await db.execute(query)
+        proteins = proteins_res.scalars().all()
         total_pages = (total + page_size - 1) // page_size
     else:
-        proteins = query.order_by(ProteinStock.createdAt.desc()).all()
+        query = query.order_by(ProteinStock.createdAt.desc())
+        proteins_res = await db.execute(query)
+        proteins = proteins_res.scalars().all()
         total_pages = 1
         page_size = total
     
@@ -145,35 +157,41 @@ def get_proteins(
 
 
 @router.get("/brands")
-def get_protein_brands(
+async def get_protein_brands(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get list of unique brands."""
-    proteins = db.query(ProteinStock.Brand).filter(
+    stmt = select(ProteinStock.Brand).where(
         ProteinStock.gymId == current_gym.id,
         ProteinStock.Brand != None
-    ).distinct().all()
+    ).distinct()
+    res = await db.execute(stmt)
+    proteins = res.all()
     return [p[0] for p in proteins if p[0]]
 
 
 @router.get("/low-stock")
-def get_low_stock_proteins(
+async def get_low_stock_proteins(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get proteins below stock threshold."""
-    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    settings_stmt = select(GymSettings).where(GymSettings.gymId == current_gym.id)
+    settings_res = await db.execute(settings_stmt)
+    settings = settings_res.scalars().first()
     default_threshold = settings.lowStockThreshold if settings else 5
     
     from sqlalchemy import func
     
     # SEC-PERF: Filter directly in DB using coalesce
-    proteins = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False,
         ProteinStock.Quantity < func.coalesce(ProteinStock.StockThreshold, default_threshold)
-    ).all()
+    )
+    proteins_res = await db.execute(stmt)
+    proteins = proteins_res.scalars().all()
     
     low_stock = [map_protein_response(p, default_threshold) for p in proteins]
     
@@ -184,9 +202,9 @@ def get_low_stock_proteins(
 
 
 @router.get("/summary")
-def get_protein_summary(
+async def get_protein_summary(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get protein stock summary statistics.
 
@@ -194,12 +212,14 @@ def get_protein_summary(
     Previously loaded ALL protein rows into memory — O(n) CPU + memory.
     Now runs a single SQL GROUP aggregate — O(1) from application perspective.
     """
-    settings = db.query(GymSettings).filter(GymSettings.gymId == current_gym.id).first()
+    settings_stmt = select(GymSettings).where(GymSettings.gymId == current_gym.id)
+    settings_res = await db.execute(settings_stmt)
+    settings = settings_res.scalars().first()
     default_threshold = settings.lowStockThreshold if settings else 5
 
     # Single SQL aggregate — no Python iteration over rows
-    from sqlalchemy import case
-    agg = db.query(
+    from sqlalchemy import case, func
+    agg_stmt = select(
         func.count().label("total_items"),
         func.coalesce(func.sum(ProteinStock.Quantity), 0).label("total_quantity"),
         func.coalesce(
@@ -215,20 +235,24 @@ def get_protein_summary(
                 else_=0
             )
         ).label("low_stock_count"),
-    ).filter(
+    ).where(
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False,
-    ).one()
+    )
+    agg_res = await db.execute(agg_stmt)
+    agg = agg_res.one()
 
     # Unique brands — separate lightweight query (COUNT DISTINCT)
-    unique_brands = db.query(
+    ub_stmt = select(
         func.count(func.distinct(ProteinStock.Brand))
-    ).filter(
+    ).where(
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False,
         ProteinStock.Brand.isnot(None),
         ProteinStock.Brand != "",
-    ).scalar() or 0
+    )
+    ub_res = await db.execute(ub_stmt)
+    unique_brands = ub_res.scalar() or 0
 
     total_stock  = float(agg.total_stock_value or 0)
     total_rev    = float(agg.total_potential_revenue or 0)
@@ -245,17 +269,19 @@ def get_protein_summary(
 
 
 @router.get("/{protein_id}", response_model=ProteinResponse)
-def get_protein(
+async def get_protein(
     protein_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get single protein by ID."""
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
     
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
@@ -265,10 +291,10 @@ def get_protein(
 
 @router.post("", response_model=ProteinResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ProteinResponse, status_code=status.HTTP_201_CREATED)
-def create_protein(
+async def create_protein(
     data: ProteinCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Create a new protein stock entry."""
     protein_data = data.model_dump()
@@ -292,17 +318,17 @@ def create_protein(
     
     protein = ProteinStock(gymId=current_gym.id, **protein_data)
     db.add(protein)
-    db.commit()
-    db.refresh(protein)
+    await db.commit()
+    # await db.refresh(protein)
 
     return map_protein_response(protein)
 
 
 @router.post("/bulk-create")
-def bulk_create_proteins(
+async def bulk_create_proteins(
     data: BulkProteinCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Bulk create protein stocks from import.
     SEC-CRIT-02: Uses BulkProteinCreate typed schema — no raw dict.
@@ -346,15 +372,15 @@ def bulk_create_proteins(
             logger.error("Bulk protein create error: %s", type(e).__name__, exc_info=False)
             continue
 
-    db.commit()
+    await db.commit()
     return {"message": f"Created {created_count} proteins", "count": created_count}
 
 
 @router.post("/bulk-delete")
-def bulk_delete_proteins(
+async def bulk_delete_proteins(
     data: BulkDeleteRequest,   # SW-06: typed, max 500 ids enforced by Pydantic
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """SW-06: Replaced raw dict with BulkDeleteRequest schema.
@@ -364,36 +390,38 @@ def bulk_delete_proteins(
 
     try:
         from datetime import datetime, timezone
-        stmt = ProteinStock.__table__.update().where(
+        stmt = update(ProteinStock).where(
             ProteinStock.id.in_(ids),
             ProteinStock.gymId == current_gym.id
         ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
-        result = db.execute(stmt)
+        result = await db.execute(stmt)
         # SEC-NEW-04: Audit log for bulk soft-deletes
         log_audit(db, current_gym.id, "ProteinStock", "bulk", "DELETE",
                   {"ids_count": result.rowcount, "requested_ids": len(ids)},
                   current_gym.username)
-        db.commit()
+        await db.commit()
         return {"message": f"Deleted {result.rowcount} proteins", "count": result.rowcount}
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("/{protein_id}", response_model=ProteinResponse)
 
-def update_protein(
+async def update_protein(
     protein_id: str,
     data: ProteinUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Update a protein stock entry."""
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
     
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
@@ -433,17 +461,17 @@ def update_protein(
         log_audit(db, current_gym.id, "ProteinStock", protein_id, "UPDATE",
                   price_diff, current_gym.username)
     
-    db.commit()
-    db.refresh(protein)
+    await db.commit()
+    # await db.refresh(protein)
     
     return map_protein_response(protein)
 
 
 @router.patch("/update")
-def update_protein_body(
+async def update_protein_body(
     data: ProteinInlineUpdate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Update protein with ID in body (for table inline edit compatibility).
     SEC-CRIT-01: Now uses ProteinInlineUpdate typed schema — no raw dict.
@@ -452,11 +480,13 @@ def update_protein_body(
     if not protein_id:
         raise HTTPException(status_code=400, detail="Protein ID required")
 
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
 
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
@@ -495,25 +525,27 @@ def update_protein_body(
         log_audit(db, current_gym.id, "ProteinStock", protein_id, "UPDATE",
                   price_diff, current_gym.username)
 
-    db.commit()
-    db.refresh(protein)
+    await db.commit()
+    # await db.refresh(protein)
 
     return map_protein_response(protein)
 
 
 @router.delete("/{protein_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_protein(
+async def delete_protein(
     protein_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """Delete a protein stock entry."""
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
     
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
@@ -524,7 +556,7 @@ def delete_protein(
     
     # Audit log
     log_audit(db, current_gym.id, "ProteinStock", protein_id, "DELETE", None, current_gym.username)
-    db.commit()
+    await db.commit()
     return None
 
 
@@ -535,16 +567,18 @@ async def upload_protein_image(
     protein_id: str,
     file: UploadFile = File(...),
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Upload image for a protein product.
     SEC-HIGH-04 & SEC-HIGH-05: Uses object storage with size + magic byte validation.
     """
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
     
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
@@ -560,22 +594,24 @@ async def upload_protein_image(
     protein.imageMimeType = file.content_type
     protein.hasImage = True
     
-    db.commit()
+    await db.commit()
     return {"message": "Image uploaded successfully", "imageUrl": get_signed_url(storage_key)}
 
 
 @router.get("/{protein_id}/image")
-def get_protein_image(
+async def get_protein_image(
     protein_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get signed URL for a protein product image, then redirect to it."""
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
     
     if not protein or not getattr(protein, 'imageUrl', None):
         raise HTTPException(status_code=404, detail="Image not found")
@@ -585,18 +621,20 @@ def get_protein_image(
 
 
 @router.delete("/{protein_id}/image", status_code=status.HTTP_204_NO_CONTENT)
-def delete_protein_image(
+async def delete_protein_image(
     protein_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
     """Delete image for a protein product."""
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id,
         ProteinStock.isDeleted == False
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
     
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
@@ -608,25 +646,27 @@ def delete_protein_image(
     protein.imageMimeType = None
     protein.hasImage = False
     
-    db.commit()
+    await db.commit()
     return None
 
 
 # ============ STOCK ADJUSTMENT ============
 
 @router.post("/{protein_id}/adjust-stock")
-def adjust_protein_stock(
+async def adjust_protein_stock(
     protein_id: str,
     adjustment: int,
     reason: Optional[str] = None,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Adjust protein stock quantity by creating an adjustment lot."""
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
     
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
@@ -663,9 +703,8 @@ def adjust_protein_stock(
               {"adjustment": adjustment, "new_qty": new_qty, "reason": reason},
               current_gym.username)
               
-    db.commit()
-    
-    db.refresh(protein)
+    await db.commit()
+    # await db.refresh(protein)
 
     return {
         "message": f"Stock adjusted by {adjustment}",
@@ -676,19 +715,25 @@ def adjust_protein_stock(
 
 
 @router.get("/{protein_id}/lots")
-def get_protein_lots(
+async def get_protein_lots(
     protein_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    protein = db.query(ProteinStock).filter(
+    stmt = select(ProteinStock).where(
         ProteinStock.id == protein_id,
         ProteinStock.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
+    
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
 
-    lots = db.query(ProteinLot).filter(ProteinLot.proteinId == protein_id, ProteinLot.gymId == current_gym.id).all()
+    lots_stmt = select(ProteinLot).where(ProteinLot.proteinId == protein_id, ProteinLot.gymId == current_gym.id)
+    lots_res = await db.execute(lots_stmt)
+    lots = lots_res.scalars().all()
+    
     return [{
         'id': l.id,
         'lotNumber': l.lotNumber,
@@ -701,13 +746,16 @@ def get_protein_lots(
 
 
 @router.post("/{protein_id}/lots")
-def create_protein_lot(
+async def create_protein_lot(
     protein_id: str,
     data: ProteinLotCreate,   # SW-07: typed schema replaces raw dict
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    protein = db.query(ProteinStock).filter(ProteinStock.id == protein_id, ProteinStock.gymId == current_gym.id).first()
+    stmt = select(ProteinStock).where(ProteinStock.id == protein_id, ProteinStock.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    protein = res.scalars().first()
+    
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
 
@@ -729,9 +777,9 @@ def create_protein_lot(
         lot.lotNumber = data.batchNumber
 
     db.add(lot)
-    db.commit()
-    db.refresh(lot)
-    db.refresh(protein)
+    await db.commit()
+    # await db.refresh(lot)
+    # await db.refresh(protein)
 
     return {
         'id': lot.id,
@@ -745,17 +793,22 @@ def create_protein_lot(
 
 
 @router.put("/lots/{lot_id}")
-def update_protein_lot(
+async def update_protein_lot(
     lot_id: str,
     data: ProteinLotUpdate,   # SW-07: typed schema replaces raw dict
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    lot = db.query(ProteinLot).filter(ProteinLot.id == lot_id, ProteinLot.gymId == current_gym.id).first()
+    stmt = select(ProteinLot).where(ProteinLot.id == lot_id, ProteinLot.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    lot = res.scalars().first()
+    
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
 
-    protein = db.query(ProteinStock).filter(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id).first()
+    p_stmt = select(ProteinStock).where(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id)
+    p_res = await db.execute(p_stmt)
+    protein = p_res.scalars().first()
 
     update_data = data.model_dump(exclude_unset=True)
 
@@ -770,11 +823,11 @@ def update_protein_lot(
     if 'batchNumber' in update_data:
         lot.lotNumber = update_data['batchNumber']
 
-    db.commit()
-    db.refresh(lot)
-    if protein:
-        db.refresh(protein)
-    db.refresh(lot)
+    await db.commit()
+    # await db.refresh(lot)
+    # if protein:
+    #     await db.refresh(protein)
+    #     await db.refresh(lot)
 
     return {
         'id': lot.id,
@@ -788,18 +841,24 @@ def update_protein_lot(
 
 
 @router.delete("/lots/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_protein_lot(
+async def delete_protein_lot(
     lot_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    lot = db.query(ProteinLot).filter(ProteinLot.id == lot_id, ProteinLot.gymId == current_gym.id).first()
+    stmt = select(ProteinLot).where(ProteinLot.id == lot_id, ProteinLot.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    lot = res.scalars().first()
+    
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
 
-    protein = db.query(ProteinStock).filter(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id).first()
-    db.delete(lot)
-    db.commit()
+    p_stmt = select(ProteinStock).where(ProteinStock.id == lot.proteinId, ProteinStock.gymId == current_gym.id)
+    p_res = await db.execute(p_stmt)
+    protein = p_res.scalars().first()
+    
+    await db.execute(delete(ProteinLot).where(ProteinLot.id == lot.id))
+    await db.commit()
     
     return None

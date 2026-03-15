@@ -1,11 +1,14 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import update, delete
 from typing import List, Optional
 from datetime import datetime, date
 from pydantic import BaseModel
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, Invoice, Member, PaymentEvent
 from schemas.invoice import InvoiceCreate, InvoiceResponse, PendingCreate
@@ -65,29 +68,35 @@ def map_invoice_response(invoice: Invoice):
 
 @router.get("")
 @router.get("/")
-def get_invoices(
+async def get_invoices(
     page: int = 1,
     page_size: int = 30,
     status_filter: Optional[str] = None,   # PENDING | PARTIAL | PAID
     member_id: Optional[str] = None,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     ):
     """ARCH-06: Paginated invoice list. max page_size=500."""
     page_size = max(1, min(page_size, 500))
     offset = (page - 1) * page_size
 
-    q = db.query(Invoice).filter(
+    stmt = select(Invoice).where(
         Invoice.gymId == current_gym.id,
         Invoice.isDeleted == False,   # SCH-08: soft-delete
     )
     if status_filter:
-        q = q.filter(Invoice.status == status_filter.upper())
+        stmt = stmt.where(Invoice.status == status_filter.upper())
     if member_id:
-        q = q.filter(Invoice.memberId == member_id)
+        stmt = stmt.where(Invoice.memberId == member_id)
 
-    total = q.count()
-    invoices = q.order_by(Invoice.invoiceDate.desc()).offset(offset).limit(page_size).all()
+    from sqlalchemy import func
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_res = await db.execute(count_stmt)
+    total = total_res.scalar() or 0
+    
+    stmt = stmt.order_by(Invoice.invoiceDate.desc()).offset(offset).limit(page_size)
+    inv_res = await db.execute(stmt)
+    invoices = inv_res.scalars().all()
     
     total_pages = (total + page_size - 1) // page_size if page_size > 0 else 1
 
@@ -103,10 +112,10 @@ def get_invoices(
 
 @router.post("", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
-def create_invoice(
+async def create_invoice(
     data: InvoiceCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-02: MANAGER+ can create invoices
     ):
     # SCH-NORM-01: Cross-tenant guard — prevent invoices being attributed to
@@ -114,10 +123,13 @@ def create_invoice(
     # efficiency, but without this check a stale/malicious memberId could
     # create a cross-tenant billing record (no DB CHECK constraint covers it).
     if data.memberId:
-        member = db.query(Member).filter(
+        stmt = select(Member).where(
             Member.id == data.memberId,
             Member.isDeleted == False,
-        ).first()
+        )
+        mem_res = await db.execute(stmt)
+        member = mem_res.scalars().first()
+        
         if not member:
             raise HTTPException(status_code=404, detail="Member not found")
         if member.gymId != current_gym.id:
@@ -159,7 +171,7 @@ def create_invoice(
     )
     
     db.add(new_invoice)
-    db.flush()  # get new_invoice.id before creating PaymentEvent
+    await db.flush()  # get new_invoice.id before creating PaymentEvent
 
     # ARCH-NEW-09: Always create a PaymentEvent when paid > 0.
     # This ensures Invoice.paidAmount == SUM(PaymentEvent.amount) from creation,
@@ -178,15 +190,15 @@ def create_invoice(
     log_audit(db, current_gym.id, "Invoice", new_invoice.id, "CREATE",
               {"customerName": data.customerName, "total": total, "status": data.status},
               current_gym.username)
-    db.commit()
-    db.refresh(new_invoice)
+    await db.commit()
+    # await db.refresh(new_invoice)
 
     return map_invoice_response(new_invoice)
 
 
 @router.post("/bulk-create")
 @rate_limit("5/minute")
-def bulk_create_invoices(request: Request, data: dict, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
+async def bulk_create_invoices(request: Request, data: dict, current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
     """Bulk create invoices from import"""
     invoices_list = data.get("invoices", [])
     created_count = 0
@@ -229,7 +241,7 @@ def bulk_create_invoices(request: Request, data: dict, current_gym: Gym = Depend
                 editReason='Bulk Import'
             )
             db.add(new_invoice)
-            db.flush()
+            await db.flush()
 
             # DATA-1: Insert PaymentEvent if paidAmount > 0
             if new_invoice.paidAmount and new_invoice.paidAmount > 0:
@@ -247,15 +259,15 @@ def bulk_create_invoices(request: Request, data: dict, current_gym: Gym = Depend
             logger.error("Bulk invoice create error: %s", type(e).__name__, exc_info=False)
             continue
     
-    db.commit()
+    await db.commit()
     return {"message": f"Created {created_count} invoices", "count": created_count}
 
 
 @router.post("/bulk-delete")
-def bulk_delete_invoices(
+async def bulk_delete_invoices(
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
     ):
     """Bulk delete invoices (soft-delete)"""
@@ -273,39 +285,43 @@ def bulk_delete_invoices(
 
     try:
         from datetime import datetime, timezone
-        stmt = Invoice.__table__.update().where(
+        stmt = update(Invoice).where(
             Invoice.id.in_(ids),
             Invoice.gymId == current_gym.id
         ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
 
-        result = db.execute(stmt)
-        db.commit()
+        result = await db.execute(stmt)
+        await db.commit()
         return {"message": f"Deleted {result.rowcount} invoices", "count": result.rowcount}
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{invoice_id}")
-def get_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym), db: Session = Depends(get_db)):
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.gymId == current_gym.id).first()
+async def get_invoice(invoice_id: str, current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
+    stmt = select(Invoice).where(Invoice.id == invoice_id, Invoice.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    invoice = res.scalars().first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return map_invoice_response(invoice)
 
 
 @router.patch("/update")
-def update_invoice(
+async def update_invoice(
     data: InvoiceUpdateRequest,   # SEC-04: typed schema, not raw dict
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
     ):
     invoice_id = data.id
     if not invoice_id:
         raise HTTPException(status_code=400, detail="Invoice ID required")
     
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.gymId == current_gym.id).first()
+    stmt = select(Invoice).where(Invoice.id == invoice_id, Invoice.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    invoice = res.scalars().first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     
@@ -325,19 +341,21 @@ def update_invoice(
     invoice.lastEditedBy = current_gym.username
     invoice.editReason = data.editReason or 'Invoice Updated'
     
-    db.commit()
-    db.refresh(invoice)
+    await db.commit()
+    # await db.refresh(invoice)
     return map_invoice_response(invoice)
 
 
 @router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_invoice(
+async def delete_invoice(
     invoice_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-02: MANAGER+ only
     ):
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.gymId == current_gym.id).first()
+    stmt = select(Invoice).where(Invoice.id == invoice_id, Invoice.gymId == current_gym.id)
+    res = await db.execute(stmt)
+    invoice = res.scalars().first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
@@ -345,27 +363,31 @@ def delete_invoice(
     from datetime import datetime, timezone
     invoice.isDeleted = True
     invoice.deletedAt = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     return None
 
 
 # MISSING-2: Payment history endpoint
 @router.get("/{invoice_id}/payment-history")
-def get_payment_history(
+async def get_payment_history(
     invoice_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
     ):
-    invoice = db.query(Invoice).filter(
+    stmt = select(Invoice).where(
         Invoice.id == invoice_id,
         Invoice.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    invoice = res.scalars().first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    events = db.query(PaymentEvent).filter(
+    p_stmt = select(PaymentEvent).where(
         PaymentEvent.invoiceId == invoice_id
-    ).order_by(PaymentEvent.createdAt.asc()).all()
+    ).order_by(PaymentEvent.createdAt.asc())
+    p_res = await db.execute(p_stmt)
+    events = p_res.scalars().all()
 
     return [{
         "id": e.id,
@@ -379,17 +401,19 @@ def get_payment_history(
 
 
 @router.post("/{invoice_id}/pay")
-def pay_invoice(
+async def pay_invoice(
     invoice_id: str,
     data: dict,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-02: MANAGER+ can record payments
     ):
-    invoice = db.query(Invoice).filter(
+    stmt = select(Invoice).where(
         Invoice.id == invoice_id,
         Invoice.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    invoice = res.scalars().first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
@@ -439,8 +463,8 @@ def pay_invoice(
               {"action": "Payment", "amount": amount, "paymentMode": mode, "newStatus": invoice.status},
               current_gym.username)
 
-    db.commit()
-    db.refresh(invoice)
+    await db.commit()
+    # await db.refresh(invoice)
     return map_invoice_response(invoice)
 
 
@@ -475,34 +499,37 @@ def map_invoice_to_pending(invoice: Invoice):
 
 @pending_router.get("")
 @pending_router.get("/")
-def get_pending_balances(
+async def get_pending_balances(
     status_filter: Optional[str] = None,
     entity_type: Optional[str] = None,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get all pending balances from invoices."""
-    query = db.query(Invoice).filter(Invoice.gymId == current_gym.id)
+    stmt = select(Invoice).options(selectinload(Invoice.member)).where(Invoice.gymId == current_gym.id)
     
     if status_filter:
-        query = query.filter(Invoice.status == status_filter.upper())
+        stmt = stmt.where(Invoice.status == status_filter.upper())
     else:
-        query = query.filter(Invoice.status.in_(['PENDING', 'PARTIAL']))
+        stmt = stmt.where(Invoice.status.in_(['PENDING', 'PARTIAL']))
         
     if entity_type == 'member':
-        query = query.filter(Invoice.memberId != None)
+        stmt = stmt.where(Invoice.memberId != None)
     elif entity_type == 'external':
-        query = query.filter(Invoice.memberId == None)
+        stmt = stmt.where(Invoice.memberId == None)
     
-    invoices = query.order_by(Invoice.dueDate).all()
+    stmt = stmt.order_by(Invoice.dueDate)
+    res = await db.execute(stmt)
+    invoices = res.scalars().all()
+    
     return [map_invoice_to_pending(inv) for inv in invoices]
 
 @pending_router.post("")
 @pending_router.post("/")
-def create_pending_balance(
+async def create_pending_balance(
     data: PendingCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     """Create a new pending balance (simplified invoice)."""
@@ -529,25 +556,28 @@ def create_pending_balance(
     )
     
     db.add(new_invoice)
-    db.flush()
+    await db.flush()
     
     log_audit(db, current_gym.id, "Invoice", new_invoice.id, "CREATE_PENDING", 
               {"name": data.entityName, "amount": data.amount}, 
               current_gym.username)
     
-    db.commit()
+    await db.commit()
+    # To map efficiently back to response, but no member because it's newly created manual.
     return map_invoice_to_pending(new_invoice)
 
 @pending_router.get("/summary")
-def get_pending_summary(
+async def get_pending_summary(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get pending balance summary from invoices."""
-    invoices = db.query(Invoice).filter(
+    stmt = select(Invoice).where(
         Invoice.gymId == current_gym.id,
         Invoice.status.in_(['PENDING', 'PARTIAL'])
-    ).all()
+    )
+    res = await db.execute(stmt)
+    invoices = res.scalars().all()
     
     total_pending = 0
     by_type = {"member": 0, "external": 0}
@@ -573,32 +603,36 @@ def get_pending_summary(
     }
 
 @pending_router.get("/overdue")
-def get_overdue_balances(
+async def get_overdue_balances(
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get overdue pending balances from invoices."""
     today = datetime.now().date()
     
-    invoices = db.query(Invoice).filter(
+    stmt = select(Invoice).options(selectinload(Invoice.member)).where(
         Invoice.gymId == current_gym.id,
         Invoice.status.in_(['PENDING', 'PARTIAL']),
         Invoice.dueDate < today
-    ).order_by(Invoice.dueDate).all()
+    ).order_by(Invoice.dueDate)
+    res = await db.execute(stmt)
+    invoices = res.scalars().all()
     
     return [map_invoice_to_pending(inv) for inv in invoices]
 
 @pending_router.get("/{pending_id}")
-def get_pending_balance(
+async def get_pending_balance(
     pending_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get single pending balance from invoice."""
-    invoice = db.query(Invoice).filter(
+    stmt = select(Invoice).options(selectinload(Invoice.member)).where(
         Invoice.id == pending_id,
         Invoice.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    invoice = res.scalars().first()
     
     if not invoice:
         raise HTTPException(status_code=404, detail="Pending balance not found")
@@ -606,25 +640,27 @@ def get_pending_balance(
     return map_invoice_to_pending(invoice)
 
 @pending_router.post("/{pending_id}/pay")
-def record_payment(
+async def record_payment(
     pending_id: str,
     payment: PaymentRecord,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
     """Record a payment against pending balance (invoice).
     Uses the same logic as pay_invoice internally.
     """
-    invoice = db.query(Invoice).filter(
+    stmt = select(Invoice).where(
         Invoice.id == pending_id,
         Invoice.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    invoice = res.scalars().first()
 
     if not invoice:
         raise HTTPException(status_code=404, detail="Pending balance not found")
 
-    return pay_invoice(
+    return await pay_invoice(
         invoice_id=pending_id,
         data={"amount": payment.amount, "paymentMode": payment.paymentMode, "notes": payment.notes},
         current_gym=current_gym,
@@ -632,16 +668,18 @@ def record_payment(
     )
 
 @pending_router.get("/{pending_id}/whatsapp-link")
-def get_whatsapp_reminder_link(
+async def get_whatsapp_reminder_link(
     pending_id: str,
     current_gym: Gym = Depends(get_current_gym),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Generate WhatsApp reminder link."""
-    invoice = db.query(Invoice).filter(
+    stmt = select(Invoice).options(selectinload(Invoice.member)).where(
         Invoice.id == pending_id,
         Invoice.gymId == current_gym.id
-    ).first()
+    )
+    res = await db.execute(stmt)
+    invoice = res.scalars().first()
     
     if not invoice:
         raise HTTPException(status_code=404, detail="Pending balance not found")
