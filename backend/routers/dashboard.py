@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, text
 
-from core.database import get_db, get_async_db, AsyncSessionLocal
+from core.database import get_async_db, AsyncSessionLocal  # RD-01: removed unused sync get_db
 from core.dependencies import get_current_gym
 from core.cache import get_async_gym_settings
 from models.all_models import (
@@ -45,7 +45,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SSE_INTERVAL_SECONDS    = 60    # Push every 1 minute
-SSE_MAX_DURATION_SECONDS = 1800  # P0-5: Force reconnect after 30 min — prevents zombie connections
+SSE_MAX_DURATION_SECONDS = 600  # P0-5: Force reconnect after 10 min — prevents zombie connections
+SSE_HEARTBEAT_SECONDS    = 30   # Periodic heartbeat to detect dead connections
+SSE_MAX_CONNECTIONS_PER_GYM = 50 # Fall back to polling if too many clients
 _SUMMARY_STALE_SECONDS  = 300   # ARCH-NEW-02: recompute after 5 minutes
 
 
@@ -55,15 +57,16 @@ _SUMMARY_STALE_SECONDS  = 300   # ARCH-NEW-02: recompute after 5 minutes
 
 async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
     """
-    ARCH-NEW-02: Compute dashboard stats, using GymDailySummary as a cache.
+    ARCH-NEW-02 + PB-06: Compute dashboard stats, using GymDailySummary as a cache.
 
-    Strategy:
+    Cache strategy:
     - Check if today's GymDailySummary row is fresh (< _SUMMARY_STALE_SECONDS old)
-    - If fresh: return it directly (1 SELECT, no aggregates)
-    - If stale/missing: run all 9 live aggregate queries, upsert GymDailySummary, return result
+    - Fresh: return it directly (1 SELECT, no aggregates)
+    - Stale/missing: run a SINGLE CTE that computes all 10 stats in one DB round-trip
 
-    This reduces DB load from 9 queries/tick to 1 query/tick for ~99% of SSE ticks.
-    At 50 active gyms × 60s tick, live queries only fire every 5 minutes = 10x improvement.
+    PB-06: All 10 aggregate values come from one SQL statement with scalar subqueries
+    wrapped in a `WITH stats AS (SELECT ...)` CTE emulated via SQLAlchemy's select().
+    This is equivalent to a CTE and guarantees exactly one round-trip to the DB.
     """
     today       = datetime.now().date()
     today_start = datetime.combine(today, datetime.min.time())
@@ -86,7 +89,7 @@ async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
             return {
                 "activeMembers":    summary.activeMembers or 0,
                 "expiringToday":    summary.expiringToday or 0,
-                "expiringThisWeek": 0,  # not stored in summary — OMIT to avoid expensive live count on cache hit
+                "expiringThisWeek": 0,  # not stored in summary
                 "todayCollection":  round(float(summary.totalIncome or 0), 2),
                 "weekCollection":   round(float(summary.weekToDateIncome or 0), 2),
                 "monthCollection":  round(float(summary.monthToDateIncome or 0), 2),
@@ -101,86 +104,131 @@ async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
                 "_source":          "summary_cache",
             }
 
-    # ── Cache miss — compute from live tables ──────────────────────────────────
-    active_members = (await db.execute(select(func.count(Member.id)).where(
-        Member.gymId == gym_id,
-        Member.computed_status == "Active",
-        Member.isDeleted == False,
-    ))).scalar() or 0
+    # ── Cache miss: single CTE computes everything in ONE round-trip ───────────
+    # PB-06: All 10 stats are scalar subqueries projected in a single SELECT.
+    # PostgreSQL executes each scalar subquery once; the planner may hoist them
+    # into CTEs automatically. Explicit binding avoids N+1 query anti-pattern.
+    settings       = await get_async_gym_settings(gym_id, db)
+    default_thresh = int(getattr(settings, "lowStockThreshold", None) or 5)
 
-    expiring_today = (await db.execute(select(func.count(Member.id)).where(
-        Member.gymId == gym_id,
-        Member.NextDuedate == today,
-        Member.isDeleted == False,
-    ))).scalar() or 0
+    # Each sub-select is a correlated scalar subquery resolved inside one outer SELECT.
+    active_members_sq = (
+        select(func.count(Member.id))
+        .where(Member.gymId == gym_id, Member.computed_status == "Active", Member.isDeleted == False)
+        .scalar_subquery()
+        .label("active_members")
+    )
+    expiring_today_sq = (
+        select(func.count(Member.id))
+        .where(Member.gymId == gym_id, Member.NextDuedate == today, Member.isDeleted == False)
+        .scalar_subquery()
+        .label("expiring_today")
+    )
+    expiring_week_sq = (
+        select(func.count(Member.id))
+        .where(
+            Member.gymId == gym_id,
+            Member.NextDuedate >= today,
+            Member.NextDuedate <= week_end,
+            Member.computed_status == "Active",
+            Member.isDeleted == False,
+        )
+        .scalar_subquery()
+        .label("expiring_this_week")
+    )
+    today_income_sq = (
+        select(func.coalesce(func.sum(Invoice.total), 0))
+        .where(Invoice.gymId == gym_id, Invoice.invoiceDate >= today_start, Invoice.isDeleted == False)
+        .scalar_subquery()
+        .label("today_collection")
+    )
+    week_income_sq = (
+        select(func.coalesce(func.sum(Invoice.total), 0))
+        .where(Invoice.gymId == gym_id, Invoice.invoiceDate >= week_start, Invoice.isDeleted == False)
+        .scalar_subquery()
+        .label("week_collection")
+    )
+    month_income_sq = (
+        select(func.coalesce(func.sum(Invoice.total), 0))
+        .where(Invoice.gymId == gym_id, Invoice.invoiceDate >= month_start, Invoice.isDeleted == False)
+        .scalar_subquery()
+        .label("month_collection")
+    )
+    pending_balance_sq = (
+        select(func.coalesce(func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0)), 0))
+        .where(
+            Invoice.gymId == gym_id,
+            Invoice.status.in_(["PENDING", "PARTIAL"]),
+            Invoice.isDeleted == False,
+        )
+        .scalar_subquery()
+        .label("pending_balance")
+    )
+    today_expenses_sq = (
+        select(func.coalesce(func.sum(Expense.amount), 0))
+        .where(Expense.gymId == gym_id, Expense.date == today, Expense.isDeleted == False)
+        .scalar_subquery()
+        .label("today_expenses")
+    )
+    month_expenses_sq = (
+        select(func.coalesce(func.sum(Expense.amount), 0))
+        .where(Expense.gymId == gym_id, Expense.date >= month_start.date(), Expense.isDeleted == False)
+        .scalar_subquery()
+        .label("month_expenses")
+    )
+    # PB-06 fix: use ProteinStock.Quantity (consistent with automation.py + alerts)
+    # instead of the previous ProteinLot join which counted lots, not products
+    low_stock_sq = (
+        select(func.count(ProteinStock.id))
+        .where(
+            ProteinStock.gymId == gym_id,
+            ProteinStock.isDeleted == False,
+            ProteinStock.Quantity < func.coalesce(ProteinStock.StockThreshold, default_thresh),
+        )
+        .scalar_subquery()
+        .label("low_stock_count")
+    )
 
-    expiring_this_week = (await db.execute(select(func.count(Member.id)).where(
-        Member.gymId == gym_id,
-        Member.NextDuedate >= today,
-        Member.NextDuedate <= week_end,
-        Member.computed_status == "Active",
-        Member.isDeleted == False,
-    ))).scalar() or 0
+    # ── Single DB round-trip: all 10 values projected in one SELECT ───────────
+    stats_row = (
+        await db.execute(
+            select(
+                active_members_sq,
+                expiring_today_sq,
+                expiring_week_sq,
+                today_income_sq,
+                week_income_sq,
+                month_income_sq,
+                pending_balance_sq,
+                today_expenses_sq,
+                month_expenses_sq,
+                low_stock_sq,
+            )
+        )
+    ).first()
 
-    today_collection = (await db.execute(select(func.sum(Invoice.total)).where(
-        Invoice.gymId == gym_id,
-        Invoice.invoiceDate >= today_start,
-        Invoice.isDeleted == False,
-    ))).scalar() or 0.0
-
-    week_collection = (await db.execute(select(func.sum(Invoice.total)).where(
-        Invoice.gymId == gym_id,
-        Invoice.invoiceDate >= week_start,
-        Invoice.isDeleted == False,
-    ))).scalar() or 0.0
-
-    month_collection = (await db.execute(select(func.sum(Invoice.total)).where(
-        Invoice.gymId == gym_id,
-        Invoice.invoiceDate >= month_start,
-        Invoice.isDeleted == False,
-    ))).scalar() or 0.0
-
-    pending_balance = (await db.execute(select(
-        func.sum(Invoice.total - func.coalesce(Invoice.paidAmount, 0))
-    ).where(
-        Invoice.gymId == gym_id,
-        Invoice.status.in_(["PENDING", "PARTIAL"]),
-        Invoice.isDeleted == False,
-    ))).scalar() or 0.0
-
-    month_expenses = (await db.execute(select(func.sum(Expense.amount)).where(
-        Expense.gymId == gym_id,
-        Expense.date >= month_start.date(),
-        Expense.isDeleted == False,
-    ))).scalar() or 0.0
-
-    today_expenses = (await db.execute(select(func.sum(Expense.amount)).where(
-        Expense.gymId == gym_id,
-        Expense.date == today,
-        Expense.isDeleted == False,
-    ))).scalar() or 0.0
-
-    settings        = await get_async_gym_settings(gym_id, db)
-    default_thresh  = (getattr(settings, "lowStockThreshold", None) or 5)
-
-    low_stock_count = (await db.execute(select(func.count(ProteinLot.id)).join(
-        ProteinStock, ProteinLot.proteinId == ProteinStock.id
-    ).where(
-        ProteinLot.gymId == gym_id,
-        ProteinLot.quantity < func.coalesce(ProteinStock.StockThreshold, default_thresh),
-    ))).scalar() or 0
+    active_members     = int(getattr(stats_row, "active_members", 0)     or 0)
+    expiring_today     = int(getattr(stats_row, "expiring_today", 0)     or 0)
+    expiring_this_week = int(getattr(stats_row, "expiring_this_week", 0) or 0)
+    today_collection   = float(getattr(stats_row, "today_collection", 0) or 0.0)
+    week_collection    = float(getattr(stats_row, "week_collection", 0)  or 0.0)
+    month_collection   = float(getattr(stats_row, "month_collection", 0) or 0.0)
+    pending_balance    = float(getattr(stats_row, "pending_balance", 0)  or 0.0)
+    today_expenses     = float(getattr(stats_row, "today_expenses", 0)   or 0.0)
+    month_expenses     = float(getattr(stats_row, "month_expenses", 0)   or 0.0)
+    low_stock_count    = int(getattr(stats_row, "low_stock_count", 0)    or 0)
 
     result = {
         "activeMembers":    active_members,
         "expiringToday":    expiring_today,
         "expiringThisWeek": expiring_this_week,
-        "todayCollection":  round(float(today_collection), 2),
-        "weekCollection":   round(float(week_collection), 2),
-        "monthCollection":  round(float(month_collection), 2),
-        "pendingBalance":   round(float(pending_balance), 2),
-        "todayExpenses":    round(float(today_expenses), 2),
-        "monthExpenses":    round(float(month_expenses), 2),
-        "netProfit":        round(float(month_collection) - float(month_expenses), 2),
+        "todayCollection":  round(today_collection, 2),
+        "weekCollection":   round(week_collection, 2),
+        "monthCollection":  round(month_collection, 2),
+        "pendingBalance":   round(pending_balance, 2),
+        "todayExpenses":    round(today_expenses, 2),
+        "monthExpenses":    round(month_expenses, 2),
+        "netProfit":        round(month_collection - month_expenses, 2),
         "lowStockItems":    low_stock_count,
         "lastUpdated":      datetime.now().isoformat(),
         "_source":          "live",
@@ -201,10 +249,9 @@ async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
         summary.lowStockCount     = result["lowStockItems"]
         summary.updatedAt         = datetime.now()
         await db.commit()
-    except Exception as e:
-        logger.error(f"Error upserting gym summary: {e}")
+    except Exception as exc:
+        logger.error("Error upserting gym summary: %s", exc)
         await db.rollback()
-        pass  # Summary upsert is best-effort — never fail the stats response
 
     return result
 
@@ -225,6 +272,10 @@ class GymStreamManager:
         self._tasks = {}      # gym_id -> asyncio task
 
     async def subscribe(self, gym_id: str):
+        from fastapi import HTTPException
+        if gym_id in self._listeners and len(self._listeners[gym_id]) >= SSE_MAX_CONNECTIONS_PER_GYM:
+            raise HTTPException(status_code=429, detail="Max SSE connections reached for this gym. Fall back to polling.")
+            
         queue = asyncio.Queue()
         if gym_id not in self._listeners:
             self._listeners[gym_id] = set()
@@ -289,7 +340,7 @@ async def dashboard_stream(
     async def event_generator():
         """
         P0-5: Streams stats events to the client.
-        Auto-closes after SSE_MAX_DURATION_SECONDS (30 min) to prevent zombie connections.
+        Auto-closes after SSE_MAX_DURATION_SECONDS (10 min) to prevent zombie connections.
         Frontend should listen for the 'reconnect' event and re-establish the stream.
         """
         queue = await stream_manager.subscribe(gym_id)
@@ -297,11 +348,17 @@ async def dashboard_stream(
         try:
             while True:
                 # P0-5: Force reconnect after max duration
-                if asyncio.get_event_loop().time() - connected_at > SSE_MAX_DURATION_SECONDS:
+                now = asyncio.get_event_loop().time()
+                if now - connected_at > SSE_MAX_DURATION_SECONDS:
                     yield "event: reconnect\ndata: {\"reason\": \"max_duration\"}\n\n"
                     break
-                data = await queue.get()
-                yield data
+                    
+                try:
+                    # Wait for data or heartbeat timeout
+                    data = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+                    yield data
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
         except asyncio.CancelledError:
             pass
         finally:

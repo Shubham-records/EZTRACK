@@ -8,13 +8,14 @@ from typing import List, Optional
 from datetime import datetime, date
 from pydantic import BaseModel
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, Invoice, Member, PaymentEvent
 from schemas.invoice import InvoiceCreate, InvoiceResponse, PendingCreate
 from schemas.payment import PaymentRecord
 from core.audit_utils import log_audit
 from core.rate_limit import rate_limit
+from services.invoice_service import process_invoice_creation, process_invoice_payment
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -112,86 +113,45 @@ async def get_invoices(
 
 @router.post("", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
+@rate_limit("30/minute")
 async def create_invoice(
     data: InvoiceCreate,
     current_gym: Gym = Depends(get_current_gym),
     db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-02: MANAGER+ can create invoices
     ):
-    # SCH-NORM-01: Cross-tenant guard — prevent invoices being attributed to
-    # members of a different gym. Invoice.gymId is denormalized for query
-    # efficiency, but without this check a stale/malicious memberId could
-    # create a cross-tenant billing record (no DB CHECK constraint covers it).
-    if data.memberId:
-        stmt = select(Member).where(
-            Member.id == data.memberId,
-            Member.isDeleted == False,
+    # SW-04: Delegate core business logic to the service layer
+    try:
+        new_invoice = await process_invoice_creation(
+            db=db,
+            gym_id=current_gym.id,
+            gym_username=current_gym.username,
+            items=[item.model_dump() for item in data.items],
+            member_id=data.memberId,
+            customer_name=data.customerName,
+            tax=data.tax or 0.0,
+            discount=data.discount or 0.0,
+            status=data.status,
+            payment_mode=data.paymentMode,
+            invoice_date=data.invoiceDate,
+            due_date=data.dueDate,
+            paid_amount_input=data.paidAmount,
+            invoice_type=getattr(data, 'invoiceType', None),
         )
-        mem_res = await db.execute(stmt)
-        member = mem_res.scalars().first()
-        
-        if not member:
-            raise HTTPException(status_code=404, detail="Member not found")
-        if member.gymId != current_gym.id:
-            raise HTTPException(
-                status_code=403,
-                detail="Member does not belong to this gym",
-            )
-
-    # Calculate totals
-    items = data.items
-    # sum amounts
-    sub_total = sum(item.amount or 0 for item in items)
-    tax = data.tax or 0
-    discount = data.discount or 0
-    total = sub_total + tax - discount
-    
-    paid = data.paidAmount if data.paidAmount is not None else total
-    if data.status == "PENDING":
-        paid = 0
-    elif data.status == "PAID":
-        paid = total
-    
-    new_invoice = Invoice(
-        gymId=current_gym.id,
-        memberId=data.memberId,
-        customerName=data.customerName,
-        items=[item.model_dump() for item in items], # Convert Pydantic models to dict/JSON
-        subTotal=sub_total,
-        tax=tax,
-        discount=discount,
-        total=total,
-        status=data.status,
-        paymentMode=data.paymentMode,
-        invoiceDate=data.invoiceDate or datetime.now(),
-        dueDate=data.dueDate,
-        paidAmount=paid,
-        lastEditedBy=current_gym.username, # simplified
-        editReason=data.invoiceType if hasattr(data, 'invoiceType') and data.invoiceType else 'New Invoice'
-    )
-    
-    db.add(new_invoice)
-    await db.flush()  # get new_invoice.id before creating PaymentEvent
-
-    # ARCH-NEW-09: Always create a PaymentEvent when paid > 0.
-    # This ensures Invoice.paidAmount == SUM(PaymentEvent.amount) from creation,
-    # closing the drift path that previously existed for upfront-PAID invoices.
-    if paid > 0:
-        payment_event = PaymentEvent(
-            gymId=current_gym.id,
-            invoiceId=new_invoice.id,
-            amount=paid,
-            paymentMode=data.paymentMode or "CASH",
-            notes="Initial payment at invoice creation",
-            recordedBy=current_gym.username,
-        )
-        db.add(payment_event)
+    except ValueError as e:
+        # Map service layer ValueError to explicit HTTP responses
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
+            raise HTTPException(status_code=404, detail=error_msg)
+        elif "does not belong" in error_msg.lower():
+            raise HTTPException(status_code=403, detail=error_msg)
+        else:
+            raise HTTPException(status_code=400, detail=error_msg)
 
     log_audit(db, current_gym.id, "Invoice", new_invoice.id, "CREATE",
-              {"customerName": data.customerName, "total": total, "status": data.status},
+              {"customerName": data.customerName, "total": new_invoice.total, "status": data.status},
               current_gym.username)
     await db.commit()
-    # await db.refresh(new_invoice)
 
     return map_invoice_response(new_invoice)
 
@@ -202,65 +162,73 @@ async def bulk_create_invoices(request: Request, data: dict, current_gym: Gym = 
     """Bulk create invoices from import"""
     invoices_list = data.get("invoices", [])
     created_count = 0
+    failed_count = 0
+    batch_size = 100
     
-    for invoice_data in invoices_list:
+    for i in range(0, len(invoices_list), batch_size):
+        batch = invoices_list[i : i + batch_size]
         try:
-            # Required fields
-            customer_name = invoice_data.get("CustomerName") or invoice_data.get("customerName")
-            if not customer_name:
-                continue
-                
-            total_amount = float(invoice_data.get("Total") or invoice_data.get("total") or 0)
-            
-            # Construct items if not provided
-            items = invoice_data.get("Items") or invoice_data.get("items")
-            if not items:
-                items = [{
-                    "description": "Imported Item",
-                    "quantity": 1,
-                    "rate": total_amount,
-                    "amount": total_amount
-                }]
-            
-            date_str = invoice_data.get("InvoiceDate") or invoice_data.get("invoiceDate")
-            
-            new_invoice = Invoice(
-                gymId=current_gym.id,
-                customerName=customer_name,
-                items=items,
-                subTotal=total_amount,
-                tax=0,
-                discount=0,
-                total=total_amount,
-                status=(invoice_data.get("Status") or invoice_data.get("status") or "PAID").upper(),
-                paymentMode=(invoice_data.get("PaymentMode") or invoice_data.get("paymentMode") or "CASH").upper(),
-                invoiceDate=date_str or datetime.now(),
-                dueDate=invoice_data.get("DueDate") or invoice_data.get("dueDate"),
-                paidAmount=total_amount if (invoice_data.get("Status") or invoice_data.get("status") or "PAID").upper() == "PAID" else 0,
-                lastEditedBy=current_gym.username,
-                editReason='Bulk Import'
-            )
-            db.add(new_invoice)
-            await db.flush()
+            async with db.begin_nested():
+                for invoice_data in batch:
+                    # Required fields
+                    customer_name = invoice_data.get("CustomerName") or invoice_data.get("customerName")
+                    if not customer_name:
+                        continue
+                        
+                    total_amount = float(invoice_data.get("Total") or invoice_data.get("total") or 0)
+                    
+                    # Construct items if not provided
+                    items = invoice_data.get("Items") or invoice_data.get("items")
+                    if not items:
+                        items = [{
+                            "description": "Imported Item",
+                            "quantity": 1,
+                            "rate": total_amount,
+                            "amount": total_amount
+                        }]
+                    
+                    date_str = invoice_data.get("InvoiceDate") or invoice_data.get("invoiceDate")
+                    status_val = (invoice_data.get("Status") or invoice_data.get("status") or "PAID").upper()
+                    
+                    new_invoice = Invoice(
+                        gymId=current_gym.id,
+                        customerName=customer_name,
+                        items=items,
+                        subTotal=total_amount,
+                        tax=0,
+                        discount=0,
+                        total=total_amount,
+                        status=status_val,
+                        paymentMode=(invoice_data.get("PaymentMode") or invoice_data.get("paymentMode") or "CASH").upper(),
+                        invoiceDate=date_str or datetime.now(),
+                        dueDate=invoice_data.get("DueDate") or invoice_data.get("dueDate"),
+                        paidAmount=total_amount if status_val == "PAID" else 0,
+                        lastEditedBy=current_gym.username,
+                        editReason='Bulk Import'
+                    )
+                    db.add(new_invoice)
+                    await db.flush()
 
-            # DATA-1: Insert PaymentEvent if paidAmount > 0
-            if new_invoice.paidAmount and new_invoice.paidAmount > 0:
-                db.add(PaymentEvent(
-                    invoiceId=new_invoice.id,
-                    gymId=current_gym.id,
-                    amount=new_invoice.paidAmount,
-                    paymentMode=new_invoice.paymentMode or "CASH",
-                    notes="Bulk import",
-                    recordedBy=current_gym.username,
-                ))
-
-            created_count += 1
+                    # DATA-1: Insert PaymentEvent if paidAmount > 0
+                    if new_invoice.paidAmount and new_invoice.paidAmount > 0:
+                        db.add(PaymentEvent(
+                            invoiceId=new_invoice.id,
+                            gymId=current_gym.id,
+                            amount=new_invoice.paidAmount,
+                            paymentMode=new_invoice.paymentMode or "CASH",
+                            notes="Bulk import",
+                            recordedBy=current_gym.username,
+                        ))
+                    
+                await db.flush()
+            created_count += len(batch)
         except Exception as e:
-            logger.error("Bulk invoice create error: %s", type(e).__name__, exc_info=False)
+            logger.error("Bulk invoice batch %d failed: %s", i // batch_size, type(e).__name__)
+            failed_count += len(batch)
             continue
     
     await db.commit()
-    return {"message": f"Created {created_count} invoices", "count": created_count}
+    return {"message": f"Created {created_count} invoices, {failed_count} failed", "count": created_count, "failed": failed_count}
 
 
 @router.post("/bulk-delete")
@@ -408,63 +376,35 @@ async def pay_invoice(
     db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),   # SEC-HIGH-02: MANAGER+ can record payments
     ):
-    stmt = select(Invoice).where(
-        Invoice.id == invoice_id,
-        Invoice.gymId == current_gym.id
-    )
-    res = await db.execute(stmt)
-    invoice = res.scalars().first()
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-
     amount = float(data.get("amount", 0))
     mode   = str(data.get("paymentMode", "CASH")).upper()
     notes  = data.get("notes", "") or ""
 
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="Invalid amount")
-
-    # SCH-NORM-02: Explicit cross-tenant guard before inserting PaymentEvent.
-    # PaymentEvent.gymId is denormalized from invoice.gymId for query efficiency.
-    # The query above already filters by gymId, but this assertion makes the
-    # invariant explicit so a future refactor can't silently drop the filter.
-    if invoice.gymId != current_gym.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Invoice does not belong to this gym",
+    # SW-04: Delegate core business logic
+    try:
+        invoice = await process_invoice_payment(
+            db=db,
+            invoice_id=invoice_id,
+            gym_id=current_gym.id,
+            gym_username=current_gym.username,
+            amount=amount,
+            payment_mode=mode,
+            notes=notes
         )
-
-    # FIX: INSERT a PaymentEvent row (append-only) instead of mutating a JSON blob.
-    # Invoice.paidAmount is the denormalized running total — kept in sync here.
-    payment_event = PaymentEvent(
-        invoiceId   = invoice.id,
-        gymId       = current_gym.id,
-        amount      = amount,
-        paymentMode = mode,
-        notes       = notes,
-        recordedBy  = current_gym.username,
-    )
-    db.add(payment_event)
-
-    new_paid = (invoice.paidAmount or 0) + amount
-    total    = invoice.total or 0
-
-    if new_paid >= total:
-        invoice.status     = "PAID"
-        invoice.paidAmount = total          # cap at total; no overpayment drift
-    else:
-        invoice.status     = "PARTIAL"
-        invoice.paidAmount = new_paid
-
-    # editReason is a CATEGORY TAG only — financial data lives in PaymentEvent
-    invoice.lastEditedBy = current_gym.username
+    except ValueError as e:
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
+            raise HTTPException(status_code=404, detail=error_msg)
+        elif "belong" in error_msg.lower():
+            raise HTTPException(status_code=403, detail=error_msg)
+        else:
+            raise HTTPException(status_code=400, detail=error_msg)
 
     log_audit(db, current_gym.id, "Invoice", invoice.id, "UPDATE",
               {"action": "Payment", "amount": amount, "paymentMode": mode, "newStatus": invoice.status},
               current_gym.username)
 
     await db.commit()
-    # await db.refresh(invoice)
     return map_invoice_response(invoice)
 
 
@@ -535,28 +475,28 @@ async def create_pending_balance(
     """Create a new pending balance (simplified invoice)."""
     # Simply create an invoice with one item representing the generic balance
     # We store the "EntityName" in customerName on the Invoice
-    new_invoice = Invoice(
-        gymId=current_gym.id,
-        customerName=data.entityName,
-        items=[{
-            "description": f"Pending Balance ({data.entityType})",
-            "quantity": 1,
-            "rate": data.amount,
-            "amount": data.amount
-        }],
-        subTotal=data.amount,
-        total=data.amount,
-        status="PENDING",
-        paymentMode="CASH",
-        invoiceDate=datetime.now(),
-        dueDate=data.dueDate,
-        paidAmount=0,
-        editReason=data.notes or f"Manual pending entry for {data.entityType}",
-        lastEditedBy=current_gym.username
-    )
-    
-    db.add(new_invoice)
-    await db.flush()
+    try:
+        new_invoice = await process_invoice_creation(
+            db=db,
+            gym_id=current_gym.id,
+            gym_username=current_gym.username,
+            items=[{
+                "description": f"Pending Balance ({data.entityType})",
+                "quantity": 1,
+                "rate": float(data.amount),
+                "amount": float(data.amount)
+            }],
+            member_id=None,
+            customer_name=data.entityName,
+            status="PENDING",
+            payment_mode="CASH",
+            invoice_date=datetime.now(),
+            due_date=data.dueDate,
+            paid_amount_input=0.0,
+            edit_reason=data.notes or f"Manual pending entry for {data.entityType}"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
     log_audit(db, current_gym.id, "Invoice", new_invoice.id, "CREATE_PENDING", 
               {"name": data.entityName, "amount": data.amount}, 

@@ -17,7 +17,7 @@ Changes from v1:
 
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, Date, ForeignKey,
-    Text, JSON, Index, DateTime, Numeric, CheckConstraint
+    Text, JSON, Index, DateTime, Numeric, CheckConstraint, text
 )
 # ARCH-03: Numeric(12,2) used for ALL currency fields — Float silently drops precision
 # e.g. 1999.99 stored as Float can become 1999.9899999... causing balance drift.
@@ -91,7 +91,7 @@ class GymSubscription(Base):
     gymId       = Column(String, ForeignKey("Gym.id"), unique=True, nullable=False)
 
     plan        = Column(String, default="free")     # free | starter | pro | enterprise
-    status      = Column(String, default="active")   # active | past_due | cancelled | trial
+    status      = Column(String, default="active", index=True)   # active | past_due | cancelled | trial
 
     maxBranches = Column(Integer, default=1)
     maxMembers  = Column(Integer, default=200)
@@ -102,7 +102,7 @@ class GymSubscription(Base):
     currentPeriodEnd   = Column(DateTime(timezone=True), nullable=True)
 
     # External billing reference (Razorpay / Stripe subscription id)
-    externalSubId = Column(String, nullable=True)
+    externalSubId = Column(String, nullable=True, index=True)
 
     createdAt   = Column(DateTime(timezone=True), default=func.now())
     updatedAt   = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
@@ -313,7 +313,7 @@ class Invoice(Base):
     customerName = Column(String, nullable=True)
 
     invoiceDate = Column(DateTime(timezone=True), default=func.now())
-    dueDate     = Column(Date, nullable=True)
+    dueDate     = Column(Date, nullable=True, index=True)
 
     # Line items — structured JSON array
     # Each item: { description, quantity, rate, amount }
@@ -412,6 +412,39 @@ class Member(Base):
               postgresql_ops={"Name": "gin_trgm_ops"}),
         Index("ix_member_mobile_trgm", "Mobile", postgresql_using="gin",
               postgresql_ops={"Mobile": "gin_trgm_ops"}),
+
+        # SCH-07: Status-based partial indexes for index-backed filtering.
+        #
+        # WHY NOT GENERATED ALWAYS AS:
+        #   PostgreSQL GENERATED columns require IMMUTABLE expressions.
+        #   CURRENT_DATE is STABLE (not IMMUTABLE) so the DB will reject:
+        #     computed_status TEXT GENERATED ALWAYS AS
+        #       (CASE WHEN "NextDuedate" IS NULL THEN 'Inactive'
+        #             WHEN "NextDuedate" >= CURRENT_DATE THEN 'Active'
+        #             ELSE 'Expired' END) STORED;
+        #   A workaround (function-based columns) requires CREATE FUNCTION
+        #   with IMMUTABLE marker, which is semantically incorrect for dates.
+        #
+        # SOLUTION — two date-range partial indexes:
+        #   Active   → WHERE "NextDuedate" IS NOT NULL AND "isDeleted" = false
+        #   Expired  → WHERE "NextDuedate" IS NOT NULL AND "isDeleted" = false
+        # PostgreSQL will automatically use the correct partial index when
+        # the query predicate matches (e.g. `WHERE "NextDuedate" >= current_date`).
+        # The hybrid_property.expression is kept as-is for ORM filtering.
+        Index(
+            "ix_member_status_active",
+            "gymId", "NextDuedate",
+            postgresql_where=text(
+                '"NextDuedate" IS NOT NULL AND "isDeleted" = false'
+            ),
+        ),
+        Index(
+            "ix_member_status_expired",
+            "gymId", "NextDuedate",
+            postgresql_where=text(
+                '"NextDuedate" IS NOT NULL AND "isDeleted" = false'
+            ),
+        ),
     )
 
     id    = Column(String, primary_key=True, default=generate_uuid)

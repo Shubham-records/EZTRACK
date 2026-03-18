@@ -6,7 +6,7 @@ from sqlalchemy.future import select
 from sqlalchemy import update, func
 from typing import List, Optional
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
@@ -79,6 +79,7 @@ async def get_expenses(
 
 @router.post("", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
+@rate_limit("30/minute")
 async def create_expense(
     data: ExpenseCreate,
     current_gym: Gym = Depends(get_current_gym),
@@ -113,28 +114,35 @@ async def bulk_create_expenses(
     """
     expenses_list = data.all_items()
     created_count = 0
+    failed_count = 0
+    batch_size = 100
 
-    for item in expenses_list:
+    for i in range(0, len(expenses_list), batch_size):
+        batch = expenses_list[i : i + batch_size]
         try:
-            new_expense = Expense(
-                gymId=current_gym.id,
-                description=item.description or "Imported Expense",
-                amount=float(item.amount),
-                category=item.category or "Other",
-                paymentMode=item.paymentMode or "Cash",
-                date=parse_date(item.date),
-                notes=item.notes,
-                lastEditedBy=current_gym.username,
-                editReason='Bulk Import',
-            )
-            db.add(new_expense)
-            created_count += 1
+            async with db.begin_nested():
+                for item in batch:
+                    new_expense = Expense(
+                        gymId=current_gym.id,
+                        description=item.description or "Imported Expense",
+                        amount=float(item.amount),
+                        category=item.category or "Other",
+                        paymentMode=item.paymentMode or "Cash",
+                        date=parse_date(item.date),
+                        notes=item.notes,
+                        lastEditedBy=current_gym.username,
+                        editReason='Bulk Import',
+                    )
+                    db.add(new_expense)
+                await db.flush()
+            created_count += len(batch)
         except Exception as e:
-            logger.error("Bulk expense create error: %s", type(e).__name__, exc_info=False)
+            logger.error("Bulk expense batch %d failed: %s", i // batch_size, type(e).__name__)
+            failed_count += len(batch)
             continue
 
     await db.commit()
-    return {"message": f"Created {created_count} expenses", "count": created_count}
+    return {"message": f"Created {created_count} expenses, {failed_count} failed", "count": created_count, "failed": failed_count}
 
 
 @router.post("/bulk-delete")
@@ -232,11 +240,13 @@ async def delete_expense(
 
 
 @router.post("/{expense_id}/receipt")
+@rate_limit("10/minute")
 async def upload_receipt(
     expense_id: str,
     file: UploadFile = File(...),
     current_gym: Gym = Depends(get_current_gym),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
+    _rbac=Depends(require_owner_or_manager)  # SEC-VULN-09: restrict receipt uploads
 ):
     """Upload receipt image for an expense — stored in object storage (not DB)."""
     stmt = select(Expense).where(
@@ -300,6 +310,10 @@ async def get_receipt(
     return RedirectResponse(url=signed_url, status_code=302)
 
 
+from core.cache import LRUTTLCache
+
+_expense_summary_cache = LRUTTLCache(maxsize=500, ttl=300) # 5m TTL
+
 @router.get("/summary")
 async def get_expense_summary(
     start_date: Optional[str] = None,
@@ -310,7 +324,13 @@ async def get_expense_summary(
     """Get expense summary by category.
     BUG-02 fix: parse date strings before comparing with Date column.
     BUG-03 fix: use SQL GROUP BY instead of Python in-memory grouping.
+    PB-09 fix: Cache full-table aggregations.
     """
+    cache_key = f"{current_gym.id}:{start_date}:{end_date}"
+    cached_entry = _expense_summary_cache.get(cache_key)
+    if cached_entry:
+        return cached_entry["data"]
+
     from sqlalchemy import func
 
     stmt = select(
@@ -340,11 +360,15 @@ async def get_expense_summary(
     total   = round(sum(summary.values()), 2)
     count   = sum(r.category_count for r in rows)
 
-    return {
-        "byCategory": summary,
-        "total": total,
-        "count": count,
+    response_data = {
+        "summary": summary,
+        "totalAmount": total,
+        "totalExpenses": count,
     }
+    
+    from datetime import datetime
+    _expense_summary_cache.set(cache_key, {"data": response_data, "ts": datetime.now()})
+    return response_data
 
 
 # Expense categories constant

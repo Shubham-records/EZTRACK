@@ -4,7 +4,7 @@ from sqlalchemy.future import select
 from sqlalchemy import func
 from typing import List, Optional
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, ExternalContact
 from schemas.contact import ExternalContactCreate, ExternalContactUpdate, ExternalContactResponse
@@ -118,10 +118,13 @@ async def update_contact(
     db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager)
 ):
-    """Update an external contact."""
+    """Update an external contact.
+    SEC-VULN-08: isActive==True prevents resurrecting a soft-deleted contact.
+    """
     stmt = select(ExternalContact).where(
         ExternalContact.id == contact_id,
-        ExternalContact.gymId == current_gym.id
+        ExternalContact.gymId == current_gym.id,
+        ExternalContact.isActive == True,  # SEC-VULN-08: block updates to deleted contacts
     )
     res = await db.execute(stmt)
     contact = res.scalars().first()

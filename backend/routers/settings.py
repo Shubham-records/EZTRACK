@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, GymSettings, PricingConfig
 from schemas.settings import GymSettingsCreate, GymSettingsUpdate, GymSettingsResponse, BulkPricingMatrixRequest, BulkProteinPricingRequest, BulkPTPricingRequest

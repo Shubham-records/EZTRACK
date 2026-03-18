@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Optional
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db  # RD-01: removed unused sync get_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder
 from models.all_models import Gym, Branch
@@ -178,6 +178,7 @@ async def update_gym_details(
     data: BranchDetailsUpdate,
     current_gym: Gym = Depends(get_current_gym),
     db: AsyncSession = Depends(get_async_db),
+    _rbac=Depends(require_owner_or_manager)  # SEC-VULN-10: STAFF must not edit gym profile
 ):
     """Update gym-level details (default branch)."""
     branch = await _get_default_branch(current_gym.id, db)
@@ -198,6 +199,7 @@ async def update_branch_details(
     data: BranchDetailsUpdate,
     current_gym: Gym = Depends(get_current_gym),
     db: AsyncSession = Depends(get_async_db),
+    _rbac=Depends(require_owner_or_manager)  # SEC-VULN-10
 ):
     """Update a specific branch's details."""
     stmt = select(Branch).where(
@@ -228,6 +230,7 @@ async def upload_gym_logo(
     file: UploadFile = File(...),
     current_gym: Gym = Depends(get_current_gym),
     db: AsyncSession = Depends(get_async_db),
+    _rbac=Depends(require_owner_or_manager)  # SEC-VULN-11: only owner/manager can replace gym logo
 ):
     """
     Upload gym-level logo.
@@ -260,6 +263,7 @@ async def upload_branch_logo(
     file: UploadFile = File(...),
     current_gym: Gym = Depends(get_current_gym),
     db: AsyncSession = Depends(get_async_db),
+    _rbac=Depends(require_owner_or_manager)  # SEC-VULN-11
 ):
     """Upload logo for a specific branch."""
     stmt = select(Branch).where(

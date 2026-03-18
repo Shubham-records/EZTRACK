@@ -7,7 +7,7 @@ from sqlalchemy.future import select
 from sqlalchemy import update, delete
 from typing import List, Optional
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
 from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
@@ -15,6 +15,7 @@ from schemas.protein import ProteinCreate, ProteinUpdate, ProteinInlineUpdate, B
 from sqlalchemy.sql import func
 from core.audit_utils import log_audit, compute_diff
 from core.storage import upload_image, get_signed_url, delete_image, StorageFolder, get_signed_url_or_none
+from core.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -291,10 +292,12 @@ async def get_protein(
 
 @router.post("", response_model=ProteinResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ProteinResponse, status_code=status.HTTP_201_CREATED)
+@rate_limit("30/minute")
 async def create_protein(
     data: ProteinCreate,
     current_gym: Gym = Depends(get_current_gym),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
+    _rbac=Depends(require_owner_or_manager)  # SEC-VULN-12: only owner/manager can create protein stock
 ):
     """Create a new protein stock entry."""
     protein_data = data.model_dump()
@@ -325,6 +328,7 @@ async def create_protein(
 
 
 @router.post("/bulk-create")
+@rate_limit("10/minute")
 async def bulk_create_proteins(
     data: BulkProteinCreate,
     current_gym: Gym = Depends(get_current_gym),
@@ -333,47 +337,54 @@ async def bulk_create_proteins(
     """Bulk create protein stocks from import.
     SEC-CRIT-02: Uses BulkProteinCreate typed schema — no raw dict.
     """
-    created_count = 0
+    created_count: int = 0
+    failed_count: int = 0
+    batch_size = 100
 
-    for stock_data in data.stocks:
+    for i in range(0, len(data.stocks), batch_size):
+        batch = data.stocks[i : i + batch_size]
         try:
-            landing = float(stock_data.LandingPrice or 0)
-            margin  = float(stock_data.MarginPrice or 0)
-            offer   = float(stock_data.OfferPrice or 0)
+            async with db.begin_nested():
+                for stock_data in batch:
+                    landing = float(stock_data.LandingPrice or 0)
+                    margin  = float(stock_data.MarginPrice or 0)
+                    offer   = float(stock_data.OfferPrice or 0)
 
-            if stock_data.SellingPrice is not None:
-                selling = float(stock_data.SellingPrice)
-            elif margin or offer:
-                selling = landing + margin - offer
-            else:
-                selling = 0
+                    if stock_data.SellingPrice is not None:
+                        selling = float(stock_data.SellingPrice)
+                    elif margin or offer:
+                        selling = landing + margin - offer
+                    else:
+                        selling = 0
 
-            protein = ProteinStock(
-                gymId=current_gym.id,
-                Brand=stock_data.Brand,
-                ProductName=stock_data.ProductName,
-                Flavour=stock_data.Flavour,
-                Weight=str(stock_data.Weight or ""),
-                Quantity=int(stock_data.Quantity or 0),
-                MRPPrice=float(stock_data.MRPPrice or 0),
-                LandingPrice=landing,
-                Remark=stock_data.Remark,
-                MarginPrice=margin,
-                OfferPrice=offer,
-                SellingPrice=selling,
-                ExpiryDate=parse_date(stock_data.ExpiryDate),
-                StockThreshold=int(stock_data.StockThreshold or 5),
-            )
+                    protein = ProteinStock(
+                        gymId=current_gym.id,
+                        Brand=stock_data.Brand,
+                        ProductName=stock_data.ProductName,
+                        Flavour=stock_data.Flavour,
+                        Weight=str(stock_data.Weight or ""),
+                        Quantity=int(stock_data.Quantity or 0),
+                        MRPPrice=float(stock_data.MRPPrice or 0),
+                        LandingPrice=landing,
+                        Remark=stock_data.Remark,
+                        MarginPrice=margin,
+                        OfferPrice=offer,
+                        SellingPrice=selling,
+                        ExpiryDate=parse_date(stock_data.ExpiryDate),
+                        StockThreshold=int(stock_data.StockThreshold or 5),
+                    )
 
-            recalculate_computed_fields(protein)
-            db.add(protein)
-            created_count += 1
+                    recalculate_computed_fields(protein)
+                    db.add(protein)
+                await db.flush()
+            created_count += len(batch)
         except Exception as e:
-            logger.error("Bulk protein create error: %s", type(e).__name__, exc_info=False)
+            logger.error("Bulk protein batch %d failed: %s", i // batch_size, type(e).__name__)
+            failed_count += len(batch)
             continue
 
     await db.commit()
-    return {"message": f"Created {created_count} proteins", "count": created_count}
+    return {"message": f"Created {created_count} proteins, {failed_count} failed", "count": created_count, "failed": failed_count}
 
 
 @router.post("/bulk-delete")
@@ -406,8 +417,42 @@ async def bulk_delete_proteins(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/{protein_id}", response_model=ProteinResponse)
+async def _apply_protein_update(protein: ProteinStock, update_dict: dict, current_gym: Gym, db: AsyncSession):
+    # Capture old prices before mutation for audit diff
+    old_prices = {k: getattr(protein, k, None) for k in ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']}
+    
+    # Parse ExpiryDate string → native Date
+    if 'ExpiryDate' in update_dict and isinstance(update_dict['ExpiryDate'], str):
+        update_dict['ExpiryDate'] = parse_date(update_dict['ExpiryDate'])
+    
+    for key, value in update_dict.items():
+        if hasattr(protein, key):
+            setattr(protein, key, value)
+    
+    # Only recalculate selling price if margin/offer pricing fields changed
+    # AND the user did NOT explicitly set SellingPrice in this request
+    if any(k in update_dict for k in ['LandingPrice', 'MarginPrice', 'OfferPrice']) and 'SellingPrice' not in update_dict:
+        protein.SellingPrice = calculate_selling_price(
+            protein.LandingPrice,
+            protein.MarginPrice,
+            protein.OfferPrice
+        )
+    
+    # Recalculate computed fields only if relevant fields changed
+    if any(k in update_dict for k in ['Quantity', 'LandingPrice', 'SellingPrice', 'MarginPrice', 'OfferPrice']):
+        recalculate_computed_fields(protein)
+    
+    # Audit log for price changes (powers price history endpoint)
+    price_fields = ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']
+    price_diff = {}
+    for k in price_fields:
+        if k in update_dict and getattr(protein, k, None) != old_prices.get(k):
+            price_diff[k] = {"from": old_prices.get(k), "to": getattr(protein, k, None)}
+    if price_diff:
+        log_audit(db, current_gym.id, "ProteinStock", protein.id, "UPDATE",
+                  price_diff, current_gym.username)
 
+@router.put("/{protein_id}", response_model=ProteinResponse)
 async def update_protein(
     protein_id: str,
     data: ProteinUpdate,
@@ -426,43 +471,13 @@ async def update_protein(
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
     
-    update_data = data.model_dump(exclude_unset=True)
-    
-    # Capture old prices before mutation for audit diff
-    old_prices = {k: getattr(protein, k, None) for k in ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']}
-    
-    # Parse ExpiryDate string → native Date
-    if 'ExpiryDate' in update_data:
-        update_data['ExpiryDate'] = parse_date(update_data['ExpiryDate'])
-    
-    for key, value in update_data.items():
-        setattr(protein, key, value)
-    
-    # Only recalculate selling price if margin/offer pricing fields changed
-    # AND the user did NOT explicitly set SellingPrice in this request
-    if any(k in update_data for k in ['LandingPrice', 'MarginPrice', 'OfferPrice']) and 'SellingPrice' not in update_data:
-        protein.SellingPrice = calculate_selling_price(
-            protein.LandingPrice,
-            protein.MarginPrice,
-            protein.OfferPrice
-        )
-    
-    # Recalculate computed fields only if relevant fields changed
-    if any(k in update_data for k in ['Quantity', 'LandingPrice', 'SellingPrice', 'MarginPrice', 'OfferPrice']):
-        recalculate_computed_fields(protein)
-    
-    # Audit log for price changes (powers price history endpoint)
-    price_fields = ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']
-    price_diff = {}
-    for k in price_fields:
-        if k in update_data and update_data[k] != old_prices.get(k):
-            price_diff[k] = {"from": old_prices.get(k), "to": update_data[k]}
-    if price_diff:
-        log_audit(db, current_gym.id, "ProteinStock", protein_id, "UPDATE",
-                  price_diff, current_gym.username)
-    
+    try:
+        update_data = data.model_dump(exclude_unset=True)
+    except AttributeError:
+        update_data = data.dict(exclude_unset=True)
+        
+    await _apply_protein_update(protein, update_data, current_gym, db)
     await db.commit()
-    # await db.refresh(protein)
     
     return map_protein_response(protein)
 
@@ -491,42 +506,13 @@ async def update_protein_body(
     if not protein:
         raise HTTPException(status_code=404, detail="Protein not found")
 
-    # Capture old prices before mutation for audit diff
-    old_prices = {k: getattr(protein, k, None) for k in ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']}
+    try:
+        updatable_data = data.model_dump(exclude_unset=True, exclude={"id"})
+    except AttributeError:
+        updatable_data = data.dict(exclude_unset=True, exclude={"id"})
 
-    updatable_data = data.model_dump(exclude_unset=True, exclude={"id"})
-
-    for key, value in updatable_data.items():
-        if hasattr(protein, key):
-            if key == 'ExpiryDate':
-                value = parse_date(value)
-            setattr(protein, key, value)
-
-    # Only recalculate selling price if margin/offer pricing fields changed
-    # AND the user did NOT explicitly set SellingPrice in this request
-    if any(k in updatable_data for k in ['LandingPrice', 'MarginPrice', 'OfferPrice']) and 'SellingPrice' not in updatable_data:
-        protein.SellingPrice = calculate_selling_price(
-            protein.LandingPrice,
-            protein.MarginPrice,
-            protein.OfferPrice
-        )
-
-    # Recalculate computed fields only if relevant fields changed
-    if any(k in updatable_data for k in ['Quantity', 'LandingPrice', 'SellingPrice', 'MarginPrice', 'OfferPrice']):
-        recalculate_computed_fields(protein)
-
-    # Audit log for price changes
-    price_fields = ['SellingPrice', 'LandingPrice', 'MarginPrice', 'OfferPrice', 'MRPPrice']
-    price_diff = {}
-    for k in price_fields:
-        if k in updatable_data and updatable_data[k] != old_prices.get(k):
-            price_diff[k] = {"from": old_prices.get(k), "to": updatable_data[k]}
-    if price_diff:
-        log_audit(db, current_gym.id, "ProteinStock", protein_id, "UPDATE",
-                  price_diff, current_gym.username)
-
+    await _apply_protein_update(protein, updatable_data, current_gym, db)
     await db.commit()
-    # await db.refresh(protein)
 
     return map_protein_response(protein)
 
@@ -563,6 +549,7 @@ async def delete_protein(
 # ============ IMAGE ENDPOINTS ============
 
 @router.post("/{protein_id}/image")
+@rate_limit("10/minute")
 async def upload_protein_image(
     protein_id: str,
     file: UploadFile = File(...),
@@ -709,7 +696,7 @@ async def adjust_protein_stock(
     return {
         "message": f"Stock adjusted by {adjustment}",
         "previousQuantity": current_qty,
-        "newQuantity": protein.Quantity,
+        "newQuantity": new_qty, # PB-07: Return computed new_qty to avoid reading stale model state before trigger applies
         "reason": reason
     }
 
@@ -746,6 +733,7 @@ async def get_protein_lots(
 
 
 @router.post("/{protein_id}/lots")
+@rate_limit("30/minute")
 async def create_protein_lot(
     protein_id: str,
     data: ProteinLotCreate,   # SW-07: typed schema replaces raw dict

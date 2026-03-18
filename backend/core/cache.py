@@ -42,12 +42,51 @@ logger = logging.getLogger(__name__)
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 TTL_SECONDS = 600   # 10 minutes — safe for GymSettings
+MAX_CACHE_SIZE = 500  # Max number of gyms to keep in memory (LRU)
 
 # ─── Internal State ───────────────────────────────────────────────────────────
 
-# ARCH-NEW-07: Cache stores plain dict snapshots, NOT live ORM objects.
-# { gym_id: { "data": dict, "ts": datetime } }
-_settings_cache: dict = {}
+from collections import OrderedDict
+
+class LRUTTLCache:
+    def __init__(self, maxsize=MAX_CACHE_SIZE, ttl=TTL_SECONDS):
+        self.cache = OrderedDict()
+        self.maxsize = maxsize
+        self.ttl = ttl
+        
+    def get(self, key):
+        if key in self.cache:
+            entry = self.cache[key]
+            age = (datetime.now() - entry["ts"]).total_seconds()
+            if age < self.ttl:
+                # Move to end (most recently used)
+                self.cache.move_to_end(key)
+                return entry
+            else:
+                self.cache.pop(key, None)
+        return None
+        
+    def set(self, key, value):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        self.cache[key] = value
+        if len(self.cache) > self.maxsize:
+            # Evict oldest (least recently used)
+            self.cache.popitem(last=False)
+            
+    def pop(self, key, default=None):
+        return self.cache.pop(key, default)
+        
+    def clear(self):
+        self.cache.clear()
+
+    def get_all_entries(self):
+        return list(self.cache.items())
+
+    def __len__(self):
+        return len(self.cache)
+
+_settings_cache = LRUTTLCache()
 _lock = Lock()               # thread-safe writes
 
 
@@ -112,7 +151,7 @@ def get_gym_settings(gym_id: str, db: Session):
     # ARCH-NEW-07: Store plain dict snapshot — NOT the live ORM object
     data_snapshot = _orm_to_dict(settings)
     with _lock:
-        _settings_cache[gym_id] = {"data": data_snapshot, "ts": datetime.now()}
+        _settings_cache.set(gym_id, {"data": data_snapshot, "ts": datetime.now()})
 
     logger.debug("GymSettings cache miss for gym %s — refreshed from DB", gym_id)
     return _dict_to_namespace(data_snapshot)
@@ -155,7 +194,7 @@ async def get_async_gym_settings(gym_id: str, db: AsyncSession):
 
     data_snapshot = _orm_to_dict(settings)
     with _lock:
-        _settings_cache[gym_id] = {"data": data_snapshot, "ts": datetime.now()}
+        _settings_cache.set(gym_id, {"data": data_snapshot, "ts": datetime.now()})
 
     logger.debug("GymSettings cache miss for gym %s — refreshed from Async DB", gym_id)
     return _dict_to_namespace(data_snapshot)
@@ -189,7 +228,7 @@ def cache_stats() -> dict:
                 "ageSeconds": int((now - v["ts"]).total_seconds()),
                 "isStale": (now - v["ts"]).total_seconds() > TTL_SECONDS,
             }
-            for gym_id, v in _settings_cache.items()
+            for gym_id, v in _settings_cache.get_all_entries()
         ]
     return {
         "backend": "in-process",

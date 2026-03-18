@@ -5,7 +5,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 import urllib.parse
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db  # RD-01: removed unused sync get_db
 from core.dependencies import get_current_gym
 from models.all_models import Gym, Member, ProteinStock, Invoice
 

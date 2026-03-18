@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import random
 import os
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db
 from core.dependencies import get_current_gym, require_owner
 from models.all_models import Gym, Member, ProteinStock, Expense, Invoice, AuditLog
 
@@ -26,7 +26,8 @@ async def get_audit_logs(
     until: Optional[str] = None,
     limit: int = 100,
     current_gym: Gym = Depends(get_current_gym),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
+    _rbac=Depends(require_owner)  # SEC-VULN-04: audit log is owner-only
 ):
     """
     Get audit logs with optional filtering.

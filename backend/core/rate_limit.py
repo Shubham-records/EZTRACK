@@ -31,7 +31,7 @@ try:
                     
         return ip_addr
 
-    limiter = Limiter(key_func=get_gym_id_from_token)
+    limiter = Limiter(key_func=get_gym_id_from_token, default_limits=["100/minute"])
     
 except ImportError:
     limiter = None

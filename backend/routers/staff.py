@@ -22,7 +22,7 @@ from sqlalchemy.future import select
 from sqlalchemy import update, delete, func
 from typing import List
 
-from core.database import get_db, get_async_db
+from core.database import get_async_db
 from core.dependencies import (
     get_current_gym, require_owner, require_owner_or_manager, get_caller_role
 )
