@@ -26,7 +26,7 @@ def map_expense_response(expense: Expense):
     e_dict['hasReceipt'] = bool(getattr(expense, 'receiptUrl', None))
     # Format date as DD/MM/YYYY
     e_dict['date'] = format_date(expense.date)
-    return e_dict
+    return ExpenseResponse.model_validate(e_dict).model_dump(by_alias=True)
 
 
 @router.get("")
@@ -273,7 +273,6 @@ async def upload_receipt(
     )
 
     expense.receiptUrl      = storage_key
-    expense.receiptMimeType = file.content_type
     expense.hasReceipt      = True
     await db.commit()
 
@@ -342,15 +341,18 @@ async def get_expense_summary(
         Expense.isDeleted == False,
     )
 
-    # BUG-02: parse strings to native date before comparing with Date column
+    # BUG-02 / SCH-08: parse strings to native date before comparing with Date column.
     if start_date:
         parsed_start = parse_date(start_date)
-        if parsed_start:
-            stmt = stmt.where(Expense.date >= parsed_start)
+        if not parsed_start:
+            raise HTTPException(status_code=400, detail="Invalid start_date format")
+        stmt = stmt.where(Expense.date >= parsed_start)
+        
     if end_date:
         parsed_end = parse_date(end_date)
-        if parsed_end:
-            stmt = stmt.where(Expense.date <= parsed_end)
+        if not parsed_end:
+            raise HTTPException(status_code=400, detail="Invalid end_date format")
+        stmt = stmt.where(Expense.date <= parsed_end)
 
     stmt = stmt.group_by(Expense.category)
     res = await db.execute(stmt)

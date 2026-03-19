@@ -12,7 +12,6 @@ from core.database import get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from models.all_models import Gym, Invoice, Member, PaymentEvent
 from schemas.invoice import InvoiceCreate, InvoiceResponse, PendingCreate
-from schemas.payment import PaymentRecord
 from core.audit_utils import log_audit
 from core.rate_limit import rate_limit
 from services.invoice_service import process_invoice_creation, process_invoice_payment
@@ -64,7 +63,7 @@ def map_invoice_response(invoice: Invoice):
     i_dict["paidAmount"] = round(paid_amount, 2)
     i_dict["balance"]    = round(balance, 2)
 
-    return i_dict
+    return InvoiceResponse.model_validate(i_dict).model_dump(by_alias=True)
 
 
 @router.get("")
@@ -582,7 +581,7 @@ async def get_pending_balance(
 @pending_router.post("/{pending_id}/pay")
 async def record_payment(
     pending_id: str,
-    payment: PaymentRecord,
+    data: dict,
     current_gym: Gym = Depends(get_current_gym),
     db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
@@ -602,7 +601,7 @@ async def record_payment(
 
     return await pay_invoice(
         invoice_id=pending_id,
-        data={"amount": payment.amount, "paymentMode": payment.paymentMode, "notes": payment.notes},
+        data={"amount": data.get("amount", 0), "paymentMode": data.get("paymentMode", "CASH"), "notes": data.get("notes")},
         current_gym=current_gym,
         db=db
     )

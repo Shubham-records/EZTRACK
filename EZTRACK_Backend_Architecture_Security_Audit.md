@@ -879,7 +879,7 @@ Categories are a Python list. This isn't a security issue per se, but it means a
 | PB-02 | Tune async connection pool, separate SSE pool | 1 hr | Prevents connection exhaustion | **DONE** |
 | PB-04 | Implement keyset pagination for members | 3 hrs | Eliminates OFFSET scans | **DONE** |
 | SEC-VULN-05 | Rate-limit all write endpoints | 1 hr | Prevents abuse | **DONE** |
-| SCH-01 | Normalize phone numbers to E.164 | 3 hrs | Enables proper dedup | **PARTIAL** |
+| SCH-01 | Normalize phone numbers to E.164 | 3 hrs | Enables proper dedup | **DONE** |
 | WA-03 | Implement soft-delete archival | 4 hrs | Controls table growth | **DONE** |
 
 ### 🟢 P2 — Improve Over Next Quarter

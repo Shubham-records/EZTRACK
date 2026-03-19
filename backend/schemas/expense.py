@@ -34,6 +34,8 @@ class ExpenseResponse(ExpenseBase):
     gymId: str
     createdAt: datetime
     updatedAt: datetime
+    hasReceipt: Optional[bool] = False
+    receiptUrl: Optional[str] = None
 
     class Config:
         from_attributes = True

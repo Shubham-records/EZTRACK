@@ -31,6 +31,7 @@ import os
 import logging
 from contextlib import asynccontextmanager
 
+import asyncio
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -41,24 +42,24 @@ from routers import (
     settings, expenses, contacts, automation, audit,
     terms, branch_details, whatsapp_templates,
 )
-from core.database import Base, engine
+from core.database import Base, async_engine
 
 logger = logging.getLogger(__name__)
 
 
-# ─── Database Init ────────────────────────────────────────────────────────────
+# ─── Lifespan ─────────────────────────────────────────────────────────────────
 
-def init_db():
-    """
-    Create all tables that do not yet exist.
-    
-    SW-10: Retired Base.metadata.create_all for production environments.
-    Production uses Alembic migrations entirely.
-    """
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: verify DB tables. No background jobs — SSE handles live data."""
     env_name = os.getenv("VERCEL_ENV", "development").lower()
     
+    from core.audit_utils import audit_worker
+    audit_task = asyncio.create_task(audit_worker())
+    
     if env_name != "production":
-        Base.metadata.create_all(bind=engine)
+        async with async_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables verified / created (DEV mode).")
     else:
         logger.info("Production mode: skipping Base.metadata.create_all. Using Alembic.")
@@ -71,19 +72,9 @@ def init_db():
         # Non-fatal: indexes are for performance only. Log and continue.
         logger.warning("Could not install performance indexes: %s", exc)
 
-
-
-# ─── Lifespan ─────────────────────────────────────────────────────────────────
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup: verify DB tables. No background jobs — SSE handles live data."""
-    init_db()
-
     # SEC-08: Ensure seed data is NEVER enabled in production
     allow_seed = os.getenv("ALLOW_SEED_DATA", "false").lower() == "true"
     if allow_seed:
-        env_name = os.getenv("VERCEL_ENV", "development").lower()
         db_url = os.getenv("DATABASE_URL", "")
         is_prod_env = env_name == "production" or ("localhost" not in db_url and "127.0.0.1" not in db_url and "sqlite" not in db_url)
         if is_prod_env:
@@ -91,7 +82,8 @@ async def lifespan(app: FastAPI):
         logger.warning("🚨 SEC-08: SEED DATA ENDPOINT ENABLED. DO NOT USE IN PRODUCTION.")
 
     yield
-    # SSE connections clean up automatically on client disconnect — nothing to shut down
+    # Cleanup background tasks
+    audit_task.cancel()
 
 
 # ─── App ─────────────────────────────────────────────────────────────────────

@@ -9,7 +9,12 @@ from core.database import get_async_db  # RD-01: removed unused sync get_db
 from core.dependencies import get_current_gym
 from core.rate_limit import rate_limit
 from models.all_models import Gym, WhatsAppTemplate
-from schemas.whatsapp import WhatsAppTemplateCreate, WhatsAppTemplateUpdate, WhatsAppTemplateResponse
+from schemas.whatsapp import (
+    WhatsAppTemplateCreate,
+    WhatsAppTemplateUpdate,
+    WhatsAppTemplateResponse,
+    TemplatePreviewRequest
+)
 
 router = APIRouter()
 
@@ -42,29 +47,17 @@ DEFAULT_TEMPLATES = {
     "Protein": "Hi {customerName}! 🙏 Thank you for your purchase from {gymName}! Please find your invoice attached. Fuel your fitness! 💪",
 }
 
-import time
+from core.cache import LRUTTLCache
+from datetime import datetime
 
-_initialized_gyms: dict[str, float] = {}
-CACHE_TTL = 3600 * 24  # 24 hours
+# SW-10 Fix: Replaced unbounded dict with LRUTTLCache to prevent memory leaks
+_initialized_gyms = LRUTTLCache(maxsize=1000, ttl=3600 * 24)
 
 def _is_initialized(gym_id: str) -> bool:
-    now = time.time()
-    if gym_id in _initialized_gyms:
-        if now - _initialized_gyms[gym_id] < CACHE_TTL:
-            return True
-        else:
-            del _initialized_gyms[gym_id]
-            
-    # Cleanup expired entries periodically to prevent memory leaks
-    if len(_initialized_gyms) > 1000:
-        expired = [k for k, v in _initialized_gyms.items() if now - v >= CACHE_TTL]
-        for k in expired:
-            del _initialized_gyms[k]
-            
-    return False
+    return _initialized_gyms.get(gym_id) is not None
 
 def _set_initialized(gym_id: str) -> None:
-    _initialized_gyms[gym_id] = time.time()
+    _initialized_gyms.set(gym_id, {"ts": datetime.now(), "initialized": True})
 
 from sqlalchemy import func
 
@@ -202,7 +195,7 @@ async def update_template(
 @rate_limit("30/minute")
 async def preview_template(
     request: Request,
-    data: dict,
+    data: TemplatePreviewRequest,
     current_gym: Gym = Depends(get_current_gym),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -210,8 +203,8 @@ async def preview_template(
     SEC-11: All substitution values are HTML-escaped before insertion.
     SEC-NEW-06: Template text is validated against the allowlist before rendering.
     """
-    template_text = data.get("messageTemplate", "")
-    sample_data = data.get("sampleData", {})
+    template_text = data.messageTemplate
+    sample_data = data.sampleData
 
     # SEC-NEW-06: Validate placeholders before rendering — prevent probing and injection
     if template_text:

@@ -10,6 +10,7 @@ from typing import List, Optional
 from core.database import get_async_db
 from core.dependencies import get_current_gym, require_owner_or_manager
 from core.date_utils import parse_date, format_date
+from core.cache import get_async_gym_settings
 from models.all_models import Gym, ProteinStock, GymSettings, ProteinLot
 from schemas.protein import ProteinCreate, ProteinUpdate, ProteinInlineUpdate, BulkProteinCreate, ProteinResponse, BulkDeleteRequest, ProteinLotCreate, ProteinLotUpdate
 from sqlalchemy.sql import func
@@ -87,7 +88,8 @@ def map_protein_response(p: ProteinStock, low_stock_threshold: int = 5):
     except Exception:
         p_dict['lots'] = []
     
-    return p_dict
+    # Return the validated Pydantic model dump to prevent field leakage
+    return ProteinResponse.model_validate(p_dict).model_dump(by_alias=True)
 
 
 @router.get("")
@@ -103,9 +105,8 @@ async def get_proteins(
 ):
     """Get proteins with server-side pagination."""
     # Get gym settings for default threshold
-    settings_res = await db.execute(select(GymSettings).where(GymSettings.gymId == current_gym.id))
-    settings = settings_res.scalars().first()
-    default_threshold = settings.lowStockThreshold if settings else 5
+    settings = await get_async_gym_settings(current_gym.id, db)
+    default_threshold = settings.lowStockThreshold if settings and getattr(settings, 'lowStockThreshold', None) is not None else 5
     
     query = select(ProteinStock).where(
         ProteinStock.gymId == current_gym.id,
@@ -178,10 +179,8 @@ async def get_low_stock_proteins(
     db: AsyncSession = Depends(get_async_db)
 ):
     """Get proteins below stock threshold."""
-    settings_stmt = select(GymSettings).where(GymSettings.gymId == current_gym.id)
-    settings_res = await db.execute(settings_stmt)
-    settings = settings_res.scalars().first()
-    default_threshold = settings.lowStockThreshold if settings else 5
+    settings = await get_async_gym_settings(current_gym.id, db)
+    default_threshold = settings.lowStockThreshold if settings and getattr(settings, 'lowStockThreshold', None) is not None else 5
     
     from sqlalchemy import func
     
@@ -213,10 +212,8 @@ async def get_protein_summary(
     Previously loaded ALL protein rows into memory — O(n) CPU + memory.
     Now runs a single SQL GROUP aggregate — O(1) from application perspective.
     """
-    settings_stmt = select(GymSettings).where(GymSettings.gymId == current_gym.id)
-    settings_res = await db.execute(settings_stmt)
-    settings = settings_res.scalars().first()
-    default_threshold = settings.lowStockThreshold if settings else 5
+    settings = await get_async_gym_settings(current_gym.id, db)
+    default_threshold = settings.lowStockThreshold if settings and getattr(settings, 'lowStockThreshold', None) is not None else 5
 
     # Single SQL aggregate — no Python iteration over rows
     from sqlalchemy import case, func
@@ -578,7 +575,6 @@ async def upload_protein_image(
     storage_key = upload_image(image_data, folder=StorageFolder.PROTEINS, mime_type=file.content_type)
     
     protein.imageUrl = storage_key
-    protein.imageMimeType = file.content_type
     protein.hasImage = True
     
     await db.commit()
@@ -630,7 +626,6 @@ async def delete_protein_image(
         delete_image(protein.imageUrl)
     
     protein.imageUrl = None
-    protein.imageMimeType = None
     protein.hasImage = False
     
     await db.commit()

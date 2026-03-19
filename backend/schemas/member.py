@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Any
+from core.phone_utils import normalize_phone
 from datetime import datetime, date
 
 class MemberBase(BaseModel):
@@ -14,7 +15,7 @@ class MemberBase(BaseModel):
     DateOfReJoin: Optional[str] = None
     Billtype: Optional[str] = None
     Address: Optional[str] = None
-    Whatsapp: Optional[int] = None # ORM is BigInt, Pydantic handles int
+    Whatsapp: Optional[str] = None 
     PlanPeriod: Optional[str] = None
     PlanType: Optional[str] = None
     MembershipExpiryDate: Optional[str] = None
@@ -22,9 +23,9 @@ class MemberBase(BaseModel):
     NextDuedate: Optional[str] = None
     LastPaymentAmount: Optional[float] = None  # SCH-NEW-02: was int — truncated decimal/GST amounts
     RenewalReceiptNumber: Optional[int] = None
-    Aadhaar: Optional[int] = None
+    Aadhaar: Optional[str] = None # ORM is string (Fernet), we receive raw string initially
     Remark: Optional[str] = None
-    Mobile: Optional[int] = None
+    Mobile: Optional[str] = None
     extraDays: Optional[str] = "0"
     agreeTerms: Optional[bool] = False
     
@@ -37,6 +38,17 @@ class MemberBase(BaseModel):
     ptPlanType: Optional[str] = None
     ptPlanPeriod: Optional[str] = None
     ptAmount: Optional[float] = 0.0
+
+    @field_validator("Whatsapp", "Mobile", mode="before")
+    @classmethod
+    def validate_phones(cls, v: Any) -> Optional[str]:
+        if v is None or str(v).strip() == "":
+            return None
+        # Normalizes phone format to strict E.164 (SCH-01)
+        normalized = normalize_phone(str(v))
+        if normalized is None:
+            return None
+        return normalized
 
 class MemberCreate(MemberBase):
     paymentMode: Optional[str] = "CASH"
@@ -72,6 +84,9 @@ class MemberResponse(MemberBase):
     days_until_expiry: Optional[int] = None
     admission_expiry_date: Optional[str] = None
     is_admission_expired: Optional[bool] = None
+    MembershipStatus: Optional[str] = None
+    hasImage: Optional[bool] = False
+    imageUrl: Optional[str] = None
 
     class Config:
         from_attributes = True

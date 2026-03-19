@@ -90,7 +90,6 @@ def map_member_response(member: Member, admission_expiry_days: int = 365, decryp
     # v1 leftovers — remove silently if still in __dict__
     m_dict.pop('AccessStatus',        None)
     m_dict.pop('imageData',           None)
-    m_dict.pop('imageMimeType',       None)
     m_dict.pop('_sa_instance_state',  None)
 
     m_dict['hasImage'] = bool(getattr(member, 'hasImage', False))
@@ -107,7 +106,7 @@ def map_member_response(member: Member, admission_expiry_days: int = 365, decryp
     from core.storage import get_signed_url_or_none
     m_dict['imageUrl'] = get_signed_url_or_none(getattr(member, 'imageUrl', None))
 
-    return m_dict
+    return MemberResponse.model_validate(m_dict).model_dump(by_alias=True)
 
 @router.get("/generate-client-number")
 async def generate_client_number(current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
@@ -539,7 +538,9 @@ async def bulk_update_members(
                         value = str(value) if value else None
                     elif key == 'height':
                         value = float(str(value)) if value else None
-                    setattr(member, key, value)
+                    old_val = getattr(member, key, None)
+                    if old_val != value:
+                        setattr(member, key, value)
                 except Exception:
                     pass
         

@@ -14,14 +14,21 @@ SEC-NEW-08: log_audit() now accepts an optional `ip_address` parameter.
             ip_address remains None (acceptable — documented gap).
 """
 import logging
-from typing import Optional
+import asyncio
+from typing import Optional, Any
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 import contextvars
 
 logger = logging.getLogger(__name__)
 
+# WA-02: Asynchronous Audit Queue
+# Buffers audit entries in memory and flushes them periodically, completely removing
+# the INSERT penalty from the main business transaction.
+audit_queue: asyncio.Queue = asyncio.Queue()
+
 # SEC-NEW-08: Context variable to store the originating IP address
-request_ip_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("request_ip", default=None)
+request_ip_var = contextvars.ContextVar("request_ip", default=None)
 
 # SEC-13: Fields that must never appear in audit log diffs
 SENSITIVE_FIELDS = frozenset({
@@ -31,7 +38,7 @@ SENSITIVE_FIELDS = frozenset({
 
 
 def log_audit(
-    db: Session,
+    db, # Can be Sync or Async Session, ignored now since we use the background queue
     gym_id: str,
     entity_type: str,
     entity_id: str,
@@ -41,7 +48,7 @@ def log_audit(
     ip_address: Optional[str] = None,
 ):
     """
-    Append one row to AuditLog.
+    Push one row to the async AuditLog queue.
 
     Args:
         db:          Active SQLAlchemy session (must be committed by caller).
@@ -73,15 +80,64 @@ def log_audit(
         userName=user_name,
         ipAddress=ip_address,   # SEC-NEW-08: populated when request context is available
     )
-    db.add(entry)
-    # Do NOT commit here — caller commits as part of their transaction
+    
+    # WA-02: Non-blocking queue insertion instead of db.add(entry)
+    try:
+        audit_queue.put_nowait(entry)
+    except Exception as exc:
+        logger.error(f"Failed to queue audit log: {exc}")
+
+
+async def audit_worker():
+    """
+    WA-02: Background worker that flushes the audit queue periodically.
+    Runs every 5 seconds or when 100 entries are buffered.
+    """
+    from core.database import async_engine
+    from sqlalchemy.orm import sessionmaker
+    AsyncSessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=async_engine, class_=AsyncSession
+    )
+
+    while True:
+        entries = []
+        try:
+            # Wait for at least one entry, then gather up to 100 or timeout in 5s
+            entry = await audit_queue.get()
+            entries.append(entry)
+            
+            # Try to drain up to 99 more entries instantly
+            while len(entries) < 100:
+                try:
+                    # fetch anything else in the queue instantly
+                    entry = audit_queue.get_nowait()
+                    entries.append(entry)
+                except asyncio.QueueEmpty:
+                    break
+                    
+            if entries:
+                async with AsyncSessionLocal() as session:
+                    session.add_all(entries)
+                    await session.commit()
+                
+                # Mark tasks as done
+                for _ in entries:
+                    audit_queue.task_done()
+                    
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error(f"Error flushing audit logs: {exc}")
+        
+        # Prevent tight loops if there's an error
+        await asyncio.sleep(1)
 
 
 def _scrub_sensitive(changes: dict) -> dict:
     """Replace values of sensitive fields with '[REDACTED]'."""
     if not changes:
         return changes
-    scrubbed = {}
+    scrubbed: dict[str, Any] = {}
     for key, value in changes.items():
         if key in SENSITIVE_FIELDS:
             scrubbed[key] = "[REDACTED]"
@@ -93,7 +149,7 @@ def _scrub_sensitive(changes: dict) -> dict:
     return scrubbed
 
 
-def compute_diff(old_dict: dict, new_dict: dict, fields: list = None) -> dict:
+def compute_diff(old_dict: dict, new_dict: dict, fields: Optional[list] = None) -> dict:
     """
     Compute a diff between two dicts for audit logging.
 
@@ -106,14 +162,14 @@ def compute_diff(old_dict: dict, new_dict: dict, fields: list = None) -> dict:
         Dict of changed fields: { "field": { "from": old_value, "to": new_value } }
         Sensitive fields are automatically redacted.
     """
-    diff = {}
+    diff: dict[str, Any] = {}
     keys = fields if fields else set(list(old_dict.keys()) + list(new_dict.keys()))
 
     for key in keys:
-        if key.startswith('_'):
+        if isinstance(key, str) and key.startswith('_'):
             continue
-        old_val = old_dict.get(key)
-        new_val = new_dict.get(key)
+        old_val: Any = old_dict.get(key)
+        new_val: Any = new_dict.get(key)
         # Convert non-serializable types to strings for JSON storage
         if hasattr(old_val, 'isoformat'):
             old_val = old_val.isoformat()

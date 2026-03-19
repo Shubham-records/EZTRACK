@@ -248,7 +248,6 @@ async def upload_gym_logo(
     storage_key = upload_image(data, folder=StorageFolder.LOGOS, mime_type=file.content_type)
 
     branch.logoUrl      = storage_key
-    branch.logoMimeType = file.content_type
     await db.commit()
 
     return {
@@ -282,7 +281,6 @@ async def upload_branch_logo(
 
     storage_key = upload_image(data, folder=StorageFolder.LOGOS, mime_type=file.content_type)
     branch.logoUrl      = storage_key
-    branch.logoMimeType = file.content_type
     await db.commit()
 
     return {
@@ -330,7 +328,7 @@ async def get_gym_logo_base64(
             response = await client.get(signed_url, timeout=10)
             response.raise_for_status()
             b64 = base64.b64encode(response.content).decode("utf-8")
-            mime = branch.logoMimeType or "image/png"
+            mime = "image/png"
             return {"logo": f"data:{mime};base64,{b64}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not fetch logo for PDF: {e}")
@@ -368,6 +366,5 @@ async def delete_gym_logo(
         raise HTTPException(status_code=404, detail="No logo to delete")
     delete_image(branch.logoUrl)
     branch.logoUrl      = None
-    branch.logoMimeType = None
     await db.commit()
     return {"message": "Logo deleted"}

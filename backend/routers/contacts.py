@@ -16,7 +16,7 @@ def map_contact_response(c: ExternalContact):
     c_dict = c.__dict__.copy()
     c_dict['_id'] = c.id
     c_dict.pop('_sa_instance_state', None)
-    return c_dict
+    return ExternalContactResponse.model_validate(c_dict).model_dump(by_alias=True)
 
 
 @router.get("")

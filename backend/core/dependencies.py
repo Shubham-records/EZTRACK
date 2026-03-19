@@ -21,9 +21,10 @@ import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
-from core.database import get_db
+from core.database import get_async_db
 from core.config import settings
 from core.security import JWT_AUDIENCE, JWT_ISSUER, decode_access_token  # SEC-NEW-02
 from models.all_models import Gym, User
@@ -37,9 +38,9 @@ ROLE_RANK = {"OWNER": 3, "MANAGER": 2, "STAFF": 1}
 
 # ─── Primary gym dependency (unchanged — all existing routes use this) ─────────
 
-def get_current_gym(
+async def get_current_gym(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> Gym:
     """
     Decode the JWT, validate the gymId, and return the Gym entity.
@@ -53,13 +54,16 @@ def get_current_gym(
     try:
         # SEC-NEW-02 & SEC-V-06: Validate audience claim & support key rotation
         payload = decode_access_token(token)
-        gymId: str = payload.get("gymId")
+        gymId: str | None = payload.get("gymId")
         if gymId is None:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
 
-    gym = db.query(Gym).filter(Gym.id == gymId, Gym.isDeleted == False).first()
+    stmt = select(Gym).where(Gym.id == gymId, Gym.isDeleted == False)
+    res = await db.execute(stmt)
+    gym = res.scalars().first()
+    
     if gym is None:
         raise credentials_exception
     return gym
@@ -83,9 +87,9 @@ def _decode_payload(token: str) -> dict:
 
 # ─── Caller identity: returns (role, username) ────────────────────────────────
 
-def get_caller_role(
+async def get_caller_role(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> tuple[str, str]:
     """
     Return (role, username) of the caller.
@@ -94,18 +98,21 @@ def get_caller_role(
     This is the source of truth for RBAC checks.
     """
     payload = _decode_payload(token)
-    gymId: str = payload.get("gymId")
-    userId: str = payload.get("userId")  # staff tokens include this
+    gymId: str | None = payload.get("gymId")
+    userId: str | None = payload.get("userId")  # staff tokens include this
     username: str = payload.get("username", "")
 
     if userId:
         # SEC-V-08: Also check isActive — deleted staff members' access tokens
         # must be rejected immediately, not allowed to run until natural expiry.
-        user = db.query(User).filter(
+        stmt = select(User).where(
             User.id == userId,
             User.gymId == gymId,
             User.isActive == True,   # SEC-V-08: blocks tokens for deleted staff
-        ).first()
+        )
+        res = await db.execute(stmt)
+        user = res.scalars().first()
+        
         if user:
             return (user.role or "STAFF", user.username)
         # userId in token but no active DB record → 401 (user deleted or invalid)
@@ -116,7 +123,10 @@ def get_caller_role(
         )
 
     # Gym-owner token — no userId in payload
-    gym = db.query(Gym).filter(Gym.id == gymId, Gym.isDeleted == False).first()
+    stmt = select(Gym).where(Gym.id == gymId, Gym.isDeleted == False)
+    res = await db.execute(stmt)
+    gym = res.scalars().first()
+    
     if not gym:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -12,6 +12,11 @@ class WhatsAppTemplateUpdate(BaseModel):
     isActive: Optional[bool] = None
 
 
+class TemplatePreviewRequest(BaseModel):
+    messageTemplate: str
+    sampleData: dict[str, str] = {}
+
+
 class WhatsAppTemplateResponse(BaseModel):
     id: str
     gymId: str

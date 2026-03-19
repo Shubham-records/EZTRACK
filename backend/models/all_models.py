@@ -270,7 +270,6 @@ class Branch(Base):
 
     # Object storage — logo URL (Supabase / R2 / S3)
     logoUrl      = Column(String, nullable=True)   # signed URL generated on demand
-    logoMimeType = Column(String, nullable=True)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
@@ -445,6 +444,16 @@ class Member(Base):
                 '"NextDuedate" IS NOT NULL AND "isDeleted" = false'
             ),
         ),
+        # SCH-01: Scale / Normalization constraints ensuring E.164 format
+        # Prevents messy inputs breaking duplicate detection & WhatsApp links
+        CheckConstraint(
+            "\"Mobile\" IS NULL OR \"Mobile\" ~ '^\\+[1-9]\\d{6,14}$'",
+            name="ck_member_mobile_e164"
+        ),
+        CheckConstraint(
+            "\"Whatsapp\" IS NULL OR \"Whatsapp\" ~ '^\\+[1-9]\\d{6,14}$'", 
+            name="ck_member_whatsapp_e164"
+        ),
     )
 
     id    = Column(String, primary_key=True, default=generate_uuid)
@@ -494,7 +503,6 @@ class Member(Base):
     # Object storage — profile photo URL (Supabase / R2 / S3)
     # FIX: replaced LargeBinary imageData with a URL column
     imageUrl      = Column(String, nullable=True)   # signed URL generated on demand
-    imageMimeType = Column(String, nullable=True)
     hasImage      = Column(Boolean, default=False)  # fast flag for list endpoints
 
     # Multi-branch support
@@ -571,7 +579,6 @@ class ProteinStock(Base):
     # Object storage — product image URL (Supabase / R2 / S3)
     # FIX: replaced LargeBinary imageData with a URL column
     imageUrl      = Column(String, nullable=True)
-    imageMimeType = Column(String, nullable=True)
     hasImage      = Column(Boolean, default=False)
 
     # Multi-branch support
@@ -725,6 +732,7 @@ class GymSettings(Base):
 class Expense(Base):
     __tablename__ = "Expense"
     __table_args__ = (
+        Index("ix_expense_gym_id",       "gymId"),
         Index("ix_expense_gym_date",     "gymId", "date"),
         Index("ix_expense_gym_category", "gymId", "category"),
         # SCH-REC-04 (P2-6): Financial integrity constraints
@@ -745,7 +753,6 @@ class Expense(Base):
     # Object storage — receipt image URL
     # FIX: replaced LargeBinary receiptImage with a URL column
     receiptUrl      = Column(String, nullable=True)
-    receiptMimeType = Column(String, nullable=True)
     hasReceipt      = Column(Boolean, default=False)
 
     # Multi-branch support
@@ -791,7 +798,6 @@ class ExternalContact(Base):
     # Object storage — contact photo URL (optional)
     # FIX: replaced LargeBinary imageData with a URL column
     imageUrl      = Column(String, nullable=True)
-    imageMimeType = Column(String, nullable=True)
 
     createdAt = Column(DateTime(timezone=True), default=func.now())
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
@@ -948,3 +954,26 @@ class WhatsAppTemplate(Base):
     updatedAt = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     gym = relationship("Gym", backref="whatsappTemplates")
+
+
+# ─── Archive Schema ─────────────────────────────────────────────────────────────
+
+class SoftDeleteArchive(Base):
+    """
+    WA-03: Archive table for soft-deleted rows older than 90 days.
+    Keeps hot tables clean and prevents index bloat, while preserving a
+    long-term audit trail of deleted data.
+    """
+    __tablename__ = "SoftDeleteArchives"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    gymId = Column(String, index=True)
+    originalTable = Column(String, index=True, nullable=False)
+    originalId = Column(String, index=True, nullable=False)
+    
+    # Store the entire row as JSON string to avoid schema migrations
+    payload = Column(Text, nullable=False)
+    
+    deletedAt = Column(DateTime(timezone=True))
+    archivedAt = Column(DateTime(timezone=True), default=func.now())
+
