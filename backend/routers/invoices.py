@@ -155,79 +155,126 @@ async def create_invoice(
     return map_invoice_response(new_invoice)
 
 
-@router.post("/bulk-create")
+@router.post("/bulk-create", status_code=202)
 @rate_limit("5/minute")
 async def bulk_create_invoices(request: Request, data: dict, current_gym: Gym = Depends(get_current_gym), db: AsyncSession = Depends(get_async_db)):
-    """Bulk create invoices from import"""
-    invoices_list = data.get("invoices", [])
-    created_count = 0
-    failed_count = 0
-    batch_size = 100
-    
-    for i in range(0, len(invoices_list), batch_size):
-        batch = invoices_list[i : i + batch_size]
-        try:
-            async with db.begin_nested():
-                for invoice_data in batch:
-                    # Required fields
-                    customer_name = invoice_data.get("CustomerName") or invoice_data.get("customerName")
-                    if not customer_name:
-                        continue
-                        
-                    total_amount = float(invoice_data.get("Total") or invoice_data.get("total") or 0)
-                    
-                    # Construct items if not provided
-                    items = invoice_data.get("Items") or invoice_data.get("items")
-                    if not items:
-                        items = [{
-                            "description": "Imported Item",
-                            "quantity": 1,
-                            "rate": total_amount,
-                            "amount": total_amount
-                        }]
-                    
-                    date_str = invoice_data.get("InvoiceDate") or invoice_data.get("invoiceDate")
-                    status_val = (invoice_data.get("Status") or invoice_data.get("status") or "PAID").upper()
-                    
-                    new_invoice = Invoice(
-                        gymId=current_gym.id,
-                        customerName=customer_name,
-                        items=items,
-                        subTotal=total_amount,
-                        tax=0,
-                        discount=0,
-                        total=total_amount,
-                        status=status_val,
-                        paymentMode=(invoice_data.get("PaymentMode") or invoice_data.get("paymentMode") or "CASH").upper(),
-                        invoiceDate=date_str or datetime.now(),
-                        dueDate=invoice_data.get("DueDate") or invoice_data.get("dueDate"),
-                        paidAmount=total_amount if status_val == "PAID" else 0,
-                        lastEditedBy=current_gym.username,
-                        editReason='Bulk Import'
-                    )
-                    db.add(new_invoice)
-                    await db.flush()
+    """SW-06: Bulk create invoices — returns 202 with jobId for large imports."""
+    import asyncio
+    from core.job_utils import create_job, update_job, complete_job, fail_job
+    from core.database import AsyncSessionLocal
 
-                    # DATA-1: Insert PaymentEvent if paidAmount > 0
-                    if new_invoice.paidAmount and new_invoice.paidAmount > 0:
-                        db.add(PaymentEvent(
-                            invoiceId=new_invoice.id,
-                            gymId=current_gym.id,
-                            amount=new_invoice.paidAmount,
-                            paymentMode=new_invoice.paymentMode or "CASH",
-                            notes="Bulk import",
-                            recordedBy=current_gym.username,
-                        ))
-                    
-                await db.flush()
-            created_count += len(batch)
-        except Exception as e:
-            logger.error("Bulk invoice batch %d failed: %s", i // batch_size, type(e).__name__)
-            failed_count += len(batch)
-            continue
-    
-    await db.commit()
-    return {"message": f"Created {created_count} invoices, {failed_count} failed", "count": created_count, "failed": failed_count}
+    invoices_list = data.get("invoices", [])
+
+    # Small imports (≤100 rows) — process inline for snappy UX
+    if len(invoices_list) <= 100:
+        created_count = 0
+        failed_count = 0
+        batch_size = 100
+        for i in range(0, len(invoices_list), batch_size):
+            batch = invoices_list[i : i + batch_size]
+            try:
+                async with db.begin_nested():
+                    for invoice_data in batch:
+                        customer_name = invoice_data.get("CustomerName") or invoice_data.get("customerName")
+                        if not customer_name:
+                            continue
+                        total_amount = float(invoice_data.get("Total") or invoice_data.get("total") or 0)
+                        items = invoice_data.get("Items") or invoice_data.get("items")
+                        if not items:
+                            items = [{"description": "Imported Item", "quantity": 1, "rate": total_amount, "amount": total_amount}]
+                        date_str = invoice_data.get("InvoiceDate") or invoice_data.get("invoiceDate")
+                        status_val = (invoice_data.get("Status") or invoice_data.get("status") or "PAID").upper()
+                        new_invoice = Invoice(
+                            gymId=current_gym.id, customerName=customer_name, items=items,
+                            subTotal=total_amount, tax=0, discount=0, total=total_amount, status=status_val,
+                            paymentMode=(invoice_data.get("PaymentMode") or invoice_data.get("paymentMode") or "CASH").upper(),
+                            invoiceDate=date_str or datetime.now(),
+                            dueDate=invoice_data.get("DueDate") or invoice_data.get("dueDate"),
+                            paidAmount=total_amount if status_val == "PAID" else 0,
+                            lastEditedBy=current_gym.username, editReason='Bulk Import'
+                        )
+                        db.add(new_invoice)
+                        await db.flush()
+                        if new_invoice.paidAmount and new_invoice.paidAmount > 0:
+                            db.add(PaymentEvent(
+                                invoiceId=new_invoice.id, gymId=current_gym.id,
+                                amount=new_invoice.paidAmount, paymentMode=new_invoice.paymentMode or "CASH",
+                                notes="Bulk import", recordedBy=current_gym.username,
+                            ))
+                    await db.flush()
+                created_count += len(batch)
+            except Exception as e:
+                logger.error("Bulk invoice batch %d failed: %s", i // batch_size, type(e).__name__)
+                failed_count += len(batch)
+                continue
+        from routers.dashboard import invalidate_dashboard_stats
+        await invalidate_dashboard_stats(current_gym.id, db)
+        await db.commit()
+        return {"message": f"Created {created_count} invoices, {failed_count} failed", "count": created_count, "failed": failed_count}
+
+    # Large imports (>100 rows) — offload to background task
+    job = create_job(current_gym.id, "bulk_create_invoices", total=len(invoices_list))
+    gym_id = current_gym.id
+    gym_username = current_gym.username
+
+    async def _bg_bulk_create_invoices():
+        created_count = 0
+        failed_count = 0
+        batch_size = 100
+        try:
+            async with AsyncSessionLocal() as bg_db:
+                from sqlalchemy import text
+                await bg_db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": gym_id})
+
+                for i in range(0, len(invoices_list), batch_size):
+                    batch = invoices_list[i : i + batch_size]
+                    try:
+                        async with bg_db.begin_nested():
+                            for invoice_data in batch:
+                                customer_name = invoice_data.get("CustomerName") or invoice_data.get("customerName")
+                                if not customer_name:
+                                    continue
+                                total_amount = float(invoice_data.get("Total") or invoice_data.get("total") or 0)
+                                items = invoice_data.get("Items") or invoice_data.get("items")
+                                if not items:
+                                    items = [{"description": "Imported Item", "quantity": 1, "rate": total_amount, "amount": total_amount}]
+                                date_str = invoice_data.get("InvoiceDate") or invoice_data.get("invoiceDate")
+                                status_val = (invoice_data.get("Status") or invoice_data.get("status") or "PAID").upper()
+                                new_invoice = Invoice(
+                                    gymId=gym_id, customerName=customer_name, items=items,
+                                    subTotal=total_amount, tax=0, discount=0, total=total_amount, status=status_val,
+                                    paymentMode=(invoice_data.get("PaymentMode") or invoice_data.get("paymentMode") or "CASH").upper(),
+                                    invoiceDate=date_str or datetime.now(),
+                                    dueDate=invoice_data.get("DueDate") or invoice_data.get("dueDate"),
+                                    paidAmount=total_amount if status_val == "PAID" else 0,
+                                    lastEditedBy=gym_username, editReason='Bulk Import'
+                                )
+                                bg_db.add(new_invoice)
+                                await bg_db.flush()
+                                if new_invoice.paidAmount and new_invoice.paidAmount > 0:
+                                    bg_db.add(PaymentEvent(
+                                        invoiceId=new_invoice.id, gymId=gym_id,
+                                        amount=new_invoice.paidAmount, paymentMode=new_invoice.paymentMode or "CASH",
+                                        notes="Bulk import", recordedBy=gym_username,
+                                    ))
+                            await bg_db.flush()
+                        created_count += len(batch)
+                    except Exception as e:
+                        logger.error("BG bulk invoice batch %d failed: %s", i // batch_size, type(e).__name__)
+                        failed_count += len(batch)
+                        continue
+                    update_job(job.id, created_count + failed_count)
+
+                from routers.dashboard import invalidate_dashboard_stats
+                await invalidate_dashboard_stats(gym_id, bg_db)
+                await bg_db.commit()
+            complete_job(job.id, {"count": created_count, "failed": failed_count})
+        except Exception as exc:
+            logger.exception("BG bulk_create_invoices job %s crashed", job.id)
+            fail_job(job.id, str(exc))
+
+    asyncio.create_task(_bg_bulk_create_invoices())
+    return {"jobId": job.id, "message": f"Import of {len(invoices_list)} invoices started in background. Poll GET /api/jobs/{job.id} for status."}
 
 
 @router.post("/bulk-delete")
@@ -258,6 +305,10 @@ async def bulk_delete_invoices(
         ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
 
         result = await db.execute(stmt)
+        
+        from routers.dashboard import invalidate_dashboard_stats
+        await invalidate_dashboard_stats(current_gym.id, db)
+        
         await db.commit()
         return {"message": f"Deleted {result.rowcount} invoices", "count": result.rowcount}
     except Exception as e:

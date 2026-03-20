@@ -22,10 +22,10 @@ async def get_expiring_memberships(
     today = datetime.now().date()
     end_date = today + timedelta(days=days)
 
-    # FIX: filter using computed_status expression (DB-level CASE, not stored column)
+    # SW-08: Use stored column for index-backed filtering
     stmt = select(Member).where(
         Member.gymId == current_gym.id,
-        Member.computed_status == "Active",
+        Member.status_computed == "Active",
         Member.NextDuedate >= today,
         Member.NextDuedate <= end_date,
     )
@@ -118,10 +118,10 @@ async def get_smart_suggestions(
 
     from sqlalchemy import func
 
-    # FIX: push expiry window filter to DB using computed_status expression
+    # SW-08: Use stored column for index-backed filtering
     stmt1 = select(func.count(Member.id)).where(
         Member.gymId == current_gym.id,
-        Member.computed_status == "Active",
+        Member.status_computed == "Active",
         Member.NextDuedate >= today,
         Member.NextDuedate <= upcoming,
     )
@@ -185,10 +185,10 @@ async def generate_bulk_whatsapp_links(
         today = datetime.now().date()
         end_date = today + timedelta(days=7)
 
-        # FIX: DB-level filter using computed_status + NextDuedate range
+        # SW-08: Use stored column for index-backed filtering
         stmt = select(Member).where(
             Member.gymId == current_gym.id,
-            Member.computed_status == "Active",
+            Member.status_computed == "Active",
             Member.NextDuedate >= today,
             Member.NextDuedate <= end_date,
         )

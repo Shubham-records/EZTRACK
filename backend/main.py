@@ -40,7 +40,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from routers import (
     auth, members, staff, proteins, invoices, dashboard,
     settings, expenses, contacts, automation, audit,
-    terms, branch_details, whatsapp_templates,
+    terms, branch_details, whatsapp_templates, jobs,
 )
 from core.database import Base, async_engine
 
@@ -54,8 +54,14 @@ async def lifespan(app: FastAPI):
     """Startup: verify DB tables. No background jobs — SSE handles live data."""
     env_name = os.getenv("VERCEL_ENV", "development").lower()
     
-    from core.audit_utils import audit_worker
+    from core.audit_utils import audit_worker, ensure_audit_partitions
+    from core.cache import gym_settings_cache_listener
+    
     audit_task = asyncio.create_task(audit_worker())
+    cache_listener_task = asyncio.create_task(gym_settings_cache_listener())
+    
+    # SW-02: Ensure AuditLog partitions exist for current/next month
+    await ensure_audit_partitions()
     
     if env_name != "production":
         async with async_engine.begin() as conn:
@@ -84,6 +90,7 @@ async def lifespan(app: FastAPI):
     yield
     # Cleanup background tasks
     audit_task.cancel()
+    cache_listener_task.cancel()
 
 
 # ─── App ─────────────────────────────────────────────────────────────────────
@@ -285,6 +292,35 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestIDMiddleware)
 
+
+# ─── Global Request Timeout (SW-05) ───────────────────────────────────────────
+
+class RequestTimeoutMiddleware(BaseHTTPMiddleware):
+    """
+    SW-05: Enforce a 60s hard timeout on every request.
+    Prevents rogue background operations or slow DB queries (that bypass the 30s limit)
+    from exhausting the worker pool.
+    
+    The dashboard SSE stream is EXEMPT as it is meant to stay open for hours.
+    """
+    async def dispatch(self, request: Request, call_next):
+        import asyncio
+        if "/dashboard/stream" in request.url.path:
+            return await call_next(request)
+            
+        try:
+            return await asyncio.wait_for(call_next(request), timeout=60.0)
+        except asyncio.TimeoutError:
+            from fastapi.responses import JSONResponse
+            logger.error("Request %s timed out after 60s", request.url.path)
+            return JSONResponse(
+                status_code=504,
+                content={"detail": "Request timed out after 60s. Please retry or contact support if the issue persists."},
+            )
+
+app.add_middleware(RequestTimeoutMiddleware)
+
+
 # ─── Routers ──────────────────────────────────────────────────────────────────
 
 app.include_router(auth.router,               prefix="/api/auth",               tags=["Auth"])
@@ -301,6 +337,7 @@ app.include_router(audit.router,              prefix="/api/audit",              
 app.include_router(terms.router,              prefix="/api/terms",               tags=["Terms"])
 app.include_router(branch_details.router,     prefix="/api/branch-details",      tags=["Branch Details"])
 app.include_router(whatsapp_templates.router, prefix="/api/whatsapp-templates",  tags=["WhatsApp Templates"])
+app.include_router(jobs.router,               prefix="/api/jobs",               tags=["Jobs"])
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────

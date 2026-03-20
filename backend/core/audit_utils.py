@@ -182,3 +182,48 @@ def compute_diff(old_dict: dict, new_dict: dict, fields: Optional[list] = None) 
                 diff[key] = {"from": old_val, "to": new_val}
 
     return diff
+
+
+async def ensure_audit_partitions():
+    """
+    SW-02: Ensure that PostgreSQL partitions for AuditLog exist for the current
+    and next month. This is a lightweight check run on startup that prevents
+    INSERT failures when the month rolls over.
+    """
+    from core.database import async_engine
+    from sqlalchemy import text
+    from datetime import datetime, timedelta
+
+    # Targets: current month and next month
+    now = datetime.now()
+    # next month is roughly now + 32 days
+    next_month_date = now.replace(day=28) + timedelta(days=7)
+    
+    targets = [now, next_month_date]
+    
+    try:
+        async with async_engine.connect() as conn:
+            for date in targets:
+                year = date.year
+                month = date.month
+                
+                start_date = f"{year}-{month:02d}-01"
+                if month == 12:
+                    end_date = f"{year + 1}-01-01"
+                else:
+                    end_date = f"{year}-{month + 1:02d}-01"
+                
+                partition_name = f"AuditLog_{year}_{month:02d}"
+                
+                # PostgreSQL 10+ syntax for creating a partition
+                sql = f"""
+                    CREATE TABLE IF NOT EXISTS "{partition_name}" 
+                    PARTITION OF "AuditLog"
+                    FOR VALUES FROM ('{start_date}') TO ('{end_date}');
+                """
+                await conn.execute(text(sql))
+                await conn.commit()
+    except Exception as exc:
+        # Non-fatal during startup; if the table isn't partitioned yet or 
+        # doesn't exist, we don't want to crash the whole API.
+        logger.warning("SW-02: Could not ensure AuditLog partitions: %s", exc)

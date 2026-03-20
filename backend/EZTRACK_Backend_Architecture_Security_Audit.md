@@ -99,7 +99,7 @@ This gives 4 workers × 30 connections = 120 connections max. Combined with `poo
 
 ## 3. Structural Weaknesses
 
-### SW-01: Single-Process Cache Inconsistency ⚠️ CRITICAL
+### SW-01: Single-Process Cache Inconsistency ⚠️ CRITICAL --- done
 
 **File:** `core/cache.py`
 
@@ -129,7 +129,7 @@ The `LRUTTLCache` is in-process memory. With 4 uvicorn workers:
 
 ---
 
-### SW-02: AuditLog Table — Unbounded Growth ⚠️ HIGH
+### SW-02: AuditLog Table — Unbounded Growth ⚠️ HIGH --- done
 
 **File:** `models/all_models.py` (AuditLog model)
 
@@ -160,7 +160,7 @@ Alembic migration required. Use `pg_partman` extension for automatic partition c
 
 ---
 
-### SW-03: GymDailySummary Cache — Stale Edge Cases ⚠️ MEDIUM
+### SW-03: GymDailySummary Cache — Stale Edge Cases ⚠️ MEDIUM --- done
 
 **File:** `routers/dashboard.py` (`_compute_stats`)
 
@@ -172,7 +172,7 @@ The `GymDailySummary` has a 5-minute staleness window (`_SUMMARY_STALE_SECONDS =
 
 ---
 
-### SW-04: No Database-Level Row-Level Security (RLS) ⚠️ HIGH
+### SW-04: No Database-Level Row-Level Security (RLS) ⚠️ HIGH --- done
 
 **All routers**
 
@@ -193,7 +193,7 @@ This ensures even if application code forgets the filter, the database enforces 
 
 ---
 
-### SW-05: No Request Timeout at Application Level ⚠️ MEDIUM
+### SW-05: No Request Timeout at Application Level ⚠️ MEDIUM --- done
 
 **File:** `main.py`
 
@@ -219,7 +219,7 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
 
 ---
 
-### SW-06: Bulk Operations — No Progress Tracking ⚠️ LOW
+### SW-06: Bulk Operations — No Progress Tracking ✅ FIXED (Asynchronous Processing)
 
 **Files:** `routers/members.py`, `routers/invoices.py`, `routers/proteins.py`
 
@@ -232,7 +232,7 @@ Bulk imports of 1000+ rows happen synchronously in a single request. At 10K DAU,
 
 ---
 
-### SW-07: SSE Stream — No Authentication Heartbeat ⚠️ MEDIUM
+### SW-07: SSE Stream — No Authentication Heartbeat ✅ FIXED (Periodic validity check)
 
 **File:** `routers/dashboard.py` (`GymStreamManager`)
 
@@ -254,7 +254,7 @@ async def _pump_stats(self, gym_id: str):
 
 ---
 
-### SW-08: `computed_status` Hybrid Property — Cannot Be Indexed ⚠️ HIGH
+### SW-08: `computed_status` Hybrid Property — Cannot Be Indexed ✅ FIXED (Stored column + Trigger)
 
 **File:** `models/all_models.py` (Member model)
 
@@ -935,8 +935,8 @@ This reduces the `core/` directory from **8 files** to **6 files** without loss 
 
 | ID | Issue | File(s) | Effort |
 |---|---|---|---|
-| **SW-02** | AuditLog partitioning | Alembic migration | 1-2 days |
-| **SW-08** | `computed_status` not indexable → generated column | Alembic migration | 1 day |
+| **SW-02** | AuditLog partitioning | Alembic migration | 1-2 days | --- done
+| **SW-08** | `computed_status` not indexable → stored trigger-column ✅ | Alembic migration | 1 day |
 | **PB-01** | Dashboard 10 subqueries → 3 CTEs + indexes | `dashboard.py`, migration | 1-2 days |
 | **SCH-01** | Missing composite indexes for hot queries | Alembic migration | 2-3 hours |
 | **SEC-V-06b** | `pay_invoice` accepts raw dict | `invoices.py` | 30 min |
@@ -949,7 +949,7 @@ This reduces the `core/` directory from **8 files** to **6 files** without loss 
 | ID | Issue | File(s) | Effort |
 |---|---|---|---|
 | **SW-03** | GymDailySummary stale after bulk ops | `dashboard.py`, bulk routes | 2-3 hours |
-| **SW-07** | SSE stream no auth heartbeat | `dashboard.py` | 1 hour |
+| **SW-07** | SSE stream no auth heartbeat ✅ | `dashboard.py` | 1 hour |
 | **WA-02** | Member model too many columns (normalize payment fields) | Models, services | 2-3 days |
 | **WA-03** | Schedule archive_soft_deletes.py as cron | DevOps | 30 min |
 | **WA-04** | Dashboard thundering herd (add recompute lock) | `dashboard.py` | 1 hour |
@@ -964,7 +964,7 @@ This reduces the `core/` directory from **8 files** to **6 files** without loss 
 
 | ID | Issue | File(s) | Effort |
 |---|---|---|---|
-| **SW-06** | Bulk ops no progress tracking | Bulk routes | 2-3 days |
+| **SW-06** | Bulk ops no progress tracking ✅ | Bulk routes | 2-3 days |
 | **PB-04** | Member list Pydantic overhead | `members.py` | 1-2 hours |
 | **SEC-V-01a** | Previous JWT key no expiry date | `core/security.py` | 30 min |
 | **SEC-V-05d** | Pending response exposes phone | `invoices.py` | 30 min |

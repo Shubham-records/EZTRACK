@@ -324,64 +324,113 @@ async def create_protein(
     return map_protein_response(protein)
 
 
-@router.post("/bulk-create")
+@router.post("/bulk-create", status_code=202)
 @rate_limit("10/minute")
 async def bulk_create_proteins(
     data: BulkProteinCreate,
     current_gym: Gym = Depends(get_current_gym),
     db: AsyncSession = Depends(get_async_db)
 ):
-    """Bulk create protein stocks from import.
-    SEC-CRIT-02: Uses BulkProteinCreate typed schema — no raw dict.
-    """
-    created_count: int = 0
-    failed_count: int = 0
-    batch_size = 100
+    """SW-06: Bulk create proteins — returns 202 with jobId for large imports."""
+    import asyncio
+    from core.job_utils import create_job, update_job, complete_job, fail_job
+    from core.database import AsyncSessionLocal
 
-    for i in range(0, len(data.stocks), batch_size):
-        batch = data.stocks[i : i + batch_size]
+    # Small imports (≤100 rows) — process inline
+    if len(data.stocks) <= 100:
+        created_count: int = 0
+        failed_count: int = 0
+        batch_size = 100
+        for i in range(0, len(data.stocks), batch_size):
+            batch = data.stocks[i : i + batch_size]
+            try:
+                async with db.begin_nested():
+                    for stock_data in batch:
+                        landing = float(stock_data.LandingPrice or 0)
+                        margin  = float(stock_data.MarginPrice or 0)
+                        offer   = float(stock_data.OfferPrice or 0)
+                        if stock_data.SellingPrice is not None:
+                            selling = float(stock_data.SellingPrice)
+                        elif margin or offer:
+                            selling = landing + margin - offer
+                        else:
+                            selling = 0
+                        protein = ProteinStock(
+                            gymId=current_gym.id,
+                            Brand=stock_data.Brand, ProductName=stock_data.ProductName,
+                            Flavour=stock_data.Flavour, Weight=str(stock_data.Weight or ""),
+                            Quantity=int(stock_data.Quantity or 0), MRPPrice=float(stock_data.MRPPrice or 0),
+                            LandingPrice=landing, Remark=stock_data.Remark,
+                            MarginPrice=margin, OfferPrice=offer, SellingPrice=selling,
+                            ExpiryDate=parse_date(stock_data.ExpiryDate),
+                            StockThreshold=int(stock_data.StockThreshold or 5),
+                        )
+                        recalculate_computed_fields(protein)
+                        db.add(protein)
+                    await db.flush()
+                created_count += len(batch)
+            except Exception as e:
+                logger.error("Bulk protein batch %d failed: %s", i // batch_size, type(e).__name__)
+                failed_count += len(batch)
+                continue
+        await db.commit()
+        return {"message": f"Created {created_count} proteins, {failed_count} failed", "count": created_count, "failed": failed_count}
+
+    # Large imports (>100 rows) — offload to background
+    job = create_job(current_gym.id, "bulk_create_proteins", total=len(data.stocks))
+    gym_id = current_gym.id
+    stocks_data = data.stocks  # capture before request scope ends
+
+    async def _bg_bulk_create_proteins():
+        created_count = 0
+        failed_count = 0
+        batch_size = 100
         try:
-            async with db.begin_nested():
-                for stock_data in batch:
-                    landing = float(stock_data.LandingPrice or 0)
-                    margin  = float(stock_data.MarginPrice or 0)
-                    offer   = float(stock_data.OfferPrice or 0)
+            async with AsyncSessionLocal() as bg_db:
+                from sqlalchemy import text
+                await bg_db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": gym_id})
 
-                    if stock_data.SellingPrice is not None:
-                        selling = float(stock_data.SellingPrice)
-                    elif margin or offer:
-                        selling = landing + margin - offer
-                    else:
-                        selling = 0
+                for i in range(0, len(stocks_data), batch_size):
+                    batch = stocks_data[i : i + batch_size]
+                    try:
+                        async with bg_db.begin_nested():
+                            for stock_data in batch:
+                                landing = float(stock_data.LandingPrice or 0)
+                                margin  = float(stock_data.MarginPrice or 0)
+                                offer   = float(stock_data.OfferPrice or 0)
+                                if stock_data.SellingPrice is not None:
+                                    selling = float(stock_data.SellingPrice)
+                                elif margin or offer:
+                                    selling = landing + margin - offer
+                                else:
+                                    selling = 0
+                                protein = ProteinStock(
+                                    gymId=gym_id,
+                                    Brand=stock_data.Brand, ProductName=stock_data.ProductName,
+                                    Flavour=stock_data.Flavour, Weight=str(stock_data.Weight or ""),
+                                    Quantity=int(stock_data.Quantity or 0), MRPPrice=float(stock_data.MRPPrice or 0),
+                                    LandingPrice=landing, Remark=stock_data.Remark,
+                                    MarginPrice=margin, OfferPrice=offer, SellingPrice=selling,
+                                    ExpiryDate=parse_date(stock_data.ExpiryDate),
+                                    StockThreshold=int(stock_data.StockThreshold or 5),
+                                )
+                                recalculate_computed_fields(protein)
+                                bg_db.add(protein)
+                            await bg_db.flush()
+                        created_count += len(batch)
+                    except Exception as e:
+                        logger.error("BG bulk protein batch %d failed: %s", i // batch_size, type(e).__name__)
+                        failed_count += len(batch)
+                        continue
+                    update_job(job.id, created_count + failed_count)
+                await bg_db.commit()
+            complete_job(job.id, {"count": created_count, "failed": failed_count})
+        except Exception as exc:
+            logger.exception("BG bulk_create_proteins job %s crashed", job.id)
+            fail_job(job.id, str(exc))
 
-                    protein = ProteinStock(
-                        gymId=current_gym.id,
-                        Brand=stock_data.Brand,
-                        ProductName=stock_data.ProductName,
-                        Flavour=stock_data.Flavour,
-                        Weight=str(stock_data.Weight or ""),
-                        Quantity=int(stock_data.Quantity or 0),
-                        MRPPrice=float(stock_data.MRPPrice or 0),
-                        LandingPrice=landing,
-                        Remark=stock_data.Remark,
-                        MarginPrice=margin,
-                        OfferPrice=offer,
-                        SellingPrice=selling,
-                        ExpiryDate=parse_date(stock_data.ExpiryDate),
-                        StockThreshold=int(stock_data.StockThreshold or 5),
-                    )
-
-                    recalculate_computed_fields(protein)
-                    db.add(protein)
-                await db.flush()
-            created_count += len(batch)
-        except Exception as e:
-            logger.error("Bulk protein batch %d failed: %s", i // batch_size, type(e).__name__)
-            failed_count += len(batch)
-            continue
-
-    await db.commit()
-    return {"message": f"Created {created_count} proteins, {failed_count} failed", "count": created_count, "failed": failed_count}
+    asyncio.create_task(_bg_bulk_create_proteins())
+    return {"jobId": job.id, "message": f"Import of {len(data.stocks)} proteins started in background. Poll GET /api/jobs/{job.id} for status."}
 
 
 @router.post("/bulk-delete")

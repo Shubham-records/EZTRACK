@@ -518,16 +518,27 @@ class Member(Base):
     isDeleted = Column(Boolean, default=False, index=True)
     deletedAt = Column(DateTime(timezone=True), nullable=True)
 
+    # SW-08: Trigger-maintained status column — indexable, unlike the hybrid_property.
+    # Updated by trg_member_status_computed on INSERT/UPDATE of NextDuedate.
+    # Nightly refresh via: SELECT refresh_member_status_computed();
+    status_computed = Column(String(10), default="Inactive", index=False)  # indexed via ix_member_gym_status_computed
+
     gym     = relationship("Gym",    back_populates="members")
     invoices = relationship("Invoice", back_populates="member")
     branch  = relationship("Branch", back_populates="members")
 
     # ── Computed membership status ────────────────────────────────────────────
-    # This is the ONLY source of truth for member status.
-    # Do NOT store a MembershipStatus column — it will drift from NextDuedate.
+    # SW-08: The stored `status_computed` column is the primary source of truth.
+    # The hybrid_property reads from it (Python side) and falls back to live
+    # calculation for rows that haven't been backfilled.  The SQL expression
+    # still uses CASE for backward compatibility with ORM filters.
 
     @hybrid_property
     def computed_status(self):
+        # Prefer the trigger-maintained stored column
+        if self.status_computed:
+            return self.status_computed
+        # Fallback for un-migrated rows
         from datetime import datetime
         today = datetime.now().date()
         if not self.NextDuedate:
@@ -541,6 +552,7 @@ class Member(Base):
             (cls.NextDuedate >= func.current_date(), "Active"),
             else_="Expired",
         )
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -885,9 +897,14 @@ class AuditLog(Base):
         Index("ix_audit_gym_entity",  "gymId", "entityType", "entityId"),
         # P13: createdAt-only index for partition pruning and cleanup queries
         Index("ix_audit_created_at",  "createdAt"),
+        # SW-02: Native PostgreSQL range partitioning by month
+        {"postgresql_partition_by": 'RANGE ("createdAt")'}
     )
 
+    # Postgres requires the partition key (createdAt) to be part of the PK
     id     = Column(String, primary_key=True, default=generate_uuid)
+    createdAt = Column(DateTime(timezone=True), primary_key=True, default=func.now())
+    
     gymId  = Column(String, ForeignKey("Gym.id"), nullable=False)
 
     entityType = Column(String, nullable=False)   # Member | ProteinStock | Invoice | Expense
@@ -900,8 +917,6 @@ class AuditLog(Base):
     userId    = Column(String, nullable=True)
     userName  = Column(String, nullable=True)
     ipAddress = Column(String, nullable=True)
-
-    createdAt = Column(DateTime(timezone=True), default=func.now())
 
     gym = relationship("Gym", backref="auditLogs")
 

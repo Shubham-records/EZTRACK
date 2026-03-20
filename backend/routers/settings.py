@@ -57,7 +57,7 @@ async def update_settings(
     
     await db.commit()
     # await db.refresh(settings)
-    invalidate_gym_settings(current_gym.id)
+    await invalidate_gym_settings(current_gym.id)
     return settings
 
 

@@ -135,6 +135,10 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
             detail="Invalid username or password.",
         )
 
+    from sqlalchemy import text
+    # SW-04: Set session variable now that we know the gym
+    await db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": gym.id})
+
     access_token = create_access_token(data={"gymId": gym.id, "username": gym.username})
 
     # Revoke old refresh tokens and issue a new one
@@ -163,6 +167,10 @@ async def staff_login(body: StaffLoginRequest, request: Request, db: AsyncSessio
     stmt = select(Gym).where(Gym.id == body.gym_id, Gym.isDeleted == False)
     result = await db.execute(stmt)
     gym = result.scalars().first()
+
+    if gym:
+        from sqlalchemy import text
+        await db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": gym.id})
 
     user = None
     if gym:
@@ -259,6 +267,9 @@ async def refresh_access_token(body: RefreshRequest, request: Request, db: Async
     if not gym:
         raise HTTPException(status_code=401, detail="Gym not found.")
 
+    from sqlalchemy import text
+    await db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": gym.id})
+
     # Rotate: revoke old token, issue new pair in the SAME family
     rt.isRevoked = True
 
@@ -336,6 +347,9 @@ async def signup(body: SignupRequest, request: Request, db: AsyncSession = Depen
     )
     db.add(new_gym)
     await db.flush()   # get new_gym.id without committing
+
+    from sqlalchemy import text
+    await db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": new_gym.id})
 
     default_branch = Branch(
         id=str(uuid.uuid4()),

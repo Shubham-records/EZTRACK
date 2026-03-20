@@ -51,6 +51,28 @@ SSE_MAX_CONNECTIONS_PER_GYM = 50 # Fall back to polling if too many clients
 _SUMMARY_STALE_SECONDS  = 300   # ARCH-NEW-02: recompute after 5 minutes
 
 
+async def invalidate_dashboard_stats(gym_id: str, db: AsyncSession):
+    """
+    SW-03: Invalidate today's (and optionally yesterday's) GymDailySummary 
+    to force a recompute on next access. Call this after bulk operations.
+    """
+    from models.all_models import GymDailySummary
+    from sqlalchemy import delete
+    from datetime import datetime, timedelta
+
+    today = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+    
+    # We clear both today and yesterday because imports might contain 
+    # back-dated invoices or members that affect both summaries.
+    stmt = delete(GymDailySummary).where(
+        GymDailySummary.gymId == gym_id,
+        GymDailySummary.summaryDate.in_([today, yesterday])
+    )
+    await db.execute(stmt)
+    # Caller is responsible for commit
+
+
 # ─── Shared stats computation ────────────────────────────────────────────────
 # Used by both /stats (one-shot) and /stream (SSE). Kept as a plain function
 # so it can be called directly in sync routes OR via asyncio.to_thread in SSE.
@@ -63,18 +85,22 @@ async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
     - Check if today's GymDailySummary row is fresh (< _SUMMARY_STALE_SECONDS old)
     - Fresh: return it directly (1 SELECT, no aggregates)
     - Stale/missing: run a SINGLE CTE that computes all 10 stats in one DB round-trip
-
-    PB-06: All 10 aggregate values come from one SQL statement with scalar subqueries
-    wrapped in a `WITH stats AS (SELECT ...)` CTE emulated via SQLAlchemy's select().
-    This is equivalent to a CTE and guarantees exactly one round-trip to the DB.
+    
+    SW-03: Midnight rollover grace period.
+    If it's between 00:00 and 01:00 AM, and today's summary is missing/stale,
+    we allow falling back to yesterday's summary if it exists.
     """
-    today       = datetime.now().date()
+    now         = datetime.now()
+    today       = now.date()
+    yesterday   = today - timedelta(days=1)
+    
     today_start = datetime.combine(today, datetime.min.time())
     week_start  = datetime.combine(today - timedelta(days=today.weekday()), datetime.min.time())
     month_start = datetime.combine(today.replace(day=1), datetime.min.time())
     week_end    = today + timedelta(days=7)
 
     # ── ARCH-NEW-02: Try reading from GymDailySummary cache ───────────────────
+    # We look for today's summary first
     summary_stmt = select(GymDailySummary).where(
         GymDailySummary.gymId == gym_id,
         GymDailySummary.summaryDate == today,
@@ -82,10 +108,23 @@ async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
     summary_res = await db.execute(summary_stmt)
     summary = summary_res.scalars().first()
 
+    # SW-03: If today is missing and it's before 1 AM, check yesterday
+    if not summary and now.hour < 1:
+        y_stmt = select(GymDailySummary).where(
+            GymDailySummary.gymId == gym_id,
+            GymDailySummary.summaryDate == yesterday,
+        )
+        y_res = await db.execute(y_stmt)
+        summary = y_res.scalars().first()
+        # If we use yesterday's summary, we'll mark it as 'yesterday_fallback'
+
     if summary and summary.updatedAt:
-        age_seconds = (datetime.now() - summary.updatedAt).total_seconds()
-        if age_seconds < _SUMMARY_STALE_SECONDS:
-            # Cache hit — return from summary table (no heavy aggregates)
+        age_seconds = (now - summary.updatedAt).total_seconds()
+        # If it's today's summary, check freshness. 
+        # If it's yesterday's fallback (within 1-hr window), we treat it as fresh 
+        # to avoid the cold recompute at midnight.
+        is_today = (summary.summaryDate == today)
+        if (is_today and age_seconds < _SUMMARY_STALE_SECONDS) or (not is_today and now.hour < 1):
             return {
                 "activeMembers":    summary.activeMembers or 0,
                 "expiringToday":    summary.expiringToday or 0,
@@ -101,7 +140,7 @@ async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
                 ),
                 "lowStockItems":    summary.lowStockCount or 0,
                 "lastUpdated":      summary.updatedAt.isoformat(),
-                "_source":          "summary_cache",
+                "_source":          "summary_cache" if is_today else "yesterday_fallback",
             }
 
     # ── Cache miss: single CTE computes everything in ONE round-trip ───────────
@@ -114,7 +153,7 @@ async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
     # Each sub-select is a correlated scalar subquery resolved inside one outer SELECT.
     active_members_sq = (
         select(func.count(Member.id))
-        .where(Member.gymId == gym_id, Member.computed_status == "Active", Member.isDeleted == False)
+        .where(Member.gymId == gym_id, Member.status_computed == "Active", Member.isDeleted == False)  # SW-08: stored column → index scan
         .scalar_subquery()
         .label("active_members")
     )
@@ -130,7 +169,7 @@ async def _compute_stats(gym_id: str, db: AsyncSession) -> dict:
             Member.gymId == gym_id,
             Member.NextDuedate >= today,
             Member.NextDuedate <= week_end,
-            Member.computed_status == "Active",
+            Member.status_computed == "Active",  # SW-08: stored column → index scan
             Member.isDeleted == False,
         )
         .scalar_subquery()
@@ -296,9 +335,34 @@ class GymStreamManager:
                 logger.debug(f"[SSE] Gym {gym_id} task stopped (no clients).")
 
     async def _pump_stats(self, gym_id: str):
-        """Dedicated background task per gym to fetch and broadcast stats."""
+        """Dedicated background task per gym to fetch and broadcast stats.
+        SW-07: Every 5th tick, verifies the gym is still active. If deleted,
+        broadcasts a disconnect event and terminates all listeners.
+        """
+        tick_count = 0
         try:
             while True:
+                tick_count += 1
+
+                # SW-07: Auth heartbeat — verify gym is still valid every 5th tick (~5 min)
+                if tick_count % 5 == 0:
+                    try:
+                        async with AsyncSessionLocal() as check_db:
+                            gym_stmt = select(Gym).where(Gym.id == gym_id)
+                            res = await check_db.execute(gym_stmt)
+                            gym = res.scalars().first()
+                            if not gym or gym.isDeleted:
+                                logger.warning("[SSE] SW-07: Gym %s deleted/deactivated — forcing disconnect", gym_id)
+                                disconnect_msg = 'event: disconnect\ndata: {"reason": "gym_deactivated"}\n\n'
+                                for q in list(self._listeners.get(gym_id, [])):
+                                    try:
+                                        q.put_nowait(disconnect_msg)
+                                    except asyncio.QueueFull:
+                                        pass
+                                break  # Stop the pump; event_generator will clean up
+                    except Exception as e:
+                        logger.error("[SSE] SW-07 heartbeat check failed: %s", e)
+
                 stats = await self._fetch_or_compute(gym_id)
                 data_block = f"data: {json.dumps(stats)}\n\n"
                 
@@ -314,6 +378,7 @@ class GymStreamManager:
             pass
         except Exception as e:
             logger.error(f"[SSE] Gym {gym_id} pump error: {e}")
+
 
     async def _fetch_or_compute(self, gym_id: str) -> dict:
         """Consolidates cache and live compute into _compute_stats."""

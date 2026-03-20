@@ -51,12 +51,17 @@ async def get_current_gym(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    from sqlalchemy import text
     try:
         # SEC-NEW-02 & SEC-V-06: Validate audience claim & support key rotation
         payload = decode_access_token(token)
         gymId: str | None = payload.get("gymId")
         if gymId is None:
             raise credentials_exception
+            
+        # SW-04: Set session variable for PostgreSQL RLS isolation
+        await db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": gymId})
+        
     except JWTError:
         raise credentials_exception
 
@@ -99,6 +104,12 @@ async def get_caller_role(
     """
     payload = _decode_payload(token)
     gymId: str | None = payload.get("gymId")
+    
+    # SW-04: Set session variable for PostgreSQL RLS isolation
+    from sqlalchemy import text
+    if gymId:
+        await db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": gymId})
+
     userId: str | None = payload.get("userId")  # staff tokens include this
     username: str = payload.get("username", "")
 

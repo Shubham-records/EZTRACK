@@ -28,7 +28,7 @@ _member_count_cache = LRUTTLCache(maxsize=500, ttl=300)
 def calculate_member_status(member: Member, admission_expiry_days: int = 365) -> dict:
     today = datetime.now().date()
     status_data = {
-        "computed_status":      "Inactive",
+        "computed_status":      member.status_computed or "Inactive",  # SW-08: prefer stored column
         "is_expired":           False,
         "days_until_expiry":    None,
         "admission_expiry_date": None,
@@ -41,11 +41,14 @@ def calculate_member_status(member: Member, admission_expiry_days: int = 365) ->
         delta = (due_date - today).days
         status_data["days_until_expiry"] = delta
 
-        if due_date < today:
-            status_data["computed_status"] = "Expired"
-            status_data["is_expired"] = True
-        else:
-            status_data["computed_status"] = "Active"
+        # If stored column is missing, fall back to calculation
+        if not member.status_computed:
+            if due_date < today:
+                status_data["computed_status"] = "Expired"
+            else:
+                status_data["computed_status"] = "Active"
+
+        status_data["is_expired"] = (status_data["computed_status"] == "Expired")
 
         admission_expiry_date = due_date + timedelta(days=admission_expiry_days)
         status_data["admission_expiry_date"] = format_date(admission_expiry_date)
@@ -176,8 +179,9 @@ async def get_members(
         count_stmt = count_stmt.where(filter_clause)
 
     if status_filter:
-        stmt = stmt.where(Member.computed_status == status_filter)
-        count_stmt = count_stmt.where(Member.computed_status == status_filter)
+        # SW-08: Use stored column for index-backed filtering
+        stmt = stmt.where(Member.status_computed == status_filter)
+        count_stmt = count_stmt.where(Member.status_computed == status_filter)
 
     # Cache total count to prevent full table scans on every page (PB-04)
     # Cache key includes search and status_filter to be accurate
@@ -381,7 +385,7 @@ async def check_duplicates(data: dict, current_gym: Gym = Depends(get_current_gy
     }
 
 
-@router.post("/bulk-create")
+@router.post("/bulk-create", status_code=202)
 @rate_limit("5/minute")
 async def bulk_create_members(
     request: Request,
@@ -390,10 +394,14 @@ async def bulk_create_members(
     db: AsyncSession = Depends(get_async_db),
     _rbac=Depends(require_owner_or_manager),
 ):
-    """Bulk create members from import. Requires MANAGER+."""
+    """SW-06: Bulk create members — returns 202 with jobId, processes in background."""
+    import asyncio
+    from core.job_utils import create_job, update_job, complete_job, fail_job
+    from core.database import AsyncSessionLocal
+
     members_list = data.get("members", [])
 
-    # SEC-14: Enforce maxMembers subscription limit for bulk import
+    # SEC-14: Enforce maxMembers subscription limit (runs inline before 202)
     sub_stmt = select(GymSubscription).where(
         GymSubscription.gymId == current_gym.id
     )
@@ -420,54 +428,122 @@ async def bulk_create_members(
                 detail=f"Import would exceed member limit. You can add {remaining} more members (limit: {subscription.maxMembers}).",
             )
 
-    created_count = 0
-    failed_count = 0
-    batch_size = 100
+    # Small imports (≤100 rows) — process inline for snappy UX
+    if len(members_list) <= 100:
+        created_count = 0
+        failed_count = 0
+        batch_size = 100
+        for i in range(0, len(members_list), batch_size):
+            batch = members_list[i : i + batch_size]
+            try:
+                async with db.begin_nested():
+                    for member_data in batch:
+                        new_member = Member(
+                            gymId=current_gym.id,
+                            Name=member_data.get("Name"),
+                            MembershipReceiptnumber=member_data.get("MembershipReceiptnumber"),
+                            Gender=member_data.get("Gender"),
+                            Age=int(member_data.get("Age")) if member_data.get("Age") else None,
+                            height=float(member_data.get("height")) if member_data.get("height") else None,
+                            weight=int(member_data.get("weight")) if member_data.get("weight") else None,
+                            DateOfJoining=parse_date(member_data.get("DateOfJoining")),
+                            DateOfReJoin=parse_date(member_data.get("DateOfReJoin")),
+                            Billtype=member_data.get("Billtype"),
+                            Address=member_data.get("Address"),
+                            Whatsapp=str(member_data.get("Whatsapp")) if member_data.get("Whatsapp") else None,
+                            PlanPeriod=member_data.get("PlanPeriod"),
+                            PlanType=member_data.get("PlanType"),
+                            MembershipExpiryDate=parse_date(member_data.get("MembershipExpiryDate")),
+                            LastPaymentDate=parse_date(member_data.get("LastPaymentDate")),
+                            NextDuedate=parse_date(member_data.get("NextDuedate")),
+                            LastPaymentAmount=float(member_data.get("LastPaymentAmount")) if member_data.get("LastPaymentAmount") else None,
+                            RenewalReceiptNumber=member_data.get("RenewalReceiptNumber"),
+                            Aadhaar=str(member_data.get("Aadhaar")) if member_data.get("Aadhaar") else None,
+                            Remark=member_data.get("Remark"),
+                            Mobile=str(member_data.get("Mobile")) if member_data.get("Mobile") else None,
+                            extraDays=int(member_data.get("extraDays") or 0),
+                            agreeTerms=member_data.get("agreeTerms") in [True, "true", "True", "1", 1],
+                            lastEditedBy=current_gym.username,
+                            editReason='Bulk Import'
+                        )
+                        db.add(new_member)
+                    await db.flush()
+                created_count += len(batch)
+            except Exception as e:
+                logger.error("Bulk member batch %d failed: %s", i // batch_size, type(e).__name__)
+                failed_count += len(batch)
+                continue
+        from routers.dashboard import invalidate_dashboard_stats
+        await invalidate_dashboard_stats(current_gym.id, db)
+        await db.commit()
+        return {"message": f"Created {created_count} members, {failed_count} failed", "count": created_count, "failed": failed_count}
 
-    for i in range(0, len(members_list), batch_size):
-        batch = members_list[i : i + batch_size]
+    # Large imports (>100 rows) — offload to background task
+    job = create_job(current_gym.id, "bulk_create_members", total=len(members_list))
+    gym_id = current_gym.id
+    gym_username = current_gym.username
+
+    async def _bg_bulk_create_members():
+        created_count = 0
+        failed_count = 0
+        batch_size = 100
         try:
-            # Use SAVEPOINT for each batch to allow partial success
-            async with db.begin_nested():
-                for member_data in batch:
-                    new_member = Member(
-                        gymId=current_gym.id,
-                        Name=member_data.get("Name"),
-                        MembershipReceiptnumber=member_data.get("MembershipReceiptnumber"),
-                        Gender=member_data.get("Gender"),
-                        Age=int(member_data.get("Age")) if member_data.get("Age") else None,
-                        height=float(member_data.get("height")) if member_data.get("height") else None,
-                        weight=int(member_data.get("weight")) if member_data.get("weight") else None,
-                        DateOfJoining=parse_date(member_data.get("DateOfJoining")),
-                        DateOfReJoin=parse_date(member_data.get("DateOfReJoin")),
-                        Billtype=member_data.get("Billtype"),
-                        Address=member_data.get("Address"),
-                        Whatsapp=str(member_data.get("Whatsapp")) if member_data.get("Whatsapp") else None,
-                        PlanPeriod=member_data.get("PlanPeriod"),
-                        PlanType=member_data.get("PlanType"),
-                        MembershipExpiryDate=parse_date(member_data.get("MembershipExpiryDate")),
-                        LastPaymentDate=parse_date(member_data.get("LastPaymentDate")),
-                        NextDuedate=parse_date(member_data.get("NextDuedate")),
-                        LastPaymentAmount=float(member_data.get("LastPaymentAmount")) if member_data.get("LastPaymentAmount") else None,
-                        RenewalReceiptNumber=member_data.get("RenewalReceiptNumber"),
-                        Aadhaar=str(member_data.get("Aadhaar")) if member_data.get("Aadhaar") else None,
-                        Remark=member_data.get("Remark"),
-                        Mobile=str(member_data.get("Mobile")) if member_data.get("Mobile") else None,
-                        extraDays=int(member_data.get("extraDays") or 0),
-                        agreeTerms=member_data.get("agreeTerms") in [True, "true", "True", "1", 1],
-                        lastEditedBy=current_gym.username,
-                        editReason='Bulk Import'
-                    )
-                    db.add(new_member)
-                await db.flush()  # trigger insert for this batch
-            created_count += len(batch)
-        except Exception as e:
-            logger.error("Bulk member batch %d failed: %s", i // batch_size, type(e).__name__)
-            failed_count += len(batch)
-            continue
-    
-    await db.commit()
-    return {"message": f"Created {created_count} members, {failed_count} failed", "count": created_count, "failed": failed_count}
+            async with AsyncSessionLocal() as bg_db:
+                from sqlalchemy import text
+                await bg_db.execute(text("SET app.current_gym_id = :gym_id"), {"gym_id": gym_id})
+
+                for i in range(0, len(members_list), batch_size):
+                    batch = members_list[i : i + batch_size]
+                    try:
+                        async with bg_db.begin_nested():
+                            for member_data in batch:
+                                new_member = Member(
+                                    gymId=gym_id,
+                                    Name=member_data.get("Name"),
+                                    MembershipReceiptnumber=member_data.get("MembershipReceiptnumber"),
+                                    Gender=member_data.get("Gender"),
+                                    Age=int(member_data.get("Age")) if member_data.get("Age") else None,
+                                    height=float(member_data.get("height")) if member_data.get("height") else None,
+                                    weight=int(member_data.get("weight")) if member_data.get("weight") else None,
+                                    DateOfJoining=parse_date(member_data.get("DateOfJoining")),
+                                    DateOfReJoin=parse_date(member_data.get("DateOfReJoin")),
+                                    Billtype=member_data.get("Billtype"),
+                                    Address=member_data.get("Address"),
+                                    Whatsapp=str(member_data.get("Whatsapp")) if member_data.get("Whatsapp") else None,
+                                    PlanPeriod=member_data.get("PlanPeriod"),
+                                    PlanType=member_data.get("PlanType"),
+                                    MembershipExpiryDate=parse_date(member_data.get("MembershipExpiryDate")),
+                                    LastPaymentDate=parse_date(member_data.get("LastPaymentDate")),
+                                    NextDuedate=parse_date(member_data.get("NextDuedate")),
+                                    LastPaymentAmount=float(member_data.get("LastPaymentAmount")) if member_data.get("LastPaymentAmount") else None,
+                                    RenewalReceiptNumber=member_data.get("RenewalReceiptNumber"),
+                                    Aadhaar=str(member_data.get("Aadhaar")) if member_data.get("Aadhaar") else None,
+                                    Remark=member_data.get("Remark"),
+                                    Mobile=str(member_data.get("Mobile")) if member_data.get("Mobile") else None,
+                                    extraDays=int(member_data.get("extraDays") or 0),
+                                    agreeTerms=member_data.get("agreeTerms") in [True, "true", "True", "1", 1],
+                                    lastEditedBy=gym_username,
+                                    editReason='Bulk Import'
+                                )
+                                bg_db.add(new_member)
+                            await bg_db.flush()
+                        created_count += len(batch)
+                    except Exception as e:
+                        logger.error("BG bulk member batch %d failed: %s", i // batch_size, type(e).__name__)
+                        failed_count += len(batch)
+                        continue
+                    update_job(job.id, created_count + failed_count)
+
+                from routers.dashboard import invalidate_dashboard_stats
+                await invalidate_dashboard_stats(gym_id, bg_db)
+                await bg_db.commit()
+            complete_job(job.id, {"count": created_count, "failed": failed_count})
+        except Exception as exc:
+            logger.exception("BG bulk_create_members job %s crashed", job.id)
+            fail_job(job.id, str(exc))
+
+    asyncio.create_task(_bg_bulk_create_members())
+    return {"jobId": job.id, "message": f"Import of {len(members_list)} members started in background. Poll GET /api/jobs/{job.id} for status."}
 
 
 @router.post("/bulk-delete")
@@ -494,6 +570,10 @@ async def bulk_delete_members(
         ).values(isDeleted=True, deletedAt=datetime.now(timezone.utc))
         
         result = await db.execute(stmt)
+        
+        from routers.dashboard import invalidate_dashboard_stats
+        await invalidate_dashboard_stats(current_gym.id, db)
+        
         await db.commit()
         return {"message": f"Deleted {result.rowcount} members", "count": result.rowcount}
     except Exception as e:
@@ -548,6 +628,8 @@ async def bulk_update_members(
         member.editReason = 'Bulk Update/Merge'
         updated_count += 1
     
+    from routers.dashboard import invalidate_dashboard_stats
+    await invalidate_dashboard_stats(current_gym.id, db)
     await db.commit()
     return {"message": f"Updated {updated_count} members", "count": updated_count}
 
